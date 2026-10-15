@@ -28,7 +28,7 @@ Apply migrations through `20261015210000_motion_storyboards` and deploy matching
 - A configured private S3-compatible bucket with immutable writes, bounded reads and deletion. The application does not require Amazon specifically. Real provider compatibility and retention must be verified before release.
 - A fresh worker heartbeat reporting encoder readiness. `PAID_EXECUTION_ENABLED` does not enable or disable this independent, non-AI rendering path.
 
-Production packaging must install the binaries and fonts and enforce container memory, CPU and temporary-disk limits. Fixed arguments and restricted protocols are defense layers, not an OS sandbox. Deployment and production storage acceptance are still outstanding.
+Production packaging must install the binaries and fonts and enforce container memory, CPU and temporary-disk limits. Fixed arguments and restricted protocols are defense layers, not an OS sandbox. The application workflow is deployed; rendering enablement, packaging and production storage acceptance remain outstanding.
 
 ## Rendering and cost limits
 
