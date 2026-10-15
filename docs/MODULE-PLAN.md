@@ -54,7 +54,9 @@ Required internal work: OAuth start/callback/state and supported PKCE; scope val
 
 Existing foundation: explicit memory, observational learning proposals with human promotion/revert, independent approval controls and blocking comments, weekly policy/cycles, one cycle per business/week, a frozen brand version and atomic weekly copy budget authorization.
 
-Required internal work: historical plan navigation, mixed image/video planning, cancellation/reconciliation experience, cohort/holdout evaluation, promotion thresholds and measured creative outcomes. Test brand/role changes, period boundaries, duplicate ticks, budget exhaustion, worker restarts and evidence invalidation. Autopilot must not silently approve or publish work or bypass the supplier ceiling.
+Added locally: scoped plan history with stable ten-plan pagination, bounded detail reads and only the latest plan loaded initially. Selected plans carry across review, design, video and the calendar; the calendar is explicitly a selected-plan agenda. Earlier current-brand plans retain normal edit/review controls. Superseded, unconfirmed-brand and viewer copy is read-only and shown without today's design palette. Opening history creates no jobs or credit holds. History displays the latest saved copy, not every revision or historical media snapshot.
+
+Required internal work: mixed image/video planning, cancellation/reconciliation experience, cohort/holdout evaluation, promotion thresholds and measured creative outcomes. Test brand/role changes, period boundaries, duplicate ticks, budget exhaustion, worker restarts and evidence invalidation. Autopilot must not silently approve or publish work or bypass the supplier ceiling.
 
 ## Module 7 Production readiness
 

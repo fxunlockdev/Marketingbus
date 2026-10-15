@@ -33,20 +33,18 @@ import { SocialDashboard } from "./social-dashboard";
 import { CompositionEditor } from "./composition-editor";
 import { VideoStudio } from "./video-studio";
 import { TeamPanel } from "./team-panel";
-import { ProductionCard, CalendarView, type ProductionItemView } from "./production-card";
+import { ProductionCard, CalendarView } from "./production-card";
 import { WorkflowControls } from "./workflow-controls";
 import { BillingPanel } from "./billing-panel";
+import { PlanHistory, HistoricalCreative, type PlanView } from "./plan-history";
 type Business = BrandInput & {
   id: string;
   organizationId: string;
   version: number;
   confirmedAt: string | null;
+  canEdit: boolean;
   memories: { id: string; text: string }[];
-  plans: {
-    id: string;
-    title: string;
-    items: ProductionItemView[];
-  }[];
+  plans: PlanView[];
   auditEvents: {
     id: string;
     action: string;
@@ -153,7 +151,29 @@ export function Studio({
   const wallet =
     wallets.find((w) => w.organizationId === business?.organizationId) ??
     wallets[0];
-  const items = business?.plans[0]?.items ?? [];
+  const [planChoice, setPlanChoice] = useState<{ businessId: string; id: string } | null>(null);
+  const [loadedPlan, setLoadedPlan] = useState<{ businessId: string; plan: PlanView; canEdit: boolean } | null>(null);
+  const [planLoading, setPlanLoading] = useState(false), [planError, setPlanError] = useState("");
+  const chosenId = planChoice?.businessId === business?.id ? planChoice?.id : undefined;
+  const historical = !!chosenId && chosenId !== business?.plans[0]?.id;
+  const activePlan = historical ? loadedPlan?.businessId === business?.id && loadedPlan?.plan.id === chosenId ? loadedPlan.plan : undefined : business?.plans[0];
+  const planReadOnly = planLoading || !activePlan || !business?.canEdit || !business.confirmedAt || activePlan.status !== "PROPOSED" || activePlan.brandVersion !== business.version || historical && !loadedPlan?.canEdit;
+  const items = activePlan?.items ?? [];
+  useEffect(() => {
+    const abort = new AbortController(); setPlanError("");
+    if (!historical || !business) { setPlanLoading(false); return () => abort.abort(); }
+    setPlanLoading(true);
+    void (async () => {
+      try {
+        const response = await fetch(`/api/businesses/${business.id}/plans?plan=${encodeURIComponent(chosenId!)}`, { signal: abort.signal });
+        const data = await response.json(); if (!response.ok) throw Error(data.error);
+        if (!abort.signal.aborted) setLoadedPlan({ businessId: business.id, plan: data.plan, canEdit: data.canEdit });
+      } catch (e) { if (!abort.signal.aborted) { setLoadedPlan(null); setPlanError(e instanceof Error ? e.message : "Unable to load this plan."); } }
+      finally { if (!abort.signal.aborted) setPlanLoading(false); }
+    })(); return () => abort.abort();
+  }, [business, chosenId, historical]);
+  function choosePlan(id: string) { if (business) { setPlanError(""); setLoadedPlan(null); setPlanChoice({ businessId: business.id, id }); } }
+  function latestPlan() { setPlanChoice(null); setLoadedPlan(null); setPlanError(""); }
   const processing = items.some(i => i.quotes.some(q => q.job && ["QUEUED", "RUNNING", "SUBMITTING"].includes(q.job.status)));
   useEffect(() => {
     if (!processing) return;
@@ -162,6 +182,7 @@ export function Studio({
   }, [processing, router]);
   async function production(data: Record<string, unknown>) {
     if (!business) return;
+    if (planReadOnly) { setError("This plan is read-only. Open a current confirmed-brand plan before changing work."); return null; }
     const result = await post(`/api/businesses/${business.id}/production`, data);
     if (result) setMessage(data.action === "accept" ? "Production authorized and queued. Credits reserved." : data.action === "quote" ? "Quote prepared. No generation started." : "Saved. Review and calendar state updated.");
     return result;
@@ -345,6 +366,12 @@ export function Studio({
           <span className="pilot-badge">PRIVATE PILOT</span>
         </header>
         <main id="main-content" className="content" tabIndex={-1}>
+          {!editing && business && ["Content plan", "Review inbox", "Calendar", "Design studio", "Video studio", "Publishing & analytics"].includes(page) && <div className="notice subtle plan-context" aria-busy={planLoading}>
+            <p role="status">{planLoading ? "Loading selected plan…" : activePlan ? `Viewing: ${activePlan.title} · brand version ${activePlan.brandVersion}${planReadOnly ? " · read-only" : ""}` : "No plan selected."}</p>
+            {historical && <button className="text-button" disabled={busy} onClick={latestPlan}>Return to latest plan</button>}
+            {historical && planError && <p role="alert">{planError}</p>}
+            {activePlan && planReadOnly && !planLoading && <p>Historical or unconfirmed-brand work and viewer access are read-only. Choose a current plan with editing access to create, approve, schedule or publish. Saved copy is shown without applying today's brand design.</p>}
+          </div>}
           {!editing && error && (
             <p className="error" role="alert">
               {error}
@@ -719,9 +746,10 @@ export function Studio({
                     <div className="notice subtle">
                       Planning outlines are free. Add a direction and request a quote for copy production. Image generation requires verified provider configuration and an available credit balance. Video studio supports bounded local motion reels; generated footage is not enabled yet.
                     </div>
+                    <PlanHistory key={business.id} businessId={business.id} selectedId={activePlan?.id} busy={busy || planLoading} onChoose={choosePlan} />
                     {items.length ? (
                       <div className="plan-grid">
-                        {items.map(item => <ProductionCard key={`${item.id}:${item.revisions[0]?.version || 0}`} item={item} brand={business} busy={busy} post={production} />)}
+                        {items.map(item => planReadOnly ? <HistoricalCreative key={item.id} item={item} /> : <ProductionCard key={`${item.id}:${item.revisions[0]?.version || 0}`} item={item} brand={business} busy={busy} post={production} />)}
                       </div>
                     ) : (
                       <Empty
@@ -745,7 +773,7 @@ export function Studio({
                     title="Work worth putting your name on."
                     description="Review the exact creative, request a focused change, or approve it for your calendar."
                   />
-                  {business && items.some(i => i.revisions.length) ? <div className="production-list">{items.filter(i => i.revisions.length).map(item => <ProductionCard key={`${item.id}:${item.revisions[0]?.version}`} item={item} brand={business} busy={busy} post={production} review />)}</div> : <Empty title="Nothing to review yet." text="Produced copy and layout previews will appear here. A planning outline is not a finished creative." />}
+                  {business && items.some(i => i.revisions.length) ? <div className="production-list">{items.filter(i => i.revisions.length).map(item => planReadOnly ? <HistoricalCreative key={item.id} item={item} /> : <ProductionCard key={`${item.id}:${item.revisions[0]?.version}`} item={item} brand={business} busy={busy} post={production} review />)}</div> : <Empty title="Nothing to review yet." text="Produced copy and layout previews will appear here. A planning outline is not a finished creative." />}
                   <div className="review-explainer">
                     {[
                       ["Approve", "Approval belongs to one exact revision."],
@@ -763,10 +791,10 @@ export function Studio({
                   </div>
                 </>
               )}
-              {page === "Calendar" && <><Heading kicker="MAKE ROOM FOR GOOD WORK" title="Your publishing plan." description="A dated agenda of exact, approved versions. Moving or removing a reservation never regenerates the creative." /><CalendarView items={items} post={production} busy={busy} /></>}
-              {page === "Publishing & analytics" && <><Heading kicker="FROM APPROVAL TO EVIDENCE" title="Publishing & analytics" description="Exact-version publishing, verified outcomes and measured experiments. Live providers remain gated until connected." />{business ? <SocialDashboard key={business.id} businessId={business.id} items={items} /> : <Empty title="Choose a business first." text="Publishing and performance belong to a specific business." />}</>}
-              {page === "Design studio" && <><Heading kicker="YOUR ASSETS, PRECISELY PLACED" title="Design studio" description="Editable, versioned compositions and downloadable files. No model cost for layout changes." />{business ? <CompositionEditor key={business.id} businessId={business.id} items={items} /> : <Empty title="Choose a business first." text="Designs and assets belong to a specific business." />}</>}
-              {page === "Video studio" && <><Heading kicker="STORY, TIMING AND REVIEW" title="Video studio" description="Versioned storyboards and captioned motion reels made from your approved originals." />{business ? <VideoStudio key={business.id} businessId={business.id} items={items} /> : <Empty title="Choose a business first." text="Storyboards and rendered videos belong to a specific business." />}</>}
+              {page === "Calendar" && <><Heading kicker="MAKE ROOM FOR GOOD WORK" title="Your publishing plan." description="A dated agenda for the selected plan's exact, approved versions. Change plans from Content plan to view another agenda." /><CalendarView items={items} post={production} busy={busy || planReadOnly} /></>}
+              {page === "Publishing & analytics" && <><Heading kicker="FROM APPROVAL TO EVIDENCE" title="Publishing & analytics" description="Business-wide outcomes and measured experiments. Only current selected-plan items are offered for new publishing requests." />{business ? <SocialDashboard key={`${business.id}:${activePlan?.id}`} businessId={business.id} items={planReadOnly ? [] : items} /> : <Empty title="Choose a business first." text="Publishing and performance belong to a specific business." />}</>}
+              {page === "Design studio" && <><Heading kicker="YOUR ASSETS, PRECISELY PLACED" title="Design studio" description="Editable, versioned compositions and downloadable files. No model cost for layout changes." />{business && !planReadOnly ? <CompositionEditor key={`${business.id}:${activePlan?.id}`} businessId={business.id} items={items} /> : <Empty title="Choose a current plan." text="Open Content plan and select a current confirmed-brand plan with editing access. Historical copy remains available in the Review inbox." />}</>}
+              {page === "Video studio" && <><Heading kicker="STORY, TIMING AND REVIEW" title="Video studio" description="Versioned storyboards and captioned motion reels made from approved originals and artwork." />{business && !planReadOnly ? <VideoStudio key={`${business.id}:${activePlan?.id}`} businessId={business.id} items={items} /> : <Empty title="Choose a current plan." text="Storyboarding needs a current confirmed-brand plan and editing access. Historical copy remains available in the Review inbox." />}</>}
               {page === "Team" && <><Heading kicker="THE PEOPLE BEHIND THE WORK" title="Workspace team" description="Invite teammates and control who can view, create and administer your businesses." />{business ? <TeamPanel key={business.organizationId} organizationId={business.organizationId} /> : <Empty title="Choose a business first." text="Team access applies to its workspace." />}</>}
               {page === "Workflows" && <><Heading kicker="CONTROL THE WORK" title="Workflows" description="Independent review and bounded recurring planning." />{business ? <WorkflowControls key={business.id} businessId={business.id} /> : <Empty title="Choose a business first." text="Workflow policies belong to one business." />}</>}
               {page === "Memory" &&
