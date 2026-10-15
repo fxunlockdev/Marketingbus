@@ -1,6 +1,6 @@
 # Acceptance ledger — 15 October 2026
 
-This is a working pilot, not a finished enterprise product. Distinguish implemented source, local fixture verification, deployment and actual external-service acceptance. The new social/composition/team/MFA changes are not yet deployed. Stripe billing is explicitly deferred. No paid supplier calls, real emails or social posts were made in this implementation pass.
+This is a working pilot, not a finished enterprise product. Distinguish implemented source, local fixture verification, deployment and actual external-service acceptance. The new social/composition/team/MFA application code at `fdae82c` passed GitHub CI and is deployed on both Railway services; see [release evidence](RELEASE-2026-10-15.md). Stripe billing is explicitly deferred. No paid supplier calls, real emails or social posts were made in this implementation pass.
 
 ## Feature acceptance and remaining work
 

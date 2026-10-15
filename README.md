@@ -20,7 +20,7 @@ Hosted registration additionally requires `PILOT_INVITE_CODE`, a randomly genera
 
 ## Implemented in source
 
-The feature-by-feature acceptance ledger is [BUILD-STATUS.md](docs/BUILD-STATUS.md). The 15 October changes below are locally verified, not yet deployed. This is not a completed or enterprise-certified product.
+The feature-by-feature acceptance ledger is [BUILD-STATUS.md](docs/BUILD-STATUS.md). The 15 October application changes passed local tests and GitHub CI, and both Railway services reached SUCCESS. A hosted synthetic-business smoke passed. This is not a completed or enterprise-certified product; live external integrations remain gated.
 
 - Database-backed registration, login, logout and hashed opaque sessions.
 - Organization/business-scoped queries, role checks and composite ownership constraints.
