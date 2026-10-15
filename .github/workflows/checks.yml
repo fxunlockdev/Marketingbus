@@ -44,6 +44,12 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: npm test
       - run: npm run build
-      - run: npx playwright install --with-deps chrome
+      - name: Verify Chrome for browser acceptance
+        timeout-minutes: 4
+        run: |
+          if ! command -v google-chrome >/dev/null 2>&1; then
+            timeout 180s npx playwright install --with-deps chrome
+          fi
+          google-chrome --version
       - run: npm run test:e2e
       - run: npm audit --audit-level=high

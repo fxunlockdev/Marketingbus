@@ -11,6 +11,45 @@ test.skip(!local, "Requires explicit localhost fixture database.");
 if (local && (process.env.DATABASE_URL !== local || !["127.0.0.1", "localhost"].includes(new URL(local).hostname))) throw Error("Refusing non-local fixture writes");
 const db = new PrismaClient();
 test.afterAll(async () => db.$disconnect());
+test("approved generated artwork is labelled, selectable and blocked after source revocation", async ({ page }) => {
+  const email = `motion-artwork-${crypto.randomUUID()}@example.test`, headers = { Origin: "http://127.0.0.1:3000" };
+  let organizationId: string | undefined;
+  try {
+    expect((await page.request.post("/api/auth/register", { headers, data: { name: "Artwork reuse fixture", email, password: "Test-only-password-2026!" } })).ok()).toBe(true);
+    const response = await page.request.post("/api/businesses", { headers, data: { name: "Artwork studio", offering: "Architecture consultations", audience: "Homeowners", goal: "Book consultations", channels: ["YouTube"] } });
+    const { id } = await response.json(); organizationId = (await db.business.findUniqueOrThrow({ where: { id } })).organizationId;
+    const actor = await db.user.findUniqueOrThrow({ where: { email } });
+    await page.request.post(`/api/businesses/${id}`, { headers, data: { action: "confirm", version: 1 } });
+    await page.request.post(`/api/businesses/${id}`, { headers, data: { action: "plan", version: 1 } });
+    const item = await db.productionItem.findFirstOrThrow({ where: { plan: { businessId: id } } });
+    const source = await db.productionItem.create({ data: { organizationId, planId: item.planId, title: "Artwork source", format: "static", channel: "Instagram", brief: {}, revisions: { create: { version: 1, status: "APPROVED", authorId: actor.id, approvedBy: actor.id, content: {} } } }, include: { revisions: true } });
+    const generation = await db.imageGeneration.create({ data: { businessId: id, organizationId, actorId: actor.id, itemId: source.id, revisionId: source.revisions[0].id, brandVersion: 1, version: 1, prompt: "No supplier fixture", references: [], route: {}, configurationHash: "fixture", credits: 1, supplierCeilingMicros: 1, expiresAt: new Date(), acceptedAt: new Date(), status: "APPROVED", approvedBy: actor.id } });
+    const asset = await db.brandAsset.create({ data: { businessId: id, organizationId, generationId: generation.id, objectKey: `no-network/${crypto.randomUUID()}`, purpose: "generated", label: "Approved landscape", sha256: "a".repeat(64), bytes: 100, width: 40, height: 40, status: "READY", approvedForGeneration: true, uploadedBy: actor.id, rightsConfirmedAt: new Date() } });
+    await page.goto("/studio"); await page.getByRole("button", { name: "Video studio", exact: true }).click();
+    await page.getByLabel("Planned creative").selectOption(item.id); await page.getByRole("button", { name: "Create or open storyboard" }).click();
+    const scene = page.getByRole("combobox", { name: "Scene image", exact: true }).first();
+    await expect(scene.getByRole("option", { name: "Approved landscape · generated" })).toHaveCount(1);
+    await expect(page.getByLabel("Original logo").getByRole("option", { name: /Approved landscape/ })).toHaveCount(0);
+    await scene.selectOption(asset.id); await page.getByRole("button", { name: "Save storyboard version" }).click();
+    await expect(page.getByRole("heading", { name: "Storyboard version 2 · draft" })).toBeVisible();
+    expect((await new AxeBuilder({ page }).include("main").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+    await db.imageGeneration.update({ where: { id: generation.id }, data: { status: "REJECTED", approvedBy: null } });
+    await page.getByRole("button", { name: "Refresh video status" }).click();
+    await expect(scene.getByRole("option", { name: "Unavailable image · choose a replacement" })).toHaveCount(1);
+    await page.getByRole("button", { name: "Approve saved shot 1", exact: true }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "source approval changed" })).toBeVisible();
+    await scene.selectOption(""); await page.getByRole("button", { name: "Save storyboard version" }).click();
+    await expect(page.getByRole("heading", { name: "Storyboard version 3 · draft" })).toBeVisible();
+    expect(await db.reservation.count({ where: { organizationId } })).toBe(0);
+    await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  } finally {
+    if (organizationId) {
+      await db.videoStoryboard.deleteMany({ where: { organizationId } }); await db.brandAsset.deleteMany({ where: { organizationId } });
+      await db.imageGeneration.deleteMany({ where: { organizationId } }); await db.organization.delete({ where: { id: organizationId } });
+    }
+    await db.user.deleteMany({ where: { email } });
+  }
+});
 test("storyboards preserve unchanged shot reviews and enforce renderer readiness", async ({ page }) => {
   const email = `storyboard-${crypto.randomUUID()}@example.test`, headers = { Origin: "http://127.0.0.1:3000" };
   let organizationId: string | undefined;

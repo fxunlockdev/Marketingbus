@@ -12,6 +12,7 @@ import { assetStore, type AssetStore } from "../assets/storage";
 import { WORKER_RUNTIME, HEARTBEAT_TTL_MS, workerConfigurationHash } from "../production/readiness";
 import { storyboardDocument, shotApprovals, totalDuration, type StoryboardDocument, type VideoShot } from "./document";
 import { MAX_VIDEO_BYTES, MOTION_RENDERER_VERSION, motionDailyLimit, motionHash } from "./limits";
+import { eligibleMotionAssets, type MotionAssetClient } from "./assets";
 const inputSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("create"), itemId: z.string().min(1) }).strict(),
   z.object({ action: z.literal("save"), storyboardId: z.string().min(1), document: storyboardDocument }).strict(),
@@ -22,7 +23,7 @@ const inputSchema = z.discriminatedUnion("action", [
 export const videoStore = () => assetStore(MAX_VIDEO_BYTES);
 export const videoScope = (row: { businessId: string; organizationId: string; createdBy: string }): Scope => ({ businessId: row.businessId, organizationId: row.organizationId, actorId: row.createdBy });
 export function shotHash(document: StoryboardDocument, shot: VideoShot) { return motionHash({ background: document.background, logo: document.logo, shot }); }
-export async function storyboardContext(scope: Scope, id: string, client: Pick<Prisma.TransactionClient, "business" | "productionItem" | "videoStoryboard" | "brandAsset" | "reviewComment"> = db, validateAssets = true) {
+export async function storyboardContext(scope: Scope, id: string, client: Pick<Prisma.TransactionClient, "business" | "productionItem" | "videoStoryboard"> & MotionAssetClient = db, validateAssets = true) {
   const row = await client.videoStoryboard.findFirst({ where: { id, businessId: scope.businessId, organizationId: scope.organizationId } });
   if (!row) throw new AppError(404, "Storyboard not found.");
   const business = await client.business.findFirstOrThrow({ where: { id: scope.businessId, organizationId: scope.organizationId } });
@@ -31,8 +32,9 @@ export async function storyboardContext(scope: Scope, id: string, client: Pick<P
   if (row.copyRevisionId && await client.reviewComment.count({ where: { revisionId: row.copyRevisionId, blocking: true, resolvedAt: null } })) throw new AppError(409, "Resolve blocking copy comments first.");
   const document = storyboardDocument.parse(row.document);
   const refs = [document.logo, ...document.shots.map(s => s.asset)].filter(r => r !== null);
-  const assets = await client.brandAsset.findMany({ where: { id: { in: refs.map(r => r.id) }, businessId: scope.businessId, organizationId: scope.organizationId, status: "READY", approvedForGeneration: true, generationId: null } });
-  if (validateAssets && refs.some(r => !assets.some(a => a.id === r.id && a.sha256 === r.sha256))) throw new AppError(409, "A storyboard asset changed or its permission was revoked. Use current approved originals.");
+  const assets = await eligibleMotionAssets(client, scope, business.version, refs.map(r => r.id));
+  if (validateAssets && refs.some(r => !assets.some(a => a.id === r.id && a.sha256 === r.sha256))) throw new AppError(409, "A storyboard asset or its source approval changed. Use current approved originals or artwork.");
+  if (validateAssets && document.logo && !assets.some(a => a.id === document.logo!.id && a.generationId === null && a.purpose === "logo")) throw new AppError(409, "Use an approved original logo, not generated artwork.");
   for (const shot of document.shots) {
     const quality = evaluateCreative({ headline: shot.caption, caption: shot.caption, cta: "", visualDirection: "", rationale: "", evidenceUsed: [] }, { facts: approvedFactText(business) });
     if (!quality.eligible) throw new AppError(409, quality.defects[0].detail);
@@ -41,11 +43,12 @@ export async function storyboardContext(scope: Scope, id: string, client: Pick<P
 }
 export async function listVideo(scope: Scope) {
   const member = await db.membership.findUnique({ where: { organizationId_userId: { organizationId: scope.organizationId, userId: scope.actorId } } });
-  if (!member || !await db.business.findFirst({ where: { id: scope.businessId, organizationId: scope.organizationId } })) throw new AppError(404, "Business not found.");
+  const business = await db.business.findFirst({ where: { id: scope.businessId, organizationId: scope.organizationId } });
+  if (!member || !business) throw new AppError(404, "Business not found.");
   const where = { businessId: scope.businessId, organizationId: scope.organizationId };
   return { canEdit: ["OWNER", "ADMIN", "EDITOR"].includes(member.role),
     storyboards: await db.videoStoryboard.findMany({ where, orderBy: { createdAt: "desc" }, take: 100 }),
-    assets: await db.brandAsset.findMany({ where: { ...where, status: "READY", approvedForGeneration: true, generationId: null }, select: { id: true, sha256: true, label: true, purpose: true }, take: 100 }),
+    assets: (await eligibleMotionAssets(db, scope, business.version)).map(a => ({ id: a.id, sha256: a.sha256, label: a.label, purpose: a.purpose, generated: a.generationId !== null })),
     renders: await db.motionRender.findMany({ where, orderBy: { createdAt: "desc" }, take: 50, select: { id: true, storyboardId: true, status: true, durationMs: true, bytes: true, createdAt: true, purgeAfter: true, errorCode: true } }),
   };
 }

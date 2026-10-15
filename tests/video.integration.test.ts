@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
+import { createHash } from "node:crypto";
 import { db } from "../src/lib/db";
 import { manageVideo, listVideo, readMotion } from "../src/lib/video/service";
 import { runOneMotion, recoverMotionLeases, recoverMotionStorage, purgeMotion } from "../src/lib/video/worker";
@@ -21,7 +22,7 @@ suite("storyboard and motion lifecycle", () => {
     const renders = await db.motionRender.findMany({ where: { organizationId: { in: orgs } } });
     await db.motionAuthorization.deleteMany({ where: { key: { in: renders.map(r => r.id) } } });
     await db.motionRender.deleteMany({ where: { organizationId: { in: orgs } } }); await db.videoStoryboard.deleteMany({ where: { organizationId: { in: orgs } } });
-    await db.brandAsset.deleteMany({ where: { organizationId: { in: orgs } } }); await db.organization.deleteMany({ where: { id: { in: orgs } } }); await db.user.deleteMany({ where: { id: { in: users } } });
+    await db.brandAsset.deleteMany({ where: { organizationId: { in: orgs } } }); await db.imageGeneration.deleteMany({ where: { organizationId: { in: orgs } } }); await db.organization.deleteMany({ where: { id: { in: orgs } } }); await db.user.deleteMany({ where: { id: { in: users } } });
     await db.workerHeartbeat.deleteMany({ where: { id: workerId } }); vi.unstubAllEnvs(); await db.$disconnect();
   });
   async function setup() {
@@ -31,7 +32,7 @@ suite("storyboard and motion lifecycle", () => {
     const plan = await db.productionPlan.create({ data: { businessId: business.id, organizationId: org.id, brandVersion: 1, title: "Motion plan", creditCeiling: 0, items: { create: { title: "Considered spaces", format: "motion", channel: "YouTube", brief: {} } } }, include: { items: true } });
     const scope = { organizationId: org.id, businessId: business.id, actorId: user.id };
     const created = await manageVideo(scope, { action: "create", itemId: plan.items[0].id }, () => store);
-    return { scope, item: plan.items[0], id: created.storyboardId!, renderer: vi.fn(async (document: StoryboardDocument) => ({ bytes: Buffer.from("controlled renderer fixture, not playable media"), durationMs: totalDuration(document), width: 720, height: 1280 })) };
+    return { scope, item: plan.items[0], id: created.storyboardId!, renderer: vi.fn(async (document: StoryboardDocument, _assets?: Map<string, Uint8Array>) => ({ bytes: Buffer.from("controlled renderer fixture, not playable media"), durationMs: totalDuration(document), width: 720, height: 1280 })) };
   }
   async function board(id: string) { return db.videoStoryboard.findUniqueOrThrow({ where: { id } }); }
   async function row(id: string) { return db.motionRender.findUniqueOrThrow({ where: { id } }); }
@@ -43,6 +44,62 @@ suite("storyboard and motion lifecycle", () => {
   async function queue(f: Awaited<ReturnType<typeof setup>>, id = f.id) {
     await approve(f, id); const result = await manageVideo(f.scope, { action: "render", storyboardId: id }, () => store); return result.renderId!;
   }
+  async function artwork(f: Awaited<ReturnType<typeof setup>>) {
+    const { organizationId, businessId, actorId } = f.scope;
+    // Different planned creative, same confirmed business: reuse is explicit.
+    const item = await db.productionItem.create({ data: { organizationId, planId: f.item.planId, title: "Supporting artwork", format: "static", channel: "Instagram", brief: {}, revisions: { create: { version: 1, status: "APPROVED", authorId: actorId, approvedBy: actorId, content: {} } } }, include: { revisions: true } });
+    const generation = await db.imageGeneration.create({ data: { businessId, organizationId, actorId, itemId: item.id, revisionId: item.revisions[0].id, brandVersion: 1, version: 1, prompt: "local fixture only", references: [], route: {}, configurationHash: "fixture", credits: 1, supplierCeilingMicros: 1, expiresAt: new Date(), acceptedAt: new Date(), status: "APPROVED", approvedBy: actorId } });
+    const bytes = await sharp({ create: { width: 40, height: 40, channels: 4, background: "#237456" } }).webp().toBuffer();
+    const asset = await db.brandAsset.create({ data: { businessId, organizationId, generationId: generation.id, objectKey: `fixture/${crypto.randomUUID()}`, purpose: "generated", label: "Approved scene artwork", sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.length, width: 40, height: 40, status: "READY", approvedForGeneration: true, uploadedBy: actorId, rightsConfirmedAt: new Date() } }); objects.set(asset.objectKey, bytes);
+    return { asset, generation, item, bytes };
+  }
+  async function useArtwork(f: Awaited<ReturnType<typeof setup>>, asset: { id: string; sha256: string }) {
+    const document = storyboardDocument.parse((await board(f.id)).document); document.shots[0].asset = { id: asset.id, sha256: asset.sha256 };
+    return (await manageVideo(f.scope, { action: "save", storyboardId: f.id, document }, () => store)).storyboardId!;
+  }
+  it("reuses approved same-business artwork without generating or charging again", async () => {
+    const f = await setup(), image = await artwork(f), storyboardId = await useArtwork(f, image.asset);
+    expect((await listVideo(f.scope)).assets).toContainEqual(expect.objectContaining({ id: image.asset.id, generated: true }));
+    const id = await queue(f, storyboardId); await runOneMotion(f.renderer, () => store);
+    expect(f.renderer.mock.calls[0][1]?.get(image.asset.id)).toEqual(image.bytes);
+    expect((await row(id)).status).toBe("READY");
+    await manageVideo(f.scope, { action: "approve-render", renderId: id, continuityReviewed: true }, () => store);
+    expect((await readMotion(f.scope, id, true, store)).bytes.length).toBeGreaterThan(0);
+    expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(0);
+    await db.imageGeneration.update({ where: { id: image.generation.id }, data: { status: "REJECTED", approvedBy: null } });
+    await expect(readMotion(f.scope, id, true, store)).rejects.toThrow("source approval changed");
+    const repaired = storyboardDocument.parse((await board(storyboardId)).document); repaired.shots[0].asset = null;
+    expect((await manageVideo(f.scope, { action: "save", storyboardId, document: repaired }, () => store)).storyboardId).toBeTruthy();
+  });
+  it("never uses generated artwork as a logo and rejects another tenant's artwork", async () => {
+    const f = await setup(), other = await setup(), image = await artwork(f);
+    const document = storyboardDocument.parse((await board(f.id)).document); document.logo = { id: image.asset.id, sha256: image.asset.sha256 };
+    await expect(manageVideo(f.scope, { action: "save", storyboardId: f.id, document }, () => store)).rejects.toThrow("original logo");
+    await expect(useArtwork(other, image.asset)).rejects.toThrow("source approval changed");
+    expect((await listVideo(other.scope)).assets.some(a => a.id === image.asset.id)).toBe(false);
+  });
+  it.each(["rejected", "copy-edited", "copy-blocked", "newer-authorized", "reference-revoked", "reference-tampered", "archived"])("blocks stale artwork when %s before encoding", async reason => {
+    const f = await setup(), image = await artwork(f);
+    const reference = await uploadAsset(f.scope, { label: "Style reference", purpose: "reference", rightsConfirmed: true }, image.bytes, store);
+    await changeAsset(f.scope, reference.asset.id, { action: "approve", approved: true });
+    const original = await db.brandAsset.findUniqueOrThrow({ where: { id: reference.asset.id } });
+    await db.imageGeneration.update({ where: { id: image.generation.id }, data: { references: [{ id: original.id, sha256: original.sha256, parent: false }] } });
+    const storyboardId = await useArtwork(f, image.asset), id = await queue(f, storyboardId);
+    if (reason === "rejected") await db.imageGeneration.update({ where: { id: image.generation.id }, data: { status: "REJECTED" } });
+    if (reason === "copy-edited") await db.creativeRevision.create({ data: { organizationId: f.scope.organizationId, itemId: image.item.id, version: 2, status: "READY", authorId: f.scope.actorId, content: {} } });
+    if (reason === "copy-blocked") await db.reviewComment.create({ data: { businessId: f.scope.businessId, organizationId: f.scope.organizationId, revisionId: image.generation.revisionId, actorId: f.scope.actorId, body: "Check source claims", blocking: true } });
+    if (reason === "newer-authorized") await db.imageGeneration.create({ data: { ...image.generation, references: [], route: {}, usage: undefined, id: crypto.randomUUID(), version: 2, status: "QUEUED", approvedBy: null } });
+    if (reason === "reference-revoked") await changeAsset(f.scope, original.id, { action: "approve", approved: false });
+    if (reason === "reference-tampered") await db.brandAsset.update({ where: { id: original.id }, data: { sha256: "0".repeat(64) } });
+    if (reason === "archived") await db.brandAsset.update({ where: { id: image.asset.id }, data: { status: "ARCHIVED" } });
+    expect((await listVideo(f.scope)).assets.some(a => a.id === image.asset.id)).toBe(false);
+    await runOneMotion(f.renderer, () => store); expect(f.renderer).not.toHaveBeenCalled(); expect((await row(id)).status).toBe("FAILED");
+  });
+  it("rechecks source approval after encoding and before any output is stored", async () => {
+    const f = await setup(), image = await artwork(f), id = await queue(f, await useArtwork(f, image.asset)), put = vi.fn(store.put);
+    await runOneMotion(async document => { await db.imageGeneration.update({ where: { id: image.generation.id }, data: { status: "REJECTED" } }); return f.renderer(document); }, () => ({ ...store, put }));
+    expect(put).not.toHaveBeenCalled(); expect((await row(id)).status).toBe("FAILED");
+  });
   it("requires each shot review, queues once, renders once and gates downloads on final approval", async () => {
     const f = await setup(); await expect(manageVideo(f.scope, { action: "approve-storyboard", storyboardId: f.id }, () => store)).rejects.toThrow("every current shot");
     const id = await queue(f); const again = await manageVideo(f.scope, { action: "render", storyboardId: f.id }, () => store); expect(again.renderId).toBe(id);

@@ -1,6 +1,6 @@
 # Motion reel operations
 
-The local video module turns a reviewed storyboard into a silent, captioned MP4 using approved original brand images. It does not generate footage, clone voices, add music or call Higgsfield. Customer Connections remains for publishing destinations only.
+The video module turns a reviewed storyboard into a silent, captioned MP4 using approved original brand images or approved generated artwork. Reusing existing artwork makes no new model call and spends no AI credits. It does not generate footage, clone voices, add music or call Higgsfield. Customer Connections remains for publishing destinations only.
 
 ## Customer workflow
 
@@ -11,11 +11,17 @@ The local video module turns a reviewed storyboard into a silent, captioned MP4 
 5. Refresh status, preview the saved video, and review continuity, captions and brand fidelity. Final approval enables MP4, VTT captions and storyboard JSON downloads. Rejection does not spend money or regenerate automatically.
 6. For a revision, change the relevant shot and save a new version. Previous output becomes unavailable for delivery. Remove unused settled output from its version history.
 
-Fact checks are lexical guards, not semantic truth verification. Human review is not an automated continuity or agency-quality score. The current video input contract accepts approved original assets, not generated images or uploaded clips.
+Fact checks are lexical guards, not semantic truth verification. Human review is not an automated continuity or agency-quality score. Uploaded/generated video clips are not supported yet.
+
+## Approved artwork reuse
+
+Scene image choices distinguish approved originals from approved generated artwork. Only assets belonging to the same business are eligible; reuse across its planned creatives is explicit. Generated artwork must have current human approval, approved latest source copy, a current source plan/brand version and unchanged reference permissions and hashes. An authorized newer image version, blocking source-copy comment, rejection, archive or changed source copy makes it unavailable. Original logos cannot be replaced with generated artwork.
+
+These checks run on storyboard save/review, before and after encoding, before storage acceptance, during recovery and before/after downloading. Batch provenance reads avoid one database round trip per image. An unavailable image remains labelled in the editor until the user selects a replacement or removes it; saving the repaired draft requires fresh review of changed scenes. No model call occurs during reuse. Generated imagery is supporting artwork, not evidence that a depicted product or claim is accurate.
 
 ## Operator configuration
 
-Apply migrations through `20261015210000_motion_storyboards` and deploy matching web/worker runtime `studio-v9-motion-storyboards`. Video rendering stays disabled unless all of these requirements are met:
+Apply migrations through `20261015210000_motion_storyboards` and deploy matching web/worker runtime `studio-v10-motion-artwork`. Artwork reuse requires no new migration. Video rendering stays disabled unless all of these requirements are met:
 
 - `MOTION_RENDERING_ENABLED=true` and an integer `MOTION_RENDER_DAILY_LIMIT` from 1 to 100, explicitly chosen by the operator. Start low and measure costs before increasing it.
 - Absolute `FFMPEG_PATH` and `FFPROBE_PATH` pointing to operator-installed binaries, with `libx264` available. No runtime binary downloads occur. Keep matching configuration on web and worker because it participates in the readiness fingerprint.
@@ -48,4 +54,4 @@ Local tests exercise actual encoding and probing, single-worker admission, tenan
 
 The supplied Hyperframes contract informed finite timeline and asset-reference constraints. Its runtime is not installed. The current implementation is an app-owned FFmpeg renderer. OpenMontage code was not copied.
 
-Still required for the full video product: verified Higgsfield model/rate transports; per-shot generation quotes, supplier authorization and uncertain-outcome reconciliation; quarantined uploaded/generated clips; reusable generated-image inputs; licensed music/voiceover and audio captions; automated continuity/fidelity evaluation; mixed-media assembly, provider revisions and platform-specific export/transfer. Finish these before describing video as complete with only credentials remaining.
+Still required for the full video product: verified Higgsfield model/rate transports; per-shot generation quotes, supplier authorization and uncertain-outcome reconciliation; quarantined uploaded/generated clips; licensed music/voiceover and audio captions; automated continuity/fidelity evaluation; mixed-media assembly, provider revisions and platform-specific export/transfer. Finish these before describing video as complete with only credentials remaining.
