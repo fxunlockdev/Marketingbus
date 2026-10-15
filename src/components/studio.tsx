@@ -32,8 +32,9 @@ import { KnowledgeLibrary } from "./knowledge-library";
 import { SocialDashboard } from "./social-dashboard";
 import { CompositionEditor } from "./composition-editor";
 import { TeamPanel } from "./team-panel";
-import type { ProviderReadiness } from "@/lib/providers/readiness";
 import { ProductionCard, CalendarView, type ProductionItemView } from "./production-card";
+import { WorkflowControls } from "./workflow-controls";
+import { BillingPanel } from "./billing-panel";
 type Business = BrandInput & {
   id: string;
   organizationId: string;
@@ -61,6 +62,7 @@ type Page =
   | "Publishing & analytics"
   | "Design studio"
   | "Team"
+  | "Workflows"
   | "Memory"
   | "Connections"
   | "Credits";
@@ -75,6 +77,7 @@ const navigation = [
   { title: "Memory", icon: Brain },
   { title: "Connections", icon: Plug },
   { title: "Team", icon: ShieldCheck },
+  { title: "Workflows", icon: CalendarDays },
   { title: "Credits", icon: CreditCard },
 ] as const;
 const agents = [
@@ -88,13 +91,13 @@ const agents = [
     name: "Static creative",
     icon: ImageIcon,
     description: "Your product, your identity and carefully composed design.",
-    skills: "Brand kit · Gemini · Humanizer",
+    skills: "Brand kit · Image direction · Copy refinement",
   },
   {
     name: "Video director",
     icon: Film,
     description: "A considered story, from first frame to final caption.",
-    skills: "Hyperframes · Pexo · Higgsfield",
+    skills: "Storyboards · Motion design · Video production",
   },
   {
     name: "Campaign operator",
@@ -128,12 +131,10 @@ function Heading({
 export function Studio({
   user,
   initialBusinesses,
-  providers,
   wallets,
 }: {
   user: { name: string; email: string };
   initialBusinesses: Business[];
-  providers: ProviderReadiness;
   wallets: { organizationId: string; available: number; held: number }[];
 }) {
   const router = useRouter();
@@ -302,7 +303,7 @@ export function Studio({
               <span>Production credits</span>
               <b>{wallet?.available.toLocaleString() ?? 0}</b>
             </div>
-            <p>No subscription activated</p>
+            <p>Shared workspace balance</p>
             <button className="text-button" onClick={() => go("Credits")}>
               View your allowance <ArrowRight size={13} />
             </button>
@@ -763,6 +764,7 @@ export function Studio({
               {page === "Publishing & analytics" && <><Heading kicker="FROM APPROVAL TO EVIDENCE" title="Publishing & analytics" description="Exact-version publishing, verified outcomes and measured experiments. Live providers remain gated until connected." />{business ? <SocialDashboard key={business.id} businessId={business.id} items={items} /> : <Empty title="Choose a business first." text="Publishing and performance belong to a specific business." />}</>}
               {page === "Design studio" && <><Heading kicker="YOUR ASSETS, PRECISELY PLACED" title="Design studio" description="Editable, versioned compositions and downloadable files. No model cost for layout changes." />{business ? <CompositionEditor key={business.id} businessId={business.id} items={items} /> : <Empty title="Choose a business first." text="Designs and assets belong to a specific business." />}</>}
               {page === "Team" && <><Heading kicker="THE PEOPLE BEHIND THE WORK" title="Workspace team" description="Invite teammates and control who can view, create and administer your businesses." />{business ? <TeamPanel key={business.organizationId} organizationId={business.organizationId} /> : <Empty title="Choose a business first." text="Team access applies to its workspace." />}</>}
+              {page === "Workflows" && <><Heading kicker="CONTROL THE WORK" title="Workflows" description="Independent review and bounded recurring planning." />{business ? <WorkflowControls key={business.id} businessId={business.id} /> : <Empty title="Choose a business first." text="Workflow policies belong to one business." />}</>}
               {page === "Memory" &&
                 (business ? (
                   <>
@@ -829,28 +831,12 @@ export function Studio({
               {page === "Connections" && (
                 <>
                   <Heading
-                    kicker="THE TOOLS BEHIND THE WORK"
-                    title="Connect when you're ready."
-                    description="Provider keys stay on the server. This page never displays or collects secrets."
+                    kicker="YOUR PUBLISHING CHANNELS"
+                    title="Publishing destinations"
+                    description="Your business's social accounts for publishing approved content and tracking performance."
                   />
-                  <div className="provider-grid">
-                    {providers.map((p) => (
-                      <section className="panel provider" key={p.id}>
-                        <div className="panel-heading">
-                          <h2>{p.name}</h2>
-                          <span className="tag">
-                            {p.status}
-                          </span>
-                        </div>
-                        <p>{p.role}</p>
-                        <small>
-                          {p.requirement}
-                        </small>
-                      </section>
-                    ))}
-                  </div>
                   <section className="panel">
-                    <h2>Publishing destinations</h2>
+                    <h2>Social accounts</h2>
                     <p className="muted">
                       Instagram, Facebook, LinkedIn, X and YouTube integrations
                       require official OAuth setup and platform-specific
@@ -880,47 +866,7 @@ export function Studio({
                     title="Know what goes into it."
                     description="Plan production, protect room for revisions, and see where every credit goes."
                   />
-                  <div className="credit-grid">
-                    <section className="panel">
-                      <span className="eyebrow">AVAILABLE</span>
-                      <strong className="big-number">
-                        {wallet?.available.toLocaleString() ?? 0}
-                      </strong>
-                      <p>Actual account balance</p>
-                    </section>
-                    <section className="panel">
-                      <span className="eyebrow">RESERVED</span>
-                      <strong className="big-number">
-                        {wallet?.held.toLocaleString() ?? 0}
-                      </strong>
-                      <p>Held for authorized jobs</p>
-                    </section>
-                    <section className="panel">
-                      <span className="eyebrow">PROPOSED STUDIO PLAN</span>
-                      <strong className="big-number">
-                        $800<small>/mo</small>
-                      </strong>
-                      <p>8,000 credits · 3 brands</p>
-                      <span className="tag">Not on sale yet</span>
-                    </section>
-                  </div>
-                  <section className="panel">
-                    <h2>Leave room to get it right.</h2>
-                    <p className="muted">
-                      The proposed plan protects 1,600 credits for revisions.
-                      Approving, rejecting and leaving feedback do not
-                      themselves consume production credits. Regeneration can
-                      use the authorized revision budget.
-                    </p>
-                    <div className="budget-bar">
-                      <span>80% planning & production</span>
-                      <span>20% revisions</span>
-                    </div>
-                    <p className="small muted">
-                      These are proposed commercial terms, not credits granted
-                      to this account. Checkout is not connected. Paid generation requires verified server-side production gates, a funded wallet and an active worker. The 20% revision allocation is a proposed term, not an enforced balance split yet.
-                    </p>
-                  </section>
+                  {wallet ? <BillingPanel key={wallet.organizationId} organizationId={wallet.organizationId} /> : <Empty title="No workspace billing available." text="Select a workspace to view its balance." />}
                 </>
               )}
             </>

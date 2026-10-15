@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { assertReviewer, assertNoBlockingComments } from "../workflows/approvals";
+import { reserveWeeklyAuthorization } from "../workflows/planning";
 import { assertNoPublicationInFlight, invalidatePublications } from "../social/service";
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
@@ -6,7 +8,8 @@ import { AppError } from "../http";
 import { brandInput } from "../brand";
 import { compileHarness } from "../harness/contracts";
 import { reserveCreditsInTransaction } from "../billing/wallet";
-import { assertExecutionEnabled, configurationHash, selectRoute, routeSchema, totalSupplierBudget } from "./router";
+import { assertExecutionEnabled, configurationHash, selectRoute, routeSchema } from "./router";
+import { authorizeSupplier } from "./budget";
 import { assertWorkerReady } from "./readiness";
 import { creativeSchema, creativeJsonSchema, validateCreative } from "./content";
 import { approvedFactText, evaluateCreative } from "./quality";
@@ -46,7 +49,7 @@ async function assertIdle(tx: Prisma.TransactionClient, itemId: string, organiza
   if (item) await assertNoPublicationInFlight(tx, item.plan.businessId, itemId);
   if (await tx.job.count({ where: { organizationId, quote: { itemId }, status: { in: ["QUEUED", "RUNNING", "SUBMITTING", "NEEDS_RECONCILIATION"] } } })) throw new AppError(409, "This creative has an active or unresolved production job.");
 }
-export async function actOnProduction(scope: Scope, raw: unknown) {
+export async function actOnProduction(scope: Scope, raw: unknown, internal?: { weeklyTaskId: string }) {
   const input = productionAction.parse(raw);
   // Build skill context outside the transaction. Recheck all mutable inputs under lock below.
   if (input.action === "quote") {
@@ -96,7 +99,7 @@ export async function actOnProduction(scope: Scope, raw: unknown) {
   return db.$transaction(async tx => {
     const business = await lockBusiness(tx, scope);
     if (input.action === "accept") {
-      const budget = assertExecutionEnabled();
+      assertExecutionEnabled();
       const quote = await tx.generationQuote.findFirst({ where: { id: input.quoteId, organizationId: scope.organizationId, businessId: scope.businessId }, include: { job: true } });
       if (!quote) throw new AppError(404, "Quote not found.");
       if (quote.job) return { ok: true, jobId: quote.job.id };
@@ -106,20 +109,9 @@ export async function actOnProduction(scope: Scope, raw: unknown) {
       if (!business.confirmedAt || quote.brandVersion !== business.version || item.plan.status !== "PROPOSED" || (item.revisions[0]?.version || 0) !== quote.baseVersion) throw new AppError(409, "The brand or creative changed. Request a fresh quote.");
       if (quote.baseVersion && item.revisions[0]?.status !== "CHANGES_REQUESTED") throw new AppError(409, "This revision is no longer awaiting changes.");
       await assertIdle(tx, item.id, scope.organizationId);
-      // Lock global authorization, so simultaneous tenants cannot overrun the daily ceiling.
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(71403218)::text`;
-      const lifetime = await tx.supplierAuthorization.aggregate({ _sum: { ceilingMicros: true } });
-      if ((lifetime._sum.ceilingMicros || 0) + quote.supplierCeilingMicros > totalSupplierBudget()) throw new AppError(409, "The approved total supplier-spend budget is exhausted. An operator must authorize any increase.");
-      const day = new Date(); day.setUTCHours(0, 0, 0, 0);
-      // Include all unresolved jobs and work submitted today even if authorized yesterday.
-      // A midnight queue boundary must not make today's supplier expense disappear.
-      const reserved = await tx.generationQuote.aggregate({ where: { OR: [
-        { status: { in: ["ACCEPTED", "RECONCILE"] } },
-        { status: "COMPLETED", OR: [{ acceptedAt: { gte: day } }, { job: { submittedAt: { gte: day } } }] },
-      ] }, _sum: { supplierCeilingMicros: true } });
-      if ((reserved._sum.supplierCeilingMicros || 0) + quote.supplierCeilingMicros > budget) throw new AppError(409, "Production has reached its safe supplier-spend limit. Try later.");
-      const reservation = await reserveCreditsInTransaction(tx, scope.organizationId, quote.id, quote.credits);
-      await tx.supplierAuthorization.create({ data: { key: quote.id, ceilingMicros: quote.supplierCeilingMicros } });
+      await authorizeSupplier(tx, quote.id, quote.supplierCeilingMicros);
+      if (internal) await reserveWeeklyAuthorization(tx, scope, internal.weeklyTaskId, quote);
+      const reservation = await reserveCreditsInTransaction(tx, scope.organizationId, quote.id, quote.credits, quote.mode !== "initial");
       const job = await tx.job.create({ data: { organizationId: scope.organizationId, businessId: scope.businessId, key: `generation:${quote.id}`, kind: "STATIC_COPY", payload: { actorId: scope.actorId }, quoteId: quote.id, reservationId: reservation.id, maxAttempts: 1 } });
       await tx.generationQuote.update({ where: { id: quote.id }, data: { status: "ACCEPTED", acceptedAt: new Date() } });
       await tx.productionItem.update({ where: { id: item.id }, data: { status: "QUEUED" } });
@@ -139,6 +131,8 @@ export async function actOnProduction(scope: Scope, raw: unknown) {
     if (!revision || revision.version !== input.version) throw new AppError(409, "This version is no longer current. Refresh before reviewing.");
     if (!business.confirmedAt || item.plan.brandVersion !== business.version || item.plan.status !== "PROPOSED") throw new AppError(409, "The brand changed. Create work from the current confirmed profile.");
     if (["approve", "schedule"].includes(input.action)) {
+      await assertNoBlockingComments(tx, revision.id);
+      if (input.action === "approve") await assertReviewer(tx, scope, business.independentApproval, revision.authorId);
       const quality = evaluateCreative(creativeSchema.parse(revision.content), { facts: approvedFactText(business) });
       if (!quality.eligible) throw new AppError(409, "This version contains unconfirmed dates, numbers or claims. Edit the copy or confirm supporting business facts before approval.");
     }
@@ -160,7 +154,7 @@ export async function actOnProduction(scope: Scope, raw: unknown) {
       const quality = evaluateCreative(content, { facts: approvedFactText(business) });
       if (!quality.eligible) throw new AppError(409, "Remove unconfirmed dates, numbers or claims before saving this copy.");
       await tx.creativeRevision.update({ where: { id: revision.id }, data: { status: "SUPERSEDED" } });
-      await tx.creativeRevision.create({ data: { organizationId: scope.organizationId, itemId: item.id, version: revision.version + 1, content, status: "READY", provenance: { kind: "HUMAN_EDIT", actorId: scope.actorId, parentRevisionId: revision.id } } });
+      await tx.creativeRevision.create({ data: { organizationId: scope.organizationId, itemId: item.id, version: revision.version + 1, content, status: "READY", authorId: scope.actorId, provenance: { kind: "HUMAN_EDIT", actorId: scope.actorId, parentRevisionId: revision.id } } });
       await tx.productionItem.update({ where: { id: item.id }, data: { status: "READY", scheduledFor: null } });
       await tx.calendarEntry.deleteMany({ where: { itemId: item.id, organizationId: scope.organizationId } });
       await audit(tx, scope, "CREATIVE_EDITED", "Saved a new copy version without an AI call or credit charge. Previous approval and schedule revoked.");
@@ -170,7 +164,7 @@ export async function actOnProduction(scope: Scope, raw: unknown) {
     if (input.action === "revise" && input.feedback.length < 3) throw new AppError(400, "Describe the specific change you want.");
     const status = input.action === "approve" ? "APPROVED" : input.action === "reject" ? "REJECTED" : "CHANGES_REQUESTED";
     if (input.action !== "approve") await invalidatePublications(tx, scope.businessId, item.id);
-    await tx.creativeRevision.update({ where: { id: revision.id }, data: { status, feedback: input.feedback } });
+    await tx.creativeRevision.update({ where: { id: revision.id }, data: { status, feedback: input.feedback, approvedBy: input.action === "approve" ? scope.actorId : null, approvedAt: input.action === "approve" ? new Date() : null } });
     await tx.productionItem.update({ where: { id: item.id }, data: { status, ...(input.action === "approve" ? {} : { scheduledFor: null }) } });
     if (input.action !== "approve") await tx.calendarEntry.deleteMany({ where: { itemId: item.id, organizationId: scope.organizationId } });
     if (input.remember && input.feedback.length >= 3) {

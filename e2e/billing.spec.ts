@@ -1,0 +1,21 @@
+import { test, expect } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+test("billing displays real empty balances and cannot grant credits through checkout", async ({ page }) => {
+  const headers = { Origin: "http://127.0.0.1:3000" };
+  expect((await page.request.post("/api/auth/register", { headers, data: { name: "Billing browser fixture", email: `billing-${crypto.randomUUID()}@example.test`, password: "Test-only-password-2026!" } })).ok()).toBe(true);
+  await page.goto("/studio");
+  await page.getByRole("button", { name: "Credits", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Production credits", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Revision credits", exact: true })).toBeVisible();
+  await expect(page.getByText("Payments are not activated. You cannot be charged here yet.", { exact: true })).toBeVisible();
+  await expect(page.getByText("No verified payments yet.", { exact: true })).toBeVisible();
+  await expect(page.getByText("No offers are on sale yet.", { exact: true })).toBeVisible();
+  await expect(page.getByText("No credit activity yet.", { exact: true })).toBeVisible();
+  expect((await new AxeBuilder({ page }).include("main").analyze()).violations).toEqual([]);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const denied = await page.request.get("/api/organizations/not-my-workspace/billing");
+  expect(denied.status()).toBe(404);
+  const webhook = await page.request.post("/api/billing/webhook", { data: { kind: "PAID", generalCredits: 1000000 } });
+  expect(webhook.status()).toBe(503);
+});

@@ -6,7 +6,12 @@ export async function GET() {
     await db.$queryRaw`SELECT "id", "emailVerifiedAt", "authVersion" FROM "User" LIMIT 0`;
     await db.$queryRaw`SELECT "authVersion" FROM "Session" LIMIT 0`;
     await db.$queryRaw`SELECT "key" FROM "RateLimit" LIMIT 0`;
-    await db.$queryRaw`SELECT "organizationId" FROM "Wallet" LIMIT 0`;
+    await db.$queryRaw`SELECT "organizationId", "revisionAvailable", "debt", "revisionDebt" FROM "Wallet" LIMIT 0`;
+    await db.$queryRaw`SELECT "purpose", "revisionCredits" FROM "Reservation" LIMIT 0`;
+    await db.$queryRaw`SELECT "providerSessionId" FROM "BillingCheckout" LIMIT 0`;
+    await db.$queryRaw`SELECT "updatedThrough" FROM "BillingSubscription" LIMIT 0`;
+    await db.$queryRaw`SELECT "reclaimedGeneral", "reclaimedRevision" FROM "BillingPayment" LIMIT 0`;
+    await db.$queryRaw`SELECT "digest", "availableAt" FROM "BillingEvent" LIMIT 0`;
     await db.$queryRaw`SELECT "configurationHash" FROM "GenerationQuote" LIMIT 0`;
     await db.$queryRaw`SELECT "revisionId" FROM "CalendarEntry" LIMIT 0`;
     await db.$queryRaw`SELECT "submittedAt" FROM "Job" LIMIT 0`;
@@ -14,6 +19,7 @@ export async function GET() {
     await db.$queryRaw`SELECT "ceilingMicros" FROM "SupplierAuthorization" LIMIT 0`;
     await db.$queryRaw`SELECT "objectKey", "approvedForGeneration", "purgeLeaseUntil" FROM "BrandAsset" LIMIT 0`;
     await db.$queryRaw`SELECT "sha256" FROM "KnowledgeSource" LIMIT 0`;
+    await db.$queryRaw`SELECT "sources", "reservationId", "appliedFields" FROM "BrandAnalysis" LIMIT 0`;
     await db.$queryRaw`SELECT "expiresAt" FROM "IdentityToken" LIMIT 0`;
     await db.$queryRaw`SELECT "encryptedPayload" FROM "EmailOutbox" LIMIT 0`;
     await db.$queryRaw`SELECT "encryptedToken" FROM "SocialConnection" LIMIT 0`;
@@ -24,6 +30,12 @@ export async function GET() {
     await db.$queryRaw`SELECT "outboxId" FROM "TeamInvitation" LIMIT 0`;
     await db.$queryRaw`SELECT "actorId" FROM "TeamEvent" LIMIT 0`;
     await db.$queryRaw`SELECT "enabledAt", "lastStep" FROM "MfaCredential" LIMIT 0`;
+    await db.$queryRaw`SELECT "independentApproval" FROM "Business" LIMIT 0`;
+    await db.$queryRaw`SELECT "authorId", "approvedBy" FROM "CreativeRevision" LIMIT 0`;
+    await db.$queryRaw`SELECT "blocking" FROM "ReviewComment" LIMIT 0`;
+    await db.$queryRaw`SELECT "creditsPerWeek" FROM "WeeklyPolicy" LIMIT 0`;
+    await db.$queryRaw`SELECT "creditsAuthorized" FROM "WeeklyCycle" LIMIT 0`;
+    await db.$queryRaw`SELECT "quoteId" FROM "WeeklyTask" LIMIT 0`;
     return Response.json({status:"ok"},{headers:{"Cache-Control":"no-store"}});
   }
   catch { return Response.json({status:"unavailable"},{status:503,headers:{"Cache-Control":"no-store"}}); }

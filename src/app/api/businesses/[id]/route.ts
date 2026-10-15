@@ -3,8 +3,8 @@ import { db } from "@/lib/db";
 import { requireBusiness, rateLimit } from "@/lib/auth";
 import { api, readBody, AppError } from "@/lib/http";
 import { brandInput, proposePlan } from "@/lib/brand";
-import { finishReservationInTransaction } from "@/lib/billing/wallet";
-import { invalidatePublications } from "@/lib/social/service";
+import { replaceBrandProfile } from "@/lib/knowledge/profile";
+import { assertBrandEditor } from "@/lib/knowledge/analysis";
 const updateInput=z.discriminatedUnion("action",[
   z.object({action:z.literal("update"),version:z.number().int().positive(),profile:brandInput}).strict(),
   z.object({action:z.literal("confirm"),version:z.number().int().positive()}).strict(),
@@ -19,22 +19,12 @@ export async function POST(request:Request, context:{params:Promise<{id:string}>
     await rateLimit("business:write",user.id,120);
     return db.$transaction(async tx=>{
       await tx.$queryRaw`SELECT id FROM "Business" WHERE id=${id} FOR UPDATE`;
+      await assertBrandEditor(tx,{businessId:id,organizationId:business.organizationId,actorId:user.id});
       const fresh=await tx.business.findUniqueOrThrow({where:{id}});
       if("version" in input && fresh.version!==input.version) throw new AppError(409,"This profile changed. Refresh before saving.");
       const audit=(action:string,detail:string)=>tx.auditEvent.create({data:{businessId:id,organizationId:business.organizationId,actorId:user.id,action,detail}});
       if(input.action==="update") {
-        await invalidatePublications(tx,id);
-        await tx.business.update({where:{id},data:{...input.profile,version:{increment:1},confirmedAt:null,productionEnabled:false}});
-        await tx.productionPlan.updateMany({where:{businessId:id,status:"PROPOSED"},data:{status:"SUPERSEDED"}});
-        await tx.calendarEntry.deleteMany({where:{organizationId:business.organizationId,item:{plan:{businessId:id}}}});
-        await tx.productionItem.updateMany({where:{organizationId:business.organizationId,plan:{businessId:id}},data:{scheduledFor:null}});
-        await tx.generationQuote.updateMany({where:{businessId:id,status:"OFFERED"},data:{status:"SUPERSEDED"}});
-        const queued=await tx.job.findMany({where:{businessId:id,status:{in:["QUEUED","RUNNING"]},kind:"STATIC_COPY"}});
-        for(const job of queued){
-          if(job.reservationId)await finishReservationInTransaction(tx,business.organizationId,job.reservationId,0);
-          await tx.job.update({where:{id:job.id},data:{status:"CANCELLED",leaseUntil:null,errorCode:"BRAND_CHANGED"}});
-          if(job.quoteId)await tx.generationQuote.update({where:{id:job.quoteId},data:{status:"RELEASED"}});
-        }
+        await replaceBrandProfile(tx,{businessId:id,organizationId:business.organizationId,actorId:user.id},input.profile);
         await audit("PROFILE_UPDATED","Profile changed; confirmation and production authorization reset.");
       }
       if(input.action==="confirm") {

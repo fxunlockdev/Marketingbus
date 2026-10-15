@@ -391,6 +391,7 @@ hr {
 }
 .sidebar {
   height: 100dvh;
+  overflow-y: auto;
   position: sticky;
   top: 0;
   display: flex;
@@ -425,6 +426,7 @@ hr {
   display: flex;
   flex-direction: column;
   gap: 5px;
+  flex-shrink: 0;
 }
 .nav-item {
   display: flex;
@@ -1677,3 +1679,17 @@ hr {
 fieldset { border: 1px solid #d9d6cf; padding: 16px; margin: 16px 0; border-radius: 10px; }
 .production-list table { width: 100%; border-collapse: collapse; text-align: left; }
 .production-list th, .production-list td { padding: 10px 6px; border-bottom: 1px solid #d9d6cf; }
+.intelligence-panel { margin-block: 24px; }
+.intelligence-panel fieldset { border: 1px solid var(--line, #ddd8ce); padding: 20px; margin-block: 24px; min-width: 0; border-radius: 12px; }
+.intelligence-panel legend { padding-inline: 8px; font-weight: 600; }
+.intelligence-sources { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+.intelligence-review { border-top: 1px solid var(--line, #ddd8ce); padding-block: 20px; }
+.intelligence-suggestion { padding: 20px; margin-block: 16px; border: 1px solid var(--line, #ddd8ce); border-radius: 12px; }
+.intelligence-suggestion h5 { font-size: 16px; margin: 0; }
+.intelligence-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-block: 18px; overflow-wrap: anywhere; }
+.intelligence-compare > div { padding: 16px; border-radius: 8px; background: var(--bg, #f7f6f2); }
+.intelligence-compare p { margin-bottom: 0; }
+.intelligence-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 18px; }
+.intelligence-suggestion blockquote { border-left: 3px solid #b06b41; margin-inline: 0; padding-left: 16px; overflow-wrap: anywhere; }
+.intelligence-apply { max-width: 720px; }
+@media (max-width: 700px) { .intelligence-compare { grid-template-columns: 1fr; } .intelligence-suggestion { padding: 14px; } }

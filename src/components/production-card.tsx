@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { RevisionDiscussion } from "./workflow-controls";
 import type { Creative } from "@/lib/production/content";
 export type ProductionItemView = {
   id: string; title: string; channel: string; format: string; status: string;
@@ -18,7 +19,7 @@ function dateLabel(date: string, timezone: string) {
   return new Date(date).toLocaleString("en-GB", { timeZone: timezone });
 }
 export function ProductionCard({ item, brand, busy, post, review = false }: {
-  item: ProductionItemView; brand: { name: string; color: string; designPreset: string }; busy: boolean; post: Post; review?: boolean;
+  item: ProductionItemView; brand: { id: string; name: string; color: string; designPreset: string }; busy: boolean; post: Post; review?: boolean;
 }) {
   const revision = item.revisions[0];
   const [direction, setDirection] = useState(revision?.feedback || "");
@@ -85,6 +86,7 @@ export function ProductionCard({ item, brand, busy, post, review = false }: {
       <button className="button secondary" disabled={busy}>Get a credit quote · no generation yet</button>
       {quote && quoted && <div className="notice"><p>Up to <b>{quote.credits} credits</b> for one copy and creative-direction attempt. Unused credits are released. Quote expires {dateLabel(quote.expiresAt, timezone)} ({timezone}). Accepting does not authorize publishing.</p><button type="button" className="button dark" disabled={busy} onClick={() => post({ action: "accept", quoteId: quote.id })}>Authorize up to {quote.credits} credits</button></div>}
     </form>}
+    {review && revision && <RevisionDiscussion businessId={brand.id} itemId={item.id} version={revision.version} />}
     {!review && revision && <p className="muted">Version {revision.version} is available in the Review inbox.</p>}
   </section>;
 }

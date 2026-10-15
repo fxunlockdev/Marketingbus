@@ -4,6 +4,7 @@ import { db } from "../db";
 import { AppError } from "../http";
 import { lockBusiness, type Scope } from "../production/service";
 import { publicUrl } from "../providers/url-policy";
+import { invalidateBrandAnalyses } from "./invalidation";
 export const sourceInput = z.discriminatedUnion("action", [
   z.object({ action: z.literal("document"), title: z.string().trim().min(2).max(120), text: z.string().trim().min(20).max(24000).refine(s => Buffer.byteLength(s) <= 24000 && !/[\u0000\uFFFD]/.test(s), "Use valid UTF-8 text up to 24 KB."), rightsConfirmed: z.literal(true) }).strict(),
   z.object({ action: z.literal("website"), url: z.url().max(500), rightsConfirmed: z.literal(true) }).strict(),
@@ -41,6 +42,7 @@ export async function manageSource(scope: Scope, raw: unknown) {
       const source = await tx.knowledgeSource.findFirst({ where: { id: input.sourceId, businessId: scope.businessId, organizationId: scope.organizationId } });
       if (!source) throw new AppError(404, "Source not found.");
       if (["QUEUED", "FETCHING"].includes(source.status)) throw new AppError(409, "Wait for the active import before deleting this source.");
+      await invalidateBrandAnalyses(tx, scope, source.id);
       await tx.knowledgeSource.delete({ where: { id: source.id } });
       await tx.auditEvent.create({ data: { ...scope, action: "SOURCE_DELETED", detail: "Source text removed from the active database. Already-confirmed profile facts and backups are separate." } });
       return { ok: true };

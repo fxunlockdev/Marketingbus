@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { assertReviewer, assertNoBlockingComments } from "../workflows/approvals";
 import { z } from "zod";
 import { db } from "../db";
 import { AppError } from "../http";
@@ -107,6 +108,8 @@ export async function manageComposition(scope: Scope, raw: unknown) {
         );
     await invalidatePublications(tx, scope.businessId, item.id);
     if (input.action === "approve") {
+      await assertReviewer(tx, scope, business.independentApproval, previous!.authorId);
+      await assertNoBlockingComments(tx, revision.id);
       if (revision.status !== "APPROVED")
         throw new AppError(
           409,
@@ -114,7 +117,7 @@ export async function manageComposition(scope: Scope, raw: unknown) {
         );
       const composition = await tx.staticComposition.update({
         where: { id: previous!.id },
-        data: { status: "APPROVED" },
+        data: { status: "APPROVED", approvedBy: scope.actorId },
       });
       await tx.auditEvent.create({
         data: {
@@ -144,6 +147,7 @@ export async function manageComposition(scope: Scope, raw: unknown) {
         brandVersion: business.version,
         version: (previous?.version ?? 0) + 1,
         document,
+        authorId: scope.actorId,
       },
     });
     await tx.auditEvent.create({

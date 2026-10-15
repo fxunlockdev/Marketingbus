@@ -1,0 +1,179 @@
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { db } from "../src/lib/db";
+import { manageSource } from "../src/lib/knowledge/service";
+import { manageBrandAnalysis, readBrandAnalyses } from "../src/lib/knowledge/analysis";
+import { runOneBrandAnalysis, recoverBrandAnalysisLeases } from "../src/lib/knowledge/analysis-worker";
+import { reconcileBrandAnalysis } from "../src/lib/knowledge/reconcile";
+import { heartbeat } from "../src/lib/production/readiness";
+import { authorizeSupplier } from "../src/lib/production/budget";
+import { brandInput } from "../src/lib/brand";
+import { replaceBrandProfile } from "../src/lib/knowledge/profile";
+import { lockBusiness } from "../src/lib/production/service";
+const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
+if (process.env.TEST_DATABASE_URL && (process.env.DATABASE_URL !== process.env.TEST_DATABASE_URL || !["localhost", "127.0.0.1"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Local test DB required");
+suite("evidence-grounded brand intelligence", () => {
+  const orgs: string[] = [], users: string[] = [], workerId = `brand-fixture-${crypto.randomUUID()}`;
+  const text = "We offer considered architecture consultations for homeowners. Our voice is calm and clear.";
+  beforeEach(async () => {
+    vi.stubEnv("OPENAI_API_KEY", "fixture-never-network"); vi.stubEnv("PAID_EXECUTION_ENABLED", "true");
+    vi.stubEnv("DAILY_SUPPLIER_BUDGET_MICROS", "50000000"); vi.stubEnv("TOTAL_SUPPLIER_BUDGET_MICROS", "1000000000");
+    vi.stubEnv("REASONING_RATE_CARD_JSON", JSON.stringify([{ provider: "openai", model: "FIXTURE", lane: "creative", inputUsdPerMillion: 2, outputUsdPerMillion: 8, verifiedUntil: "2099-01-01T00:00:00Z" }]));
+    await heartbeat(workerId);
+  });
+  afterAll(async () => {
+    const analyses = await db.brandAnalysis.findMany({ where: { organizationId: { in: orgs } }, select: { id: true } });
+    await db.supplierAuthorization.deleteMany({ where: { key: { in: analyses.map(a => a.id) } } });
+    await db.organization.deleteMany({ where: { id: { in: orgs } } }); await db.user.deleteMany({ where: { id: { in: users } } });
+    await db.workerHeartbeat.deleteMany({ where: { id: workerId } }); vi.unstubAllEnvs(); await db.$disconnect();
+  });
+  async function setup() {
+    const user = await db.user.create({ data: { email: `brand-${crypto.randomUUID()}@example.test`, name: "Brand fixture", passwordHash: "fixture-no-login" } }); users.push(user.id);
+    const org = await db.organization.create({ data: { name: "BRAND TEST", wallet: { create: { available: 1000 } }, memberships: { create: { userId: user.id, role: "OWNER" } } } }); orgs.push(org.id);
+    const business = await db.business.create({ data: { organizationId: org.id, name: "Fixture Studio", offering: "Design consultations", audience: "Homeowners", goal: "Book consultations", confirmedAt: new Date() } });
+    const scope = { organizationId: org.id, businessId: business.id, actorId: user.id };
+    const result = await manageSource(scope, { action: "document", title: "Approved website text", text, rightsConfirmed: true });
+    const source = await db.knowledgeSource.findUniqueOrThrow({ where: { id: result.sourceId! } });
+    const suggestions = [
+      { field: "offering", kind: "EXACT_EXCERPT", value: "We offer considered architecture consultations for homeowners.", reason: "A specific description of your offering from the supplied page.", citations: [{ sourceId: source.id, sha256: source.sha256, excerpt: "We offer considered architecture consultations for homeowners." }] },
+      { field: "tone", kind: "INFERRED_TONE", value: "Calm, clear and considered", reason: "An inferred writing preference from the page's stated voice.", citations: [{ sourceId: source.id, sha256: source.sha256, excerpt: "Our voice is calm and clear." }] },
+    ];
+    return { scope, source, suggestions, reasoner: vi.fn(async () => ({ id: "fixture-response", text: JSON.stringify({ suggestions }), usage: { input_tokens: 100, output_tokens: 100 } })) };
+  }
+  async function quote(f: Awaited<ReturnType<typeof setup>>) {
+    const result = await manageBrandAnalysis(f.scope, { action: "quote", sourceIds: [f.source.id] });
+    if (!("analysisId" in result)) throw Error("Missing quote"); return result.analysisId!;
+  }
+  async function accepted(f: Awaited<ReturnType<typeof setup>>) {
+    const id = await quote(f); await manageBrandAnalysis(f.scope, { action: "accept", analysisId: id }); return id;
+  }
+  it("quotes without spending, accepts concurrently once and applies selected changes without confirming", async () => {
+    const f = await setup(), id = await quote(f);
+    expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(0);
+    await Promise.all([1, 2].map(() => manageBrandAnalysis(f.scope, { action: "accept", analysisId: id })));
+    expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(1);
+    await runOneBrandAnalysis(f.reasoner); await runOneBrandAnalysis(f.reasoner); expect(f.reasoner).toHaveBeenCalledTimes(1);
+    expect((await readBrandAnalyses(f.scope)).analyses[0]).toMatchObject({ status: "READY" });
+    await manageBrandAnalysis(f.scope, { action: "reject", analysisId: id, field: "tone" });
+    await expect(manageBrandAnalysis(f.scope, { action: "apply", analysisId: id, fields: ["tone"], version: 1 })).rejects.toThrow("unrejected");
+    const apply = { action: "apply", analysisId: id, fields: ["offering"], version: 1 };
+    await Promise.all([1, 2].map(() => manageBrandAnalysis(f.scope, apply)));
+    const b = await db.business.findUniqueOrThrow({ where: { id: f.scope.businessId } });
+    expect(b).toMatchObject({ offering: f.suggestions[0].value, version: 2, confirmedAt: null, productionEnabled: false, tone: "Clear and conversational" });
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } });
+    expect(wallet).toMatchObject({ available: 999, held: 0 });
+    await expect(manageBrandAnalysis(f.scope, { ...apply, fields: ["tone"] })).rejects.toThrow("different selection");
+  });
+  it("rejects fabricated dates and unsupported paraphrases, records supplier expense and releases customer credits", async () => {
+    const f = await setup(), id = await accepted(f);
+    f.suggestions[0].value = "Our studio launches on 25 October 2026.";
+    await runOneBrandAnalysis(f.reasoner);
+    expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "FAILED", supplierCostMicros: 1000, suggestions: null, errorCode: "GROUNDING_CHECK_FAILED" });
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } })).toMatchObject({ available: 1000, held: 0 });
+  });
+  it("enforces fresh membership and tenant scope on quote, review and apply", async () => {
+    const f = await setup(), other = await setup(), id = await accepted(f); await runOneBrandAnalysis(f.reasoner);
+    await expect(manageBrandAnalysis(other.scope, { action: "reject", analysisId: id, field: "tone" })).rejects.toThrow("not found");
+    await expect(manageBrandAnalysis(f.scope, { action: "quote", sourceIds: [other.source.id] })).rejects.toThrow("unavailable");
+    await db.membership.update({ where: { organizationId_userId: { organizationId: f.scope.organizationId, userId: f.scope.actorId } }, data: { role: "VIEWER" } });
+    expect((await readBrandAnalyses(f.scope)).canEdit).toBe(false);
+    await expect(manageBrandAnalysis(f.scope, { action: "apply", analysisId: id, fields: ["offering"], version: 1 })).rejects.toThrow("editing access");
+  });
+  it("cancels safely before submission and never calls the provider", async () => {
+    const f = await setup(), id = await accepted(f);
+    await manageBrandAnalysis(f.scope, { action: "cancel", analysisId: id });
+    await runOneBrandAnalysis(f.reasoner); expect(f.reasoner).not.toHaveBeenCalled();
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } })).toMatchObject({ available: 1000, held: 0 });
+  });
+  it("keeps ambiguous outcomes held, never retries and supports verified operator resolution", async () => {
+    const f = await setup(), id = await accepted(f), timeout = vi.fn(async () => { throw Error("fixture timeout"); });
+    await runOneBrandAnalysis(timeout); await runOneBrandAnalysis(timeout); expect(timeout).toHaveBeenCalledTimes(1);
+    expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "NEEDS_RECONCILIATION" });
+    await expect(quote(f)).rejects.toThrow("Resolve the current");
+    await expect(manageBrandAnalysis(f.scope, { action: "cancel", analysisId: id })).rejects.toThrow("uncertain outcome");
+    const input = { analysisId: id, supplierCostMicros: 1000, evidence: "Fixture provider log independently inspected", operatorId: "fixture-operator" };
+    await reconcileBrandAnalysis(input); await reconcileBrandAnalysis(input);
+    await expect(reconcileBrandAnalysis({ ...input, supplierCostMicros: 999 })).rejects.toThrow("replay changed");
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } })).toMatchObject({ available: 1000, held: 0 });
+  });
+  it("invalidates queued analysis and redacts proposals when a source is deleted", async () => {
+    const f = await setup(), id = await accepted(f); await runOneBrandAnalysis(f.reasoner);
+    const queued = await accepted(f);
+    await manageSource(f.scope, { action: "delete", sourceId: f.source.id });
+    expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "STALE", suggestions: null });
+    expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id: queued } })).toMatchObject({ status: "STALE" });
+    await runOneBrandAnalysis(f.reasoner); expect(f.reasoner).toHaveBeenCalledTimes(1);
+  });
+  it("discards results when the source is deleted during the provider call", async () => {
+    const f = await setup(), id = await accepted(f);
+    await runOneBrandAnalysis(async () => { await manageSource(f.scope, { action: "delete", sourceId: f.source.id }); return f.reasoner(); });
+    expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "STALE", suggestions: null, supplierCostMicros: 1000 });
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } })).toMatchObject({ available: 1000, held: 0 });
+  });
+  it("manual profile changes revoke suggestions, confirmation, plans and queued holds", async () => {
+    const f = await setup(), id = await accepted(f); await runOneBrandAnalysis(f.reasoner);
+    const queued = await accepted(f);
+    await db.productionPlan.create({ data: { businessId: f.scope.businessId, organizationId: f.scope.organizationId, brandVersion: 1, title: "Old plan", creditCeiling: 0 } });
+    await db.$transaction(async tx => {
+      const b = await lockBusiness(tx, f.scope);
+      await replaceBrandProfile(tx, f.scope, brandInput.parse(Object.fromEntries(Object.keys(brandInput.shape).map(k => [k, b[k as keyof typeof b]]))));
+    });
+    for (const rowId of [id, queued]) expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id: rowId } })).toMatchObject({ status: "STALE" });
+    expect(await db.productionPlan.findFirst({ where: { businessId: f.scope.businessId } })).toMatchObject({ status: "SUPERSEDED" });
+    await expect(manageBrandAnalysis(f.scope, { action: "apply", analysisId: id, fields: ["offering"], version: 1 })).rejects.toThrow("no longer current");
+  });
+  it("fails before submission if access was revoked and releases the hold", async () => {
+    const f = await setup(), id = await accepted(f);
+    await db.membership.delete({ where: { organizationId_userId: { organizationId: f.scope.organizationId, userId: f.scope.actorId } } });
+    await runOneBrandAnalysis(f.reasoner); expect(f.reasoner).not.toHaveBeenCalled();
+    expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "FAILED", errorCode: "PREFLIGHT_FAILED" });
+  });
+  it("uses the shared supplier cap for brand and other production work", async () => {
+    const f = await setup(), id = await accepted(f);
+    vi.stubEnv("DAILY_SUPPLIER_BUDGET_MICROS", "1");
+    await expect(db.$transaction(tx => authorizeSupplier(tx, `should-not-exist-${id}`, 1))).rejects.toThrow("supplier-spend limit");
+    await manageBrandAnalysis(f.scope, { action: "cancel", analysisId: id });
+  });
+  it("recovers pre-submit leases but never requeues a submitted call", async () => {
+    const f = await setup(), id = await accepted(f);
+    await db.brandAnalysis.update({ where: { id }, data: { status: "RUNNING", leaseUntil: new Date(0) } });
+    await recoverBrandAnalysisLeases(); expect((await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).status).toBe("QUEUED");
+    await db.brandAnalysis.update({ where: { id }, data: { status: "SUBMITTING", submittedAt: new Date(), leaseUntil: new Date(0) } });
+    await recoverBrandAnalysisLeases(); await runOneBrandAnalysis(f.reasoner); expect(f.reasoner).not.toHaveBeenCalled();
+    expect((await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).status).toBe("NEEDS_RECONCILIATION");
+    await reconcileBrandAnalysis({ analysisId: id, supplierCostMicros: 0, evidence: "Fixture independently confirmed no supplier expense", operatorId: "fixture-operator" });
+  });
+  it("detects source text mutation even if its stored hash was not updated", async () => {
+    const f = await setup(), id = await quote(f);
+    await db.knowledgeSource.update({ where: { id: f.source.id }, data: { body: "Altered source body that should not match its hash." } });
+    await expect(manageBrandAnalysis(f.scope, { action: "accept", analysisId: id })).rejects.toThrow("source evidence changed");
+    expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(0);
+  });
+  it("charges nothing for an empty result and rejects expired or paused quotes", async () => {
+    const f = await setup(), id = await quote(f);
+    await db.brandAnalysis.update({ where: { id }, data: { expiresAt: new Date(0) } });
+    await expect(manageBrandAnalysis(f.scope, { action: "accept", analysisId: id })).rejects.toThrow("expired");
+    vi.stubEnv("PAID_EXECUTION_ENABLED", "false");
+    await expect(quote(f)).rejects.toThrow("paused");
+    vi.stubEnv("PAID_EXECUTION_ENABLED", "true");
+    const fresh = await accepted(f);
+    await runOneBrandAnalysis(async () => ({ id: "fixture-empty", text: '{"suggestions":[]}', usage: { input_tokens: 100, output_tokens: 100 } }));
+    expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id: fresh } })).toMatchObject({ status: "READY", suggestions: [], supplierCostMicros: 1000 });
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } })).toMatchObject({ available: 1000, held: 0 });
+  });
+  it("counts older unresolved work and today's detached authorizations as a union", async () => {
+    const f = await setup(), id = await accepted(f), detached = `fixture-detached-${id}`;
+    const row = await db.brandAnalysis.findUniqueOrThrow({ where: { id } });
+    await db.brandAnalysis.update({ where: { id }, data: { acceptedAt: new Date(0) } });
+    await db.supplierAuthorization.update({ where: { key: id }, data: { createdAt: new Date(0) } });
+    await db.supplierAuthorization.create({ data: { key: detached, ceilingMicros: 1000000 } });
+    try {
+      const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+      const todayTotal = await db.supplierAuthorization.aggregate({ where: { createdAt: { gte: today } }, _sum: { ceilingMicros: true } });
+      vi.stubEnv("DAILY_SUPPLIER_BUDGET_MICROS", String((todayTotal._sum.ceilingMicros || 0) + row.supplierCeilingMicros));
+      await expect(db.$transaction(tx => authorizeSupplier(tx, `blocked-${id}`, 1))).rejects.toThrow("supplier-spend limit");
+    } finally {
+      await db.supplierAuthorization.delete({ where: { key: detached } });
+      await manageBrandAnalysis(f.scope, { action: "cancel", analysisId: id });
+    }
+  });
+});

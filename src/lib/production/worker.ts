@@ -57,7 +57,7 @@ export async function runOneJob(reasoner: Reasoner = reason) {
       if (deliver && content) {
         await tx.creativeRevision.updateMany({ where: { itemId: item.id, organizationId: scope.organizationId }, data: { status: "SUPERSEDED" } });
         await tx.creativeRevision.create({ data: { itemId: item.id, organizationId: scope.organizationId, version: quote.baseVersion + 1,
-          content, status: "READY", provenance: { kind: "AI_COPY", provider: request.route.model.provider, model: request.route.model.model,
+          content, status: "READY", authorId: typeof (job.payload as { actorId?: unknown }).actorId === "string" ? (job.payload as { actorId: string }).actorId : null, provenance: { kind: "AI_COPY", provider: request.route.model.provider, model: request.route.model.model,
             providerResponseId: result.id, skillVersion: request.skillVersion, sourceHashes: request.sourceHashes,
             brandVersion: quote.brandVersion, brandName: request.brandName, color: request.color, preset: request.preset,
             supplierCostMicros: micros, usage: result.usage as Prisma.InputJsonValue,

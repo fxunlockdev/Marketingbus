@@ -69,6 +69,9 @@ model Organization {
   wallet      Wallet?
   invitations TeamInvitation[]
   teamEvents TeamEvent[]
+  billingCheckouts BillingCheckout[]
+  billingSubscriptions BillingSubscription[]
+  billingPayments BillingPayment[]
 }
 
 model Membership {
@@ -110,10 +113,15 @@ model Business {
   jobs              Job[]
   assets            BrandAsset[]
   sources           KnowledgeSource[]
+  brandAnalyses     BrandAnalysis[]
   socialConnections SocialConnection[]
   publications SocialPublication[]
   compositions StaticComposition[]
   experiments LearningProposal[]
+  independentApproval Boolean @default(false)
+  comments ReviewComment[]
+  weeklyPolicy WeeklyPolicy?
+  weeklyCycles WeeklyCycle[]
 
   @@unique([id, organizationId])
   @@index([organizationId])
@@ -134,6 +142,37 @@ model KnowledgeSource {
   retrievedAt    DateTime?
   business       Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
   @@index([businessId, organizationId, createdAt])
+}
+
+// Source bodies are not copied here. Hashes bind proposals to the reviewed evidence.
+model BrandAnalysis {
+  id String @id @default(cuid())
+  businessId String
+  organizationId String
+  actorId String
+  brandVersion Int
+  sources Json
+  route Json
+  configurationHash String
+  credits Int
+  supplierCeilingMicros Int
+  status String @default("OFFERED")
+  expiresAt DateTime
+  acceptedAt DateTime?
+  submittedAt DateTime?
+  leaseUntil DateTime?
+  reservationId String? @unique
+  providerResponseId String?
+  supplierCostMicros Int?
+  usage Json?
+  suggestions Json?
+  rejectedFields String[] @default([])
+  appliedFields String[] @default([])
+  errorCode String?
+  createdAt DateTime @default(now())
+  business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  @@index([businessId, organizationId, createdAt])
+  @@index([status, leaseUntil])
 }
 
 model BrandSnapshot {
@@ -194,6 +233,10 @@ model CreativeRevision {
   item           ProductionItem  @relation(fields: [itemId, organizationId], references: [id, organizationId], onDelete: Cascade)
   schedules      CalendarEntry[]
   publications SocialPublication[]
+  authorId String?
+  approvedBy String?
+  approvedAt DateTime?
+  comments ReviewComment[]
 
   @@unique([itemId, version])
   @@unique([id, organizationId])
@@ -267,6 +310,9 @@ model Wallet {
   organizationId String        @id
   available      Int           @default(0)
   held           Int           @default(0)
+  revisionAvailable Int @default(0)
+  debt Int @default(0)
+  revisionDebt Int @default(0)
   organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   entries        CreditEntry[]
   reservations   Reservation[]
@@ -287,6 +333,8 @@ model Reservation {
   organizationId String
   key            String   @unique
   credits        Int
+  revisionCredits Int @default(0)
+  purpose String @default("INITIAL")
   state          String   @default("HELD")
   createdAt      DateTime @default(now())
   wallet         Wallet   @relation(fields: [organizationId], references: [organizationId], onDelete: Cascade)
@@ -465,6 +513,8 @@ model StaticComposition {
   version Int
   document Json
   status String @default("DRAFT")
+  authorId String?
+  approvedBy String?
   createdAt DateTime @default(now())
   business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
   @@unique([itemId, version])
@@ -505,4 +555,123 @@ model MfaCredential {
   lastStep Int @default(-1)
   recoveryHashes String[] @default([])
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ReviewComment {
+  id String @id @default(cuid())
+  businessId String
+  organizationId String
+  revisionId String
+  actorId String
+  body String
+  blocking Boolean @default(false)
+  resolvedBy String?
+  resolvedAt DateTime?
+  createdAt DateTime @default(now())
+  business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  revision CreativeRevision @relation(fields: [revisionId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  @@index([revisionId, resolvedAt])
+}
+
+model WeeklyPolicy {
+  businessId String @id
+  organizationId String
+  enabled Boolean @default(false)
+  mode String @default("PLAN")
+  maxItems Int @default(4)
+  creditsPerWeek Int @default(0)
+  weekday Int @default(1)
+  hourUTC Int @default(9)
+  nextRunAt DateTime
+  version Int @default(1)
+  brandVersion Int
+  actorId String
+  business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  @@index([enabled, nextRunAt])
+  @@unique([businessId, organizationId])
+}
+
+model WeeklyCycle {
+  id String @id @default(cuid())
+  businessId String
+  organizationId String
+  periodKey String
+  policyVersion Int
+  brandVersion Int
+  planId String
+  status String @default("OPEN")
+  creditsAuthorized Int @default(0)
+  errorCode String?
+  leaseUntil DateTime?
+  createdAt DateTime @default(now())
+  business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  tasks WeeklyTask[]
+  @@unique([businessId, periodKey])
+  @@index([status, leaseUntil])
+}
+
+model WeeklyTask {
+  id String @id @default(cuid())
+  cycleId String
+  itemId String
+  quoteId String?
+  status String @default("PENDING")
+  errorCode String?
+  cycle WeeklyCycle @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  @@unique([cycleId, itemId])
+}
+
+model BillingCheckout {
+  id String @id @default(cuid())
+  organizationId String
+  actorId String
+  offer Json
+  status String @default("CREATED")
+  providerSessionId String? @unique
+  url String?
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@index([organizationId, createdAt])
+}
+model BillingSubscription {
+  id String @id
+  organizationId String
+  customerId String
+  offer Json
+  status String
+  currentPeriodEnd DateTime
+  updatedThrough DateTime
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  @@index([organizationId])
+}
+model BillingPayment {
+  id String @id
+  organizationId String
+  checkoutId String?
+  subscriptionId String?
+  periodStart DateTime?
+  amountMinor Int
+  currency String
+  generalCredits Int
+  revisionCredits Int
+  refundedMinor Int @default(0)
+  reclaimedGeneral Int @default(0)
+  reclaimedRevision Int @default(0)
+  createdAt DateTime @default(now())
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  @@unique([subscriptionId, periodStart])
+  @@index([organizationId, createdAt])
+}
+// Provider references only, never card data. No cascade deletion: event replays cannot mint credits.
+model BillingEvent {
+  id String @id
+  payload Json
+  digest String
+  status String @default("PENDING")
+  errorCode String?
+  attempts Int @default(0)
+  availableAt DateTime @default(now())
+  createdAt DateTime @default(now())
+  @@index([status, availableAt])
 }

@@ -1,0 +1,63 @@
+# Marketingbus module completion plan
+
+The target is a working multi-tenant marketing product, with only explicitly identified provider integration and acceptance steps remaining. That target has not been reached. This checklist separates internal implementation from credentials, platform approvals, deployment and live verification. A screen or adapter interface alone does not complete a module.
+
+## Completion rules
+
+Every module needs scoped persistence, role checks, usable screens, failure/recovery behavior, cost bounds where applicable, database tests, browser tests and deployment verification. Fixture transports must never be registered as production providers. Customer Connections contains publishing destinations only; AI providers are operator-managed.
+
+Local source changes are not production deployment. Third-party account approval and creative quality cannot be guaranteed by code or a test count. No further paid AI calls are authorized by this plan.
+
+## Module 1 Billing and credits
+
+Implemented locally: server-owned offer catalog; owner/admin checkout and portal actions; frozen checkout terms and stable retry identifiers; bounded raw-body webhook intake behind a signature-verifying adapter; durable payment inbox; one grant per payment and subscription period; top-ups; cumulative refund accounting; protected revision balances; refund debt; shared workspace balances; payment and credit history screens; worker processing; migration-aware health checks.
+
+Verification covers concurrent duplicate events, changed replay payloads, unsafe redirects, cross-workspace access, renewal duplication, partial and out-of-order refunds, held-credit settlement and bounded webhook bodies. Browser checks cover actual empty balances, fail-closed payments, accessibility and mobile width.
+
+Remaining: implement and verify the Stripe adapter, authoritative account/livemode/signature validation, monthly-price mapping, checkout/cancellation and portal behavior, provider refund initiation and operator review/reconciliation tooling. Test discounts, taxes, disputes and provider-specific event ordering before release. Commercial terms and margin acceptance remain separate. Credits currently carry forward; there is no expiration scheduler or invented initial balance.
+
+## Module 2 Brand intelligence
+
+Implemented locally: tenant-scoped TXT/Markdown evidence; cached, bounded website import queue; selectable-text PDF and DOCX upload with separate-process extraction; permission-limited Node 26 runtime; 5 MB input, 40 PDF pages, 24 KB extracted text, 15-second limit and two parsers per web process; import rate limits; deduplication, review and deletion. Original binaries are not retained. Extraction does not approve facts or follow embedded instructions.
+
+Also implemented locally: source/version-linked AI analysis quotes; explicit credit authorization; a single-submit worker; validated exact-excerpt fact proposals and separately labelled inferred tone; current/proposed comparison with citations; selective apply and rejection; stale-brand and deleted-source invalidation; cancellation before submission; measured supplier settlement and operator reconciliation of uncertain outcomes. Brand and copy share atomic daily and lifetime supplier limits. Applying suggestions creates an unconfirmed draft and invalidates dependent plans and schedules. Source deletion redacts stored proposals; copied profile facts and backups remain separate. Provider responses are injected only in tests.
+
+Remaining: semantic copy/visual factual checks beyond exact-excerpt matching; broader adversarial grounding evaluations; cross-source contradiction classification; production provider acceptance. Exact quotations do not establish source truth and inferred tone still requires review. Scanned PDFs/OCR are not supported. Production needs verified Node 26 packaging and parser resource isolation; process permissions and heap limits are not a substitute for OS/container resource enforcement. Deploy and measure self-hosted Firecrawl separately before enabling website intake.
+
+## Module 3 Image production
+
+Existing foundation: original approved brand assets, editable composition, four canvas sizes and PNG/SVG/JSON exports.
+
+Required internal work: immutable reference snapshots and hashes; image-specific quotes and reservations; single-submit generation jobs; uncertain-outcome reconciliation; bounded image download and quarantine; measured supplier settlement; brand/product fidelity review; immutable exports usable by publishing; revision scope and approval invalidation. Test malformed results, stale brand assets, repeated callbacks and process death. Gemini integration and approved live spend follow these checks.
+
+## Module 4 Video and motion
+
+Required internal work: versioned storyboards, shot dependencies and per-shot review; generated/uploaded media quarantine; quote and settlement per shot; single-submit jobs and reconciliation; bounded rendering; captions and licensed/approved audio; continuity evaluation; scoped revisions that invalidate dependent outputs; assembled exports and final approval. Test interrupted renders, partial failures, duration/resource limits and incompatible media. Higgsfield endpoints and model/rate verification are external integration steps, not substitutes for this workflow.
+
+## Module 5 Social publishing and analytics
+
+Existing foundation: encrypted token records, exact-revision publishing queue, retries/reconciliation contracts, nullable metric snapshots and customer analytics views.
+
+Required internal work: OAuth start/callback/state and supported PKCE; scope validation; refresh/revocation handling; platform adapters and media transfer; immutable post payloads; operator reconciliation; metric-definition mappings and attribution windows. Test replayed callbacks, cross-workspace account binding, expired tokens, ambiguous publish results, duplicate webhooks and missing metrics. Meta/LinkedIn access approvals and designated live accounts remain external gates. Do not claim a post was published without a verified platform receipt.
+
+## Module 6 Learning and bounded automation
+
+Existing foundation: explicit memory, observational learning proposals with human promotion/revert, independent approval controls and blocking comments, weekly policy/cycles, one cycle per business/week, a frozen brand version and atomic weekly copy budget authorization.
+
+Required internal work: historical plan navigation, mixed image/video planning, cancellation/reconciliation experience, cohort/holdout evaluation, promotion thresholds and measured creative outcomes. Test brand/role changes, period boundaries, duplicate ticks, budget exhaustion, worker restarts and evidence invalidation. Autopilot must not silently approve or publish work or bypass the supplier ceiling.
+
+## Module 7 Production readiness
+
+Required internal work and verification: invite-aware registration; organization MFA policy; recovery and key-rotation procedures; billing/provider reconciliation operations; alerts and dead-letter visibility; backup and restore rehearsal with data assertions; realistic load/chaos tests; manual keyboard/screen-reader review; independent security review. Deploy matching web/worker versions after migrations and prove hosted business onboarding through approval/export without fabricating provider outcomes.
+
+## Current release boundary
+
+The new module work is local and has not been deployed. Billing, document and brand-review work must not be described as completion of all seven modules. Continue with image production, video production, social adapters, measured automation and release assurance, closing each acceptance checklist with evidence. The brand-analysis worker requires runtime `studio-v6-brand-intelligence` and the `20261015180000_brand_intelligence` migration; old workers cannot authorize this new workflow.
+
+Local verification on 15 October 2026: 168 tests across 24 unit/database suites passed, including brand analysis, source grounding and shared cost limits. Eleven browser journeys passed against the production build, covering brand review, source inspection, reject/selective apply, tenant isolation, billing, Word upload, onboarding, copy/calendar controls, identity/MFA and composition/export/analytics/team protections. The private-storage browser journey was skipped because no test bucket was configured. Brand-review mobile width and automated accessibility checks passed. Production build and TypeScript checks passed; the dependency audit reported zero known vulnerabilities. These checks do not constitute a security review, full load test or live provider acceptance.
+
+The original local Docker disk filled during verification. A separate temporary, memory-backed PostgreSQL container (`marketingbus-brand-tests`, localhost port 55439) was used without deleting unrelated Docker data. Its data is disposable and disappears when the container is stopped; it is not production storage. Paid AI, email, website and social execution remain disabled on the local preview server.
+
+## Brand analysis operator recovery
+
+An uncertain provider submission is never automatically retried. Verify the provider's actual expense independently, then use `scripts/reconcile-brand-analysis.ts` with `--analysis`, `--supplier-cost-micros`, `--evidence` and `--operator`. The procedure accepts only uncertain jobs, rejects expenses above authorization, releases customer credits and records supplier expense without delivering unverified suggestions. Repeated identical resolution is safe; changed replay evidence is rejected. This is a privileged server procedure, not a customer API. A full operator administration screen remains a release dependency.

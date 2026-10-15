@@ -1,11 +1,13 @@
 "use client";
 import { useCallback, useEffect, useId, useState } from "react";
+import { BrandIntelligence } from "./brand-intelligence";
 type Source = { id: string; title: string; kind: string; body: string; sourceUrl: string; status: string; retrievedAt: string | null };
 export function KnowledgeLibrary({ businessId }: { businessId: string }) {
   const uid = useId(), endpoint = `/api/businesses/${businessId}/sources`;
   const [sources, setSources] = useState<Source[]>([]), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false), [url, setUrl] = useState(""), [title, setTitle] = useState(""), [text, setText] = useState("");
   const [rights, setRights] = useState(false), [quotes, setQuotes] = useState<Record<string, string>>({}), [removing, setRemoving] = useState<string | null>(null);
+  const [document, setDocument] = useState<File | null>(null);
   const load = useCallback(async (signal?: AbortSignal) => {
     const response = await fetch(endpoint, { signal }); const data = await response.json();
     if (!response.ok) throw Error(data.error || "Could not load sources.");
@@ -24,11 +26,25 @@ export function KnowledgeLibrary({ businessId }: { businessId: string }) {
     } catch (e) { setError(e instanceof Error ? e.message : "Request failed."); }
     finally { setBusy(false); }
   }
-  return <section className="panel" aria-labelledby={`${uid}-heading`} aria-busy={busy}>
+  return <><BrandIntelligence key={businessId} businessId={businessId} sources={sources} /><section className="panel" aria-labelledby={`${uid}-heading`} aria-busy={busy}>
     <div className="panel-heading"><h2 id={`${uid}-heading`}>Business evidence</h2><span className="tag">Review before use</span></div>
-    <p>Import one public website page or a UTF-8 text/Markdown document. Website results are reused for seven days, with three new pages per business per day. PDF and Word parsing are not enabled yet.</p>
+    <p>Import a public website page, UTF-8 text/Markdown, PDF or DOCX document. Website results are reused for seven days, with three new pages per business per day. Imported text remains unapproved evidence.</p>
     <p id={`${uid}-error`} role={error ? "alert" : undefined} className="error">{error}</p><p role={notice ? "status" : undefined}>{notice}</p>
     <label className="checkbox-label"><input type="checkbox" checked={rights} onChange={e => setRights(e.target.checked)} />I have permission to import this business content.</label>
+    <form className="inline-form" onSubmit={async e => {
+      e.preventDefault(); if (!document) return; setBusy(true); setError(""); setNotice("");
+      try {
+        if (document.size > 5 * 1024 * 1024) throw Error("Use a document up to 5 MB.");
+        const response = await fetch(`${endpoint}/upload`, { method: "POST", headers: { "Content-Type": "application/octet-stream", "x-document-name": document.name.replace(/[^\x20-\x7e]/g, "_"), "x-content-rights": rights ? "confirmed" : "" }, body: document });
+        const result = await response.json(); if (!response.ok) throw Error(result.error);
+        await load(); setNotice(result.cached ? "Matching extracted text already exists. No duplicate source was stored." : "Document text imported for review. The original file was not retained; no facts were automatically approved.");
+      } catch (e) { setError(e instanceof Error ? e.message : "Document import failed."); } finally { setBusy(false); }
+    }}>
+      <label htmlFor={`${uid}-office`}>PDF or Word document (.pdf or .docx, up to 5 MB)</label>
+      <input id={`${uid}-office`} type="file" accept=".pdf,.docx" required onChange={e => setDocument(e.target.files?.[0] ?? null)} aria-describedby={`${uid}-document-help ${uid}-error`} />
+      <p id={`${uid}-document-help`} className="small muted">Selectable text only, up to 40 PDF pages and 24 KB of extracted text. Scanned PDFs need a text export. Macros, embedded images and original files are not imported.</p>
+      <button className="button secondary" disabled={busy || !rights || !document}>Extract document for review</button>
+    </form>
     <form className="inline-form" onSubmit={e => { e.preventDefault(); void submit({ action: "website", url, rightsConfirmed: rights }); }}>
       <label htmlFor={`${uid}-url`}>Website page</label><input id={`${uid}-url`} type="url" required maxLength={500} value={url} onChange={e => setUrl(e.target.value)} placeholder="https://your-business.example/about" aria-describedby={`${uid}-error`} />
       <button className="button secondary" disabled={busy || !rights}>Queue website import</button>
@@ -54,5 +70,5 @@ export function KnowledgeLibrary({ businessId }: { businessId: string }) {
       </>}
       {!["QUEUED", "FETCHING"].includes(source.status) && (removing === source.id ? <div><p>Delete this source text from the active library? This cannot be undone here. Profile facts already copied from it are not removed.</p><button type="button" className="button secondary" disabled={busy} onClick={() => submit({ action: "delete", sourceId: source.id })}>Confirm source deletion</button><button type="button" className="text-button" onClick={() => setRemoving(null)}>Cancel</button></div> : <button type="button" className="text-button" disabled={busy} onClick={() => setRemoving(source.id)}>Delete source · {source.title}</button>)}
     </article>)}
-  </section>;
+  </section></>;
 }

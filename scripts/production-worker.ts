@@ -1,11 +1,14 @@
 import { runOneJob, recoverExpiredLeases } from "../src/lib/production/worker";
+import { processOnePayment } from "../src/lib/billing/payments";
 import { db } from "../src/lib/db";
+import { createDuePlan, runOneWeeklyDraft } from "../src/lib/workflows/planning";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { heartbeat, HEARTBEAT_TTL_MS } from "../src/lib/production/readiness";
 import { purgeExpiredAssets } from "../src/lib/assets/service";
 import { assetStore } from "../src/lib/assets/storage";
 import { runOneSourceJob } from "../src/lib/knowledge/worker";
+import { runOneBrandAnalysis, recoverBrandAnalysisLeases } from "../src/lib/knowledge/analysis-worker";
 import { runOneEmail } from "../src/lib/identity/worker";
 import { expireIdentityArtifacts } from "../src/lib/identity/service";
 import { configuredSocialAdapters } from "../src/lib/social/contracts";
@@ -37,9 +40,13 @@ async function main() {
   while (!stopping) {
     try {
       await recoverExpiredLeases();
+      await recoverBrandAnalysisLeases();
       await recoverSocialLeases();
       const enabled = await heartbeat(instance);
       lastHealthyAt = Date.now();
+      try { await processOnePayment(); } catch { console.error("Payment processing failed; durable event retained for retry and other job types remain available."); }
+      await createDuePlan();
+      if (enabled) await runOneWeeklyDraft();
       if (Date.now() - lastRetentionCheck > 300000) {
         lastRetentionCheck = Date.now();
         await expireIdentityArtifacts();
@@ -49,6 +56,7 @@ async function main() {
       if (!stopping && process.env.EMAIL_DELIVERY_ENABLED === "true") {
         try { await runOneEmail(); } catch { console.error("Email delivery check failed; other job types remain available."); }
       }
+      if (!stopping && enabled) await runOneBrandAnalysis();
       if (!stopping && enabled && await runOneJob()) continue;
       if (!stopping && process.env.SOCIAL_EXECUTION_ENABLED === "true") {
         const adapters = configuredSocialAdapters();

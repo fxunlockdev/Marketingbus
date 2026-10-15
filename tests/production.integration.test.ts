@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { db } from "../src/lib/db";
 import { actOnProduction, type Scope } from "../src/lib/production/service";
-import { runOneJob, recoverExpiredLeases } from "../src/lib/production/worker";
+import { runOneJob as processJob, recoverExpiredLeases } from "../src/lib/production/worker";
 import { reconcileFailedJob } from "../src/lib/production/reconcile";
 import { heartbeat, HEARTBEAT_TTL_MS } from "../src/lib/production/readiness";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
@@ -11,6 +11,12 @@ const fixtureReasoner = async () => ({ id: "fixture-response", text: JSON.string
 suite("production authorization, review and worker integration", () => {
   const organizations: string[] = [];
   const workerId = `test-worker-${crypto.randomUUID()}`;
+  async function runOneJob(reasoner?: Parameters<typeof processJob>[0]) {
+    // Prisma assigns host timestamps; Docker Postgres can lag by milliseconds.
+    // Make this suite's fixture jobs explicitly due, without changing production scheduling.
+    await db.job.updateMany({ where: { organizationId: { in: organizations }, status: "QUEUED", kind: "STATIC_COPY" }, data: { availableAt: new Date(0) } });
+    return processJob(reasoner);
+  }
   beforeAll(async () => {
     vi.stubEnv("OPENAI_API_KEY", "fixture-no-network"); vi.stubEnv("PAID_EXECUTION_ENABLED", "true"); vi.stubEnv("DAILY_SUPPLIER_BUDGET_MICROS", "50000000");
     vi.stubEnv("TOTAL_SUPPLIER_BUDGET_MICROS", "1000000000");
