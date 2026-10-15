@@ -1,0 +1,45 @@
+name: Product checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: marketingbus
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: marketingbus_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U marketingbus -d marketingbus_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://marketingbus:ci-only-password@127.0.0.1:5432/marketingbus_test
+      TEST_DATABASE_URL: postgresql://marketingbus:ci-only-password@127.0.0.1:5432/marketingbus_test
+      APP_ORIGIN: http://127.0.0.1:3000
+      PAID_EXECUTION_ENABLED: "false"
+      EMAIL_DELIVERY_ENABLED: "false"
+      WEBSITE_EXTRACTION_ENABLED: "false"
+      SOCIAL_EXECUTION_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run db:generate
+      - run: npm run db:migrate
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chrome
+      - run: npm run test:e2e
+      - run: npm audit --audit-level=high

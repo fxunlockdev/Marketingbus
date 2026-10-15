@@ -1,0 +1,1 @@
+ALTER TABLE "Job" ADD COLUMN "submittedAt" TIMESTAMP(3);

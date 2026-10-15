@@ -1,0 +1,508 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  name         String
+  passwordHash String
+  emailVerifiedAt DateTime?
+  authVersion Int @default(0)
+  createdAt    DateTime     @default(now())
+  sessions     Session[]
+  memberships  Membership[]
+  identityTokens IdentityToken[]
+  emails EmailOutbox[]
+  mfa MfaCredential?
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  expiresAt DateTime
+  authVersion Int @default(0)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model IdentityToken {
+  id String @id
+  userId String
+  kind String
+  expiresAt DateTime
+  usedAt DateTime?
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, kind, createdAt])
+}
+
+model EmailOutbox {
+  id String @id
+  userId String
+  kind String
+  encryptedPayload String
+  status String @default("QUEUED")
+  attempts Int @default(0)
+  availableAt DateTime @default(now())
+  leaseUntil DateTime?
+  expiresAt DateTime
+  providerId String?
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([status, availableAt])
+}
+
+model Organization {
+  id          String       @id @default(cuid())
+  name        String
+  createdAt   DateTime     @default(now())
+  memberships Membership[]
+  businesses  Business[]
+  wallet      Wallet?
+  invitations TeamInvitation[]
+  teamEvents TeamEvent[]
+}
+
+model Membership {
+  organizationId String
+  userId         String
+  role           String       @default("OWNER")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, userId])
+}
+
+model Business {
+  id                String            @id @default(cuid())
+  organizationId    String
+  name              String
+  website           String            @default("")
+  industry          String            @default("")
+  offering          String            @default("")
+  audience          String            @default("")
+  goal              String            @default("")
+  difference        String            @default("")
+  proof             String            @default("")
+  tone              String            @default("Clear and conversational")
+  restrictions      String            @default("")
+  color             String            @default("#c67139")
+  designPreset      String            @default("editorial")
+  channels          String[]          @default(["Instagram", "LinkedIn"])
+  version           Int               @default(1)
+  confirmedAt       DateTime?
+  productionEnabled Boolean           @default(false)
+  createdAt         DateTime          @default(now())
+  organization      Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  snapshots         BrandSnapshot[]
+  plans             ProductionPlan[]
+  memories          Memory[]
+  auditEvents       AuditEvent[]
+  quotes            GenerationQuote[]
+  jobs              Job[]
+  assets            BrandAsset[]
+  sources           KnowledgeSource[]
+  socialConnections SocialConnection[]
+  publications SocialPublication[]
+  compositions StaticComposition[]
+  experiments LearningProposal[]
+
+  @@unique([id, organizationId])
+  @@index([organizationId])
+}
+
+model KnowledgeSource {
+  id             String @id @default(cuid())
+  businessId     String
+  organizationId String
+  kind           String
+  title          String
+  sourceUrl      String @default("")
+  body           String @default("")
+  sha256         String @default("")
+  status         String @default("PROPOSED")
+  createdBy      String
+  createdAt      DateTime @default(now())
+  retrievedAt    DateTime?
+  business       Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  @@index([businessId, organizationId, createdAt])
+}
+
+model BrandSnapshot {
+  id             String   @id @default(cuid())
+  businessId     String
+  organizationId String
+  version        Int
+  data           Json
+  createdAt      DateTime @default(now())
+  business       Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([businessId, version])
+}
+
+model ProductionPlan {
+  id             String           @id @default(cuid())
+  businessId     String
+  organizationId String
+  brandVersion   Int
+  title          String
+  status         String           @default("PROPOSED")
+  creditCeiling  Int
+  createdAt      DateTime         @default(now())
+  business       Business         @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  items          ProductionItem[]
+
+  @@unique([id, organizationId])
+}
+
+model ProductionItem {
+  id             String             @id @default(cuid())
+  planId         String
+  organizationId String
+  title          String
+  format         String
+  channel        String
+  brief          Json
+  status         String             @default("PLANNED")
+  scheduledFor   DateTime?
+  plan           ProductionPlan     @relation(fields: [planId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  revisions      CreativeRevision[]
+  quotes         GenerationQuote[]
+  schedule       CalendarEntry?
+
+  @@unique([id, organizationId])
+}
+
+model CreativeRevision {
+  id             String          @id @default(cuid())
+  itemId         String
+  organizationId String
+  version        Int
+  content        Json
+  status         String          @default("DRAFT")
+  feedback       String          @default("")
+  provenance     Json?
+  createdAt      DateTime        @default(now())
+  item           ProductionItem  @relation(fields: [itemId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  schedules      CalendarEntry[]
+  publications SocialPublication[]
+
+  @@unique([itemId, version])
+  @@unique([id, organizationId])
+}
+
+model GenerationQuote {
+  id                    String         @id @default(cuid())
+  organizationId        String
+  businessId            String
+  itemId                String
+  brandVersion          Int
+  baseVersion           Int
+  mode                  String
+  credits               Int
+  supplierCeilingMicros Int
+  request               Json
+  configurationHash     String
+  status                String         @default("OFFERED")
+  expiresAt             DateTime
+  acceptedAt            DateTime?
+  createdAt             DateTime       @default(now())
+  business              Business       @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  item                  ProductionItem @relation(fields: [itemId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  job                   Job?
+
+  @@unique([id, organizationId])
+  @@index([organizationId, createdAt])
+  @@index([acceptedAt, status])
+}
+
+model CalendarEntry {
+  id             String           @id @default(cuid())
+  organizationId String
+  itemId         String           @unique
+  revisionId     String
+  scheduledFor   DateTime
+  timezone       String
+  status         String           @default("PLANNED")
+  createdAt      DateTime         @default(now())
+  item           ProductionItem   @relation(fields: [itemId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  revision       CreativeRevision @relation(fields: [revisionId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@unique([itemId, organizationId])
+  @@index([organizationId, scheduledFor])
+}
+
+model Memory {
+  id             String   @id @default(cuid())
+  organizationId String
+  businessId     String
+  text           String
+  kind           String   @default("EXPLICIT_PREFERENCE")
+  createdAt      DateTime @default(now())
+  business       Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+}
+
+model AuditEvent {
+  id             String   @id @default(cuid())
+  organizationId String
+  businessId     String
+  actorId        String
+  action         String
+  detail         String
+  createdAt      DateTime @default(now())
+  business       Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+
+  @@index([businessId, createdAt])
+}
+
+model Wallet {
+  organizationId String        @id
+  available      Int           @default(0)
+  held           Int           @default(0)
+  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  entries        CreditEntry[]
+  reservations   Reservation[]
+}
+
+model CreditEntry {
+  id             String   @id @default(cuid())
+  organizationId String
+  key            String   @unique
+  kind           String
+  amount         Int
+  createdAt      DateTime @default(now())
+  wallet         Wallet   @relation(fields: [organizationId], references: [organizationId], onDelete: Cascade)
+}
+
+model Reservation {
+  id             String   @id @default(cuid())
+  organizationId String
+  key            String   @unique
+  credits        Int
+  state          String   @default("HELD")
+  createdAt      DateTime @default(now())
+  wallet         Wallet   @relation(fields: [organizationId], references: [organizationId], onDelete: Cascade)
+  jobs           Job[]
+
+  @@unique([id, organizationId])
+}
+
+model Job {
+  id             String           @id @default(cuid())
+  organizationId String
+  businessId     String
+  key            String           @unique
+  kind           String
+  status         String           @default("QUEUED")
+  payload        Json
+  attempts       Int              @default(0)
+  maxAttempts    Int              @default(2)
+  availableAt    DateTime         @default(now())
+  leaseUntil     DateTime?
+  providerTaskId String?
+  submittedAt    DateTime?
+  quoteId        String?          @unique
+  reservationId  String?          @unique
+  result         Json?
+  errorCode      String?
+  quote          GenerationQuote? @relation(fields: [quoteId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  business       Business         @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade, map: "job_business_scope")
+  reservation    Reservation?     @relation(fields: [reservationId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  createdAt      DateTime         @default(now())
+
+  @@unique([quoteId, organizationId])
+  @@index([status, availableAt])
+}
+
+model RateLimit {
+  key       String   @id
+  count     Int      @default(1)
+  expiresAt DateTime
+}
+
+model BrandAsset {
+  id             String   @id @default(cuid())
+  organizationId String
+  businessId     String
+  objectKey      String   @unique
+  label          String
+  purpose        String
+  sha256         String
+  bytes          Int
+  width          Int
+  height         Int
+  status         String   @default("PENDING")
+  uploadedBy     String
+  rightsConfirmedAt DateTime
+  createdAt      DateTime @default(now())
+  approvedForGeneration Boolean @default(false)
+  archivedAt     DateTime?
+  archivedFromStatus String?
+  purgeAfter     DateTime?
+  purgeLeaseUntil DateTime?
+  business       Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@index([businessId, organizationId, status])
+  @@index([status, purgeAfter, purgeLeaseUntil])
+}
+
+// Infrastructure metadata, never customer content or secrets.
+model WorkerHeartbeat {
+  id                String   @id
+  runtimeVersion    String
+  configurationHash String
+  executionEnabled  Boolean
+  lastSeenAt        DateTime @default(now())
+
+  @@index([lastSeenAt])
+}
+
+// Deliberately not cascade-linked to customer records: deletion must not reset spend authority.
+// Conservative lifetime reservation; no automatic replenishment after refunds or midnight.
+model SupplierAuthorization {
+  key          String   @id
+  ceilingMicros Int
+  createdAt    DateTime @default(now())
+}
+
+model SocialConnection {
+  id String @id @default(cuid())
+  organizationId String
+  businessId String
+  provider String
+  externalAccountId String
+  label String
+  encryptedToken String
+  permissions String[]
+  status String @default("CONNECTED")
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+  business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  publications SocialPublication[]
+  @@unique([id, businessId, organizationId])
+  @@unique([businessId, provider, externalAccountId])
+}
+
+model SocialPublication {
+  id String @id @default(cuid())
+  organizationId String
+  businessId String
+  connectionId String
+  revisionId String
+  brandVersion Int
+  payload Json
+  payloadHash String
+  status String @default("SCHEDULED")
+  scheduledFor DateTime
+  timezone String
+  attempts Int @default(0)
+  leaseUntil DateTime?
+  externalPostId String?
+  permalink String?
+  publishedAt DateTime?
+  nextMetricsAt DateTime?
+  metricsLeaseUntil DateTime?
+  metricsFailures Int @default(0)
+  errorCode String?
+  createdAt DateTime @default(now())
+  business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  connection SocialConnection @relation(fields: [connectionId, businessId, organizationId], references: [id, businessId, organizationId], onDelete: Restrict)
+  revision CreativeRevision @relation(fields: [revisionId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  metrics MetricSnapshot[]
+  @@unique([revisionId, connectionId])
+  @@unique([connectionId, externalPostId])
+  @@unique([id, businessId, organizationId])
+  @@index([status, scheduledFor])
+  @@index([status, nextMetricsAt])
+}
+
+model MetricSnapshot {
+  id String @id @default(cuid())
+  publicationId String
+  businessId String
+  organizationId String
+  observedAt DateTime
+  definitionVersion String
+  impressions Int?
+  reach Int?
+  engagements Int?
+  clicks Int?
+  videoViews Int?
+  publication SocialPublication @relation(fields: [publicationId, businessId, organizationId], references: [id, businessId, organizationId], onDelete: Cascade)
+  @@unique([publicationId, observedAt, definitionVersion])
+  @@index([businessId, observedAt])
+}
+
+model LearningProposal {
+  id String @id @default(cuid())
+  businessId String
+  organizationId String
+  brandVersion Int
+  hypothesis String
+  evidence Json
+  status String @default("PROPOSED")
+  memoryId String?
+  createdAt DateTime @default(now())
+  business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  @@index([businessId, createdAt])
+}
+
+model StaticComposition {
+  id String @id @default(cuid())
+  businessId String
+  organizationId String
+  itemId String
+  revisionId String
+  brandVersion Int
+  version Int
+  document Json
+  status String @default("DRAFT")
+  createdAt DateTime @default(now())
+  business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  @@unique([itemId, version])
+  @@index([businessId, itemId])
+}
+
+model TeamInvitation {
+  id String @id
+  organizationId String
+  email String
+  role String
+  createdBy String
+  outboxId String
+  status String @default("PENDING")
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@index([organizationId, createdAt])
+}
+
+model TeamEvent {
+  id String @id @default(cuid())
+  organizationId String
+  actorId String
+  action String
+  detail String
+  createdAt DateTime @default(now())
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  @@index([organizationId, createdAt])
+}
+
+model MfaCredential {
+  userId String @id
+  encryptedSecret String @default("")
+  pendingSecret String @default("")
+  pendingExpiresAt DateTime?
+  enabledAt DateTime?
+  lastStep Int @default(-1)
+  recoveryHashes String[] @default([])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}

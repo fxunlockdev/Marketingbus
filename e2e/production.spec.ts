@@ -1,0 +1,60 @@
+import { test, expect } from "@playwright/test";
+import { PrismaClient } from "@prisma/client";
+const local = process.env.TEST_DATABASE_URL;
+test.skip(!local, "Creative review test requires an explicit local database for fixture seeding.");
+if (local && (process.env.DATABASE_URL !== local || !["127.0.0.1", "localhost"].includes(new URL(local).hostname))) throw Error("Refusing non-local browser fixture seeding");
+const db = new PrismaClient();
+test.afterAll(async () => { await db.$disconnect(); });
+test("review, free editing, exact-version calendar and paid gates work in the browser", async ({ page }) => {
+  const email = `review-fixture-${Date.now()}@example.test`;
+  const headers = { Origin: "http://127.0.0.1:3000" };
+  let organizationId: string | undefined;
+  try {
+    const registered = await page.request.post("/api/auth/register", { headers, data: { name: "Review Fixture", email, password: "Test-only-password-2026!" } }); expect(registered.ok()).toBe(true);
+    const created = await page.request.post("/api/businesses", { headers, data: { name: "Review Fixture Studio", offering: "Architecture consultations", audience: "Homeowners", goal: "Book consultations", channels: ["Instagram"] } }); expect(created.ok()).toBe(true);
+    const { id } = await created.json();
+    organizationId = (await db.business.findUniqueOrThrow({ where: { id } })).organizationId;
+    await page.request.post(`/api/businesses/${id}`, { headers, data: { action: "confirm", version: 1 } });
+    await page.request.post(`/api/businesses/${id}`, { headers, data: { action: "plan", version: 1 } });
+    const item = await db.productionItem.findFirstOrThrow({ where: { plan: { businessId: id } } });
+    await db.creativeRevision.create({ data: { itemId: item.id, organizationId, version: 1, status: "READY", content: { headline: "Room for your life", caption: "Fixture copy for testing. Book a design consultation.", cta: "Meet the studio", visualDirection: "Editorial brand typography.", rationale: "Test fixture, not AI output.", evidenceUsed: [] }, provenance: { kind: "TEST_FIXTURE" } } });
+    await db.productionItem.update({ where: { id: item.id }, data: { status: "READY" } });
+    await page.goto("/studio"); await page.getByRole("button", { name: "Review inbox", exact: true }).click();
+    await expect(page.getByText("Room for your life", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Approve version 1", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Version 1 approved", exact: true })).toBeDisabled();
+    const next = new Date(Date.now() + 86400_000); const date = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(next.getDate()).padStart(2, "0")}T12:00`;
+    await page.getByLabel(/Calendar date and time/).fill(date);
+    await page.getByRole("button", { name: "Place approved version on calendar" }).click();
+    await expect(page.getByRole("button", { name: "Change calendar date" })).toBeVisible();
+    await page.getByRole("button", { name: "Calendar", exact: true }).click();
+    await expect(page.getByText("Instagram · approved version 1")).toBeVisible();
+    await page.getByRole("button", { name: "Review inbox", exact: true }).click();
+    await page.getByRole("button", { name: "Edit copy yourself · no credits" }).click();
+    await page.getByLabel("Headline", { exact: true }).fill("Made for your everyday");
+    await page.getByRole("button", { name: "Save new copy version" }).click();
+    await expect(page.getByRole("button", { name: "Approve version 2", exact: true })).toBeVisible();
+    expect(await db.calendarEntry.count({ where: { itemId: item.id } })).toBe(0);
+    await page.getByLabel("What specifically should change?").fill("Keep the sentences short and practical.");
+    await page.getByLabel("Remember this feedback as a preference for this business").check();
+    await page.getByRole("button", { name: "Request changes · no charge" }).click();
+    await expect(page.getByLabel("Revision direction")).toBeVisible();
+    await page.getByRole("button", { name: "Get a credit quote · no generation yet" }).click();
+    await expect(page.getByRole("main").getByRole("alert")).toContainText("Paid production is paused");
+    expect(await db.job.count({ where: { organizationId } })).toBe(0);
+    expect(await db.memory.count({ where: { businessId: id } })).toBe(1);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({ path: "../outputs/marketingbus-review-desktop.png", fullPage: false });
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await expect(page.getByText("Made for your everyday", { exact: true })).toHaveCount(1);
+    await page.getByText("Made for your everyday", { exact: true }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: "../outputs/marketingbus-review-mobile.png", fullPage: false });
+    // A viewer cannot use the same action routes to acquire edit/approval privileges.
+    await db.membership.updateMany({ where: { organizationId }, data: { role: "VIEWER" } });
+    const denied = await page.request.post(`/api/businesses/${id}/production`, { headers, data: { action: "approve", itemId: item.id, version: 2 } }); expect(denied.status()).toBe(404);
+  } finally {
+    if (organizationId) await db.organization.delete({ where: { id: organizationId } });
+    await db.user.deleteMany({ where: { email } });
+  }
+});

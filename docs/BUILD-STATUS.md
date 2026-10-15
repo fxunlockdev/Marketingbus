@@ -1,0 +1,40 @@
+# Acceptance ledger — 15 October 2026
+
+This is a working pilot, not a finished enterprise product. Distinguish implemented source, local fixture verification, deployment and actual external-service acceptance. The new social/composition/team/MFA changes are not yet deployed. Stripe billing is explicitly deferred. No paid supplier calls, real emails or social posts were made in this implementation pass.
+
+## Feature acceptance and remaining work
+
+| Requested area | Implemented and locally testable | Internal work still needed | External acceptance needed |
+|---|---|---|---|
+| Workspaces and brand | Business-scoped workspaces, roles, interview, version/confirmation, three presets, explicit preference memory | Workspace lifecycle/export/deletion policy; more flexible reusable template library | Hosted multi-user acceptance |
+| Website and documents | Single-page bounded cached Firecrawl queue; TXT/Markdown/pasted evidence; exact-excerpt source provenance | Evidence-backed AI brand/tone suggestions and apply/reject UI; isolated PDF/DOCX parsing; broader controlled site extraction | Self-hosted Firecrawl deployment, egress isolation and measured infrastructure costs |
+| Assets | Private normalized image uploads; rights/approval; deterministic logo/product/reference selection; archive, seven-day restore and purge worker | Quarantine for more media types, failed-upload reconciliation UI, backup retention, generation-specific asset contracts | Bucket retention/download/access-revocation acceptance in production |
+| Factual and creative quality | Structured output, bounded harness excerpts, lexical unsupported dates/numbers/claims guards, several explicit revision rules | Semantic copy/visual claim grounding, brief-adherence rubric, held-out human creative evaluations and calibrated escalation | Approved live provider tests and independent creative reviewers; no top-1% guarantee |
+| Images | Editable layer geometry/text/colors, exact original brand assets, separate copy/visual approval, four canvas sizes, PNG/SVG/JSON downloads | Gemini paid job lifecycle, reference fidelity checks, persistent immutable media exports for publishing, professional typography fitting | Gemini keys, current model/rates and separate spend authorization |
+| Video and motion | Reference skill contracts only; not a functional video production workflow | Storyboard UI/versions, shot jobs, scoped revisions, media quarantine, local/sandboxed motion rendering, captions/audio, continuity evaluation, assembled exports and usage settlement | Higgsfield endpoints/keys/rates, supported models and separate spend authorization |
+| Credits and billing | Durable wallet ledger, reservations, idempotent job acceptance, usage settlement and release, daily/lifetime supplier ceilings | Stripe checkout/subscription/monthly grants/top-ups/refunds, revision allowances, commercial margin verification — deferred by owner | UAE payment account, webhook secrets and financial reconciliation |
+| Social | Encrypted token records; exact-copy-version queue; bounded safe retries; ambiguous-write hold; receipt validation; lookup-only reconciliation function; dashboard | OAuth/callback/refresh/revocation flows; actual adapters; immutable image/video media transfer; operator reconciliation UI/loop | Meta/LinkedIn developer approval, permissions and designated test accounts; real published IDs and content read-back |
+| Analytics and learning | Durable nullable versioned metric snapshots; per-account summaries/coverage; observational evidence proposals; human promotion/revert to scoped memory | Real adapter metric mappings; attribution/window choices; cohort controls/holdouts; recurring weekly planner and bounded paid autopilot | Actual platform metrics and permission availability; evaluate improvement rather than infer it from engagement alone |
+| Team and security | Members/admin UI; email-bound expiring single-use invitations; last-owner rules; verification/recovery outbox; TOTP MFA/recovery/session revocation | Invitation-aware new-user registration instead of shared pilot gate, reviewer separation/comments, org MFA policy/SSO, security-event operations | Resend verified sender and designated recipient; production key lifecycle; independent security review |
+| Operations and assurance | Schema-aware web health; worker heartbeat/config agreement; tenant/access/concurrency tests; browser tests; automated accessibility checks on new screens | Backup restoration rehearsal, incident/alert routing, production-like load/chaos tests, comprehensive manual accessibility/penetration review | Production deployment and smoke tests; measured operational limits |
+
+## Verification evidence for this source
+
+- 124 tests in 19 unit/database suites pass against an explicitly local PostgreSQL fixture database. No skipped database suite in that run.
+- Eight browser journeys pass; one private-storage journey is skipped because no bucket credentials were provided to this local run. New flows exercise static preview/approval/export, approval invalidation after editing, empty analytics without invented numbers, last-owner protection and MFA enrollment/sign-in/recovery/disable.
+- TypeScript checks and the production build pass. The dependency audit reports zero known vulnerabilities at verification time; this is not a penetration test.
+- Automated WCAG A/AA checks run over the main content on composition, analytics, team and account screens. These are not comprehensive accessibility certification.
+- Provider calls in automated tests use injected responses. No fake adapter is registered in the production application.
+- The private storage browser case remains separately gated and is not counted as passing when skipped.
+- Earlier live OpenAI tests revealed unsupported claims despite valid output structure. The lexical date fix does not establish semantic grounding or agency-quality acceptance.
+
+## Remaining implementation order and exit criteria
+
+1. **Grounded brand knowledge:** isolated document parsing; source/version-linked proposed facts and tone; explicit accept/reject; conflicting or unsupported evidence stays unconfirmed. Tests include prompt injection, stale sources and cross-tenant retrieval.
+2. **Image production:** reserve a verified model-specific ceiling, freeze reference hashes, submit once, reconcile uncertain outcomes, quarantine results, settle measured cost and compose originals exactly. A key in settings is not acceptance.
+3. **Video production:** versioned storyboard and shot dependencies; bounded per-shot generation; local composition/captions/audio; invalidate only dependent shots; final review and export. Test process death, partial failure, stale shots and oversized/malformed output.
+4. **Social adapters:** official OAuth state/PKCE as supported, scoped encrypted credentials, refresh/revoke handling, platform media requirements and read-back receipts. Prove safe timeout handling and no duplicate publication with designated accounts.
+5. **Recurring planning and learning:** explicit opt-in, confirmed brand and evidence, per-period output/spend ceilings, cancellation, idempotent periods and approval before publication. Promotion requires validated evidence and can be reversed. No autonomous spending outside the authorized budget.
+6. **Enterprise release gate:** role/approval separation, invite onboarding, backups plus restored-data verification, alerts, realistic load/chaos drills, accessibility review and independent security review. Deploy web and matching worker together after migrations; observe success and run hosted smoke tests.
+
+The requested “only integrations left” milestone has not been reached. This ledger intentionally lists internal work separately from credentials/third-party approvals so it cannot be hidden behind an integration blocker.
