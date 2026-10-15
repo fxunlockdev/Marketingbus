@@ -4,6 +4,9 @@ import { db } from "../db";
 import { AppError } from "../http";
 import { emailConfiguration, tokenSchema } from "./service";
 import { sealSecret } from "../secrets";
+import { hash } from "bcryptjs";
+import type { Prisma, TeamInvitation } from "@prisma/client";
+import { passwordSchema } from "./service";
 const roles = z.enum(["OWNER", "ADMIN", "EDITOR", "VIEWER"]);
 export const teamAction = z.discriminatedUnion("action", [
   z
@@ -177,7 +180,7 @@ export async function manageTeam(
         subject: "Your Marketingbus workspace invitation",
         text: `${actor.user.name} invited you to ${
           actor.organization.name
-        } as ${input.role.toLowerCase()}. Sign in with this email, verify it, then accept the invitation:\n\n${link}\n\nExpires in 24 hours. Ignore this email if unexpected.`,
+        } as ${input.role.toLowerCase()}. Open the invitation to create your account and join, or sign in with this email and accept:\n\n${link}\n\nExpires in 24 hours. Opening the link does not join the workspace. Ignore this email if unexpected.`,
       };
       await tx.emailOutbox.create({
         data: {
@@ -272,36 +275,14 @@ export async function acceptTeamInvitation(actorId: string, raw: string) {
   const token = tokenSchema.parse(raw),
     id = createHash("sha256").update(token).digest("hex");
   return db.$transaction(async (tx) => {
-    const initial = await tx.teamInvitation.findUnique({ where: { id } });
-    if (!initial) throw new AppError(400, "Invitation is invalid or expired.");
-    await tx.$queryRaw`SELECT id FROM "Organization" WHERE id=${initial.organizationId} FOR UPDATE`;
-    const invitation = await tx.teamInvitation.findUniqueOrThrow({
-      where: { id },
-    });
+    const invitation = await invitationForUse(tx, id);
+    // Serialize this user's joins across different organizations as well.
+    await tx.$queryRaw`SELECT id FROM "User" WHERE id=${actorId} FOR UPDATE`;
     const user = await tx.user.findUniqueOrThrow({ where: { id: actorId } });
-    if (invitation.status !== "PENDING" || invitation.expiresAt <= new Date())
-      throw new AppError(400, "Invitation is invalid or expired.");
     if (!user.emailVerifiedAt || user.email.toLowerCase() !== invitation.email)
       throw new AppError(
         403,
         "Sign in and verify the email address this invitation was sent to."
-      );
-    const inviter = await tx.membership.findUnique({
-      where: {
-        organizationId_userId: {
-          organizationId: invitation.organizationId,
-          userId: invitation.createdBy,
-        },
-      },
-    });
-    if (
-      !inviter ||
-      !["OWNER", "ADMIN"].includes(inviter.role) ||
-      (invitation.role === "ADMIN" && inviter.role !== "OWNER")
-    )
-      throw new AppError(
-        409,
-        "The inviter no longer has permission. Request a new invitation."
       );
     if (
       (await tx.membership.count({ where: { userId: actorId } })) >= 20 ||
@@ -325,22 +306,52 @@ export async function acceptTeamInvitation(actorId: string, raw: string) {
       },
       update: {},
     });
-    await tx.teamInvitation.update({
-      where: { id },
-      data: { status: "ACCEPTED" },
-    });
-    await tx.emailOutbox.updateMany({
-      where: { id: invitation.outboxId },
-      data: { status: "EXPIRED", encryptedPayload: "", leaseUntil: null },
-    });
-    await tx.teamEvent.create({
-      data: {
-        organizationId: invitation.organizationId,
-        actorId,
-        action: "TEAM_JOINED",
-        detail: "Verified invited email accepted a one-use invitation.",
-      },
-    });
+    await finishInvitation(tx, invitation, actorId);
     return { ok: true };
+  });
+}
+
+async function invitationForUse(tx: Prisma.TransactionClient, id: string) {
+  const initial = await tx.teamInvitation.findUnique({ where: { id } });
+  if (!initial) throw new AppError(400, "Invitation is invalid or expired.");
+  await tx.$queryRaw`SELECT id FROM "Organization" WHERE id=${initial.organizationId} FOR UPDATE`;
+  const invitation = await tx.teamInvitation.findUnique({ where: { id } });
+  if (!invitation || invitation.status !== "PENDING" || invitation.expiresAt <= new Date() || !["ADMIN", "EDITOR", "VIEWER"].includes(invitation.role)) throw new AppError(400, "Invitation is invalid or expired.");
+  const inviter = await tx.membership.findUnique({ where: { organizationId_userId: { organizationId: invitation.organizationId, userId: invitation.createdBy } }, include: { user: { select: { emailVerifiedAt: true } } } });
+  if (!inviter || !inviter.user.emailVerifiedAt || !["OWNER", "ADMIN"].includes(inviter.role) || invitation.role === "ADMIN" && inviter.role !== "OWNER") throw new AppError(409, "The inviter no longer has permission. Request a new invitation.");
+  return invitation;
+}
+async function finishInvitation(tx: Prisma.TransactionClient, invitation: TeamInvitation, actorId: string) {
+  await tx.teamInvitation.update({ where: { id: invitation.id }, data: { status: "ACCEPTED" } });
+  await tx.emailOutbox.updateMany({ where: { id: invitation.outboxId }, data: { status: "EXPIRED", encryptedPayload: "", leaseUntil: null } });
+  await tx.teamEvent.create({ data: { organizationId: invitation.organizationId, actorId, action: "TEAM_JOINED", detail: "Verified invited email accepted a one-use invitation." } });
+}
+export async function previewTeamInvitation(raw: string) {
+  const id = createHash("sha256").update(tokenSchema.parse(raw)).digest("hex");
+  return db.$transaction(async tx => {
+    const invitation = await invitationForUse(tx, id);
+    const org = await tx.organization.findUniqueOrThrow({ where: { id: invitation.organizationId }, select: { name: true } });
+    // Never reveal the recipient address, account existence, raw token or internal IDs.
+    return { workspace: org.name, role: invitation.role, expiresAt: invitation.expiresAt };
+  });
+}
+const invitedRegistration = z.object({
+  token: tokenSchema, email: z.email().max(254).transform(v => v.toLowerCase()),
+  name: z.string().trim().min(2).max(80), password: passwordSchema,
+}).strict();
+export async function registerInvitedUser(raw: unknown) {
+  const input = invitedRegistration.parse(raw), id = createHash("sha256").update(input.token).digest("hex");
+  // Hash outside the transaction; repeat all authorization checks under its lock.
+  const passwordHash = await hash(input.password, 12);
+  return db.$transaction(async tx => {
+    const invitation = await invitationForUse(tx, id);
+    if (input.email !== invitation.email.toLowerCase()) throw new AppError(403, "Use the email address this invitation was sent to.");
+    if (await tx.user.findUnique({ where: { email: input.email } })) throw new AppError(409, "Unable to create this account. Try signing in instead.");
+    if (await tx.membership.count({ where: { organizationId: invitation.organizationId } }) >= 50) throw new AppError(409, "Workspace membership allowance reached.");
+    // Possession of the one-use emailed invitation verifies this new account's
+    // exact address. It cannot reset credentials or bypass MFA on an existing user.
+    const user = await tx.user.create({ data: { email: input.email, name: input.name, passwordHash, emailVerifiedAt: new Date(), memberships: { create: { organizationId: invitation.organizationId, role: invitation.role } } }, select: { id: true, authVersion: true } });
+    await finishInvitation(tx, invitation, user.id);
+    return user;
   });
 }

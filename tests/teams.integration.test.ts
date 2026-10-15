@@ -5,6 +5,8 @@ import {
   manageTeam,
   readTeam,
   acceptTeamInvitation,
+  previewTeamInvitation,
+  registerInvitedUser,
 } from "../src/lib/identity/teams";
 import { openSecret } from "../src/lib/secrets";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
@@ -220,5 +222,58 @@ suite("workspace invitations and privilege boundaries", () => {
         where: { organizationId: ctx.org.id, role: "OWNER" },
       })
     ).toBe(1);
+  });
+  it("previews only workspace and role without consuming or revealing recipient identity", async () => {
+    const ctx = await setup(), email = `new-${crypto.randomUUID()}@example.com`, { invite, token } = await invitation(ctx, email);
+    const preview = await previewTeamInvitation(token);
+    expect(preview).toMatchObject({ workspace: "TEAM FIXTURE", role: "EDITOR" });
+    expect(JSON.stringify(preview)).not.toContain(email); expect(JSON.stringify(preview)).not.toContain(token);
+    expect((await db.teamInvitation.findUniqueOrThrow({ where: { id: invite.id } })).status).toBe("PENDING");
+  });
+  it("creates only the invited membership, verifies the new address and clears bearer mail", async () => {
+    const ctx = await setup(), email = `new-${crypto.randomUUID()}@example.com`, { invite, token } = await invitation(ctx, email);
+    const created = await registerInvitedUser({ token, email: email.toUpperCase(), name: "Invited editor", password: "A-unique-test-password!" }); users.push(created.id);
+    const account = await db.user.findUniqueOrThrow({ where: { id: created.id }, include: { memberships: true } });
+    expect(account.emailVerifiedAt).not.toBeNull(); expect(account.memberships).toHaveLength(1);
+    expect(account.memberships[0]).toMatchObject({ organizationId: ctx.org.id, role: "EDITOR" });
+    expect(await db.membership.count({ where: { userId: account.id, role: "OWNER" } })).toBe(0);
+    expect((await db.emailOutbox.findUniqueOrThrow({ where: { id: invite.outboxId } })).encryptedPayload).toBe("");
+    expect(await db.teamEvent.count({ where: { organizationId: ctx.org.id, actorId: account.id, action: "TEAM_JOINED" } })).toBe(1);
+    expect(Object.keys(created).sort()).toEqual(["authVersion", "id"]);
+    await expect(registerInvitedUser({ token, email, name: "Replay", password: "A-unique-test-password!" })).rejects.toThrow("invalid or expired");
+  });
+  it("wrong email and malformed inputs cannot create a user or consume the invitation", async () => {
+    const ctx = await setup(), email = `new-${crypto.randomUUID()}@example.com`, { invite, token } = await invitation(ctx, email), wrong = `wrong-${crypto.randomUUID()}@example.com`;
+    await expect(registerInvitedUser({ token, email: wrong, name: "Wrong person", password: "A-unique-test-password!" })).rejects.toThrow("email address");
+    expect(await db.user.findUnique({ where: { email: wrong } })).toBeNull();
+    await expect(registerInvitedUser({ token, email, name: "Editor", password: "short" })).rejects.toThrow();
+    await expect(registerInvitedUser({ token, email, name: "Editor", password: "A-unique-test-password!", role: "OWNER" })).rejects.toThrow();
+    expect((await db.teamInvitation.findUniqueOrThrow({ where: { id: invite.id } })).status).toBe("PENDING");
+  });
+  it("cannot overwrite an existing account or bypass its authentication", async () => {
+    const ctx = await setup(), existing = await user(false), { invite, token } = await invitation(ctx, existing.email);
+    await expect(registerInvitedUser({ token, email: existing.email, name: "Impersonator", password: "Replacement-password!" })).rejects.toThrow("signing in");
+    const unchanged = await db.user.findUniqueOrThrow({ where: { id: existing.id } });
+    expect(unchanged.passwordHash).toBe(existing.passwordHash); expect(unchanged.emailVerifiedAt).toBeNull();
+    expect(await db.membership.count({ where: { userId: existing.id } })).toBe(0);
+    expect((await db.teamInvitation.findUniqueOrThrow({ where: { id: invite.id } })).status).toBe("PENDING");
+  });
+  it("rechecks revoked, expired and demoted invitations before signup", async () => {
+    for (const invalidation of ["REVOKED", "EXPIRED", "DEMOTED"]) {
+      const ctx = await setup(), email = `new-${crypto.randomUUID()}@example.com`, { invite, token } = await invitation(ctx, email);
+      if (invalidation === "DEMOTED") await db.membership.update({ where: { organizationId_userId: { organizationId: ctx.org.id, userId: ctx.owner.id } }, data: { role: "VIEWER" } });
+      else await db.teamInvitation.update({ where: { id: invite.id }, data: invalidation === "EXPIRED" ? { expiresAt: new Date(0) } : { status: "REVOKED" } });
+      await expect(previewTeamInvitation(token)).rejects.toThrow();
+      await expect(registerInvitedUser({ token, email, name: "Blocked user", password: "A-unique-test-password!" })).rejects.toThrow();
+      expect(await db.user.findUnique({ where: { email } })).toBeNull();
+    }
+  });
+  it("serializes concurrent registrations so a link creates one account and one membership", async () => {
+    const ctx = await setup(), email = `new-${crypto.randomUUID()}@example.com`, { token } = await invitation(ctx, email);
+    const input = { token, email, name: "Concurrent editor", password: "A-unique-test-password!" };
+    const results = await Promise.allSettled([registerInvitedUser(input), registerInvitedUser(input)]);
+    const created = await db.user.findUniqueOrThrow({ where: { email } }); users.push(created.id);
+    expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    expect(await db.membership.count({ where: { userId: created.id } })).toBe(1);
   });
 });

@@ -5,9 +5,10 @@ import { db } from "@/lib/db";
 import { api, AppError, readBody } from "@/lib/http";
 import { endSession, rateLimit, startSession } from "@/lib/auth";
 import { requirePilotInvitation } from "@/lib/pilot-access";
-import { passwordSchema } from "@/lib/identity/service";
+import { passwordSchema, tokenSchema } from "@/lib/identity/service";
 import { verifyLoginFactor } from "@/lib/identity/mfa";
-const credentials = z.object({ email: z.email().max(254).transform(v=>v.toLowerCase()), password: z.string().min(12).max(64), name: z.string().trim().min(2).max(80).optional(), invitationCode: z.string().max(128).optional(), code: z.string().max(64).optional() }).strict();
+import { registerInvitedUser } from "@/lib/identity/teams";
+const credentials = z.object({ email: z.email().max(254).transform(v=>v.toLowerCase()), password: z.string().min(12).max(64), name: z.string().trim().min(2).max(80).optional(), invitationCode: z.string().max(128).optional(), teamInvitationToken: tokenSchema.optional(), code: z.string().max(64).optional() }).strict();
 export async function POST(request: Request, context: { params: Promise<{ action: string }> }) {
   return api(async () => {
     const { action } = await context.params; const body = await readBody(request);
@@ -17,11 +18,16 @@ export async function POST(request: Request, context: { params: Promise<{ action
     await rateLimit(`auth:${action}`,input.email,12);
     await rateLimit("auth:global", "all", 250);
     if (action === "register") {
-      requirePilotInvitation(input.invitationCode);
+      if (!input.teamInvitationToken) requirePilotInvitation(input.invitationCode);
       passwordSchema.parse(input.password);
       if (!input.name) throw new AppError(400,"Enter your name.");
-      const passwordHash = await hash(input.password,12);
       try {
+        if (input.teamInvitationToken) {
+          await rateLimit("team:register", input.teamInvitationToken, 6);
+          const user = await registerInvitedUser({ token: input.teamInvitationToken, email: input.email, password: input.password, name: input.name });
+          await startSession(user.id, user.authVersion); return { ok: true, joined: true };
+        }
+        const passwordHash = await hash(input.password,12);
         const user = await db.user.create({ data: { email:input.email, name:input.name, passwordHash, memberships:{ create:{ role:"OWNER", organization:{ create:{ name:`${input.name}'s studio`, wallet:{create:{}} } } } } } });
         await startSession(user.id, user.authVersion); return { ok:true };
       } catch (error) {

@@ -143,8 +143,9 @@ export function TeamPanel({ organizationId }: { organizationId: string }) {
           <section className="panel">
             <h2>Invite a teammate</h2>
             <p>
-              Invitations expire after 24 hours. Both inviter and recipient must
-              verify their email. Delivery needs the configured Resend sender.
+              Invitations expire after 24 hours. New teammates can create an account
+              directly from the emailed invitation; existing accounts sign in and
+              verify their email before accepting. Delivery needs the configured Resend sender.
             </p>
             <form
               onSubmit={(e) => {
@@ -212,62 +213,5 @@ export function TeamPanel({ organizationId }: { organizationId: string }) {
         </>
       )}
     </div>
-  );
-}
-export function AcceptTeamInvitation() {
-  const [token, setToken] = useState(""),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState(""),
-    [done, setDone] = useState(false);
-  useEffect(() => {
-    setToken(new URLSearchParams(location.hash.slice(1)).get("token") ?? "");
-    history.replaceState(null, "", location.pathname);
-  }, []);
-  async function accept() {
-    setBusy(true);
-    setError("");
-    try {
-      const response = await fetch("/api/team-invitations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw Error(data.error);
-      setToken("");
-      setDone(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Unable to accept invitation.");
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <main className="auth-card">
-      <h1>Workspace invitation</h1>
-      <p>
-        Sign in using the invited email address and verify it, then reopen your
-        invitation link. Opening this page does not accept the invitation.
-      </p>
-      <p role="alert" className="form-error">
-        {error}
-      </p>
-      {done ? (
-        <p role="status">
-          Invitation accepted. <a href="/studio">Open your workspace</a>
-        </p>
-      ) : (
-        <button
-          className="button dark"
-          disabled={busy || !token}
-          onClick={accept}
-        >
-          Accept workspace invitation
-        </button>
-      )}
-      <p>
-        <a href="/login">Sign in</a> · <a href="/account">Verify your email</a>
-      </p>
-    </main>
   );
 }

@@ -1,0 +1,60 @@
+import { test, expect } from "@playwright/test";
+import { PrismaClient } from "@prisma/client";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { hash } from "bcryptjs";
+import AxeBuilder from "@axe-core/playwright";
+const local = process.env.TEST_DATABASE_URL;
+test.skip(!local, "Requires explicit localhost fixture database.");
+if (local && (process.env.DATABASE_URL !== local || !["127.0.0.1", "localhost"].includes(new URL(local).hostname))) throw Error("Refusing non-local fixture writes");
+const db = new PrismaClient(), password = "Invitation-test-only-2026!", headers = { Origin: "http://127.0.0.1:3000" };
+const orgs: string[] = [], emails: string[] = [];
+test.afterAll(async () => { await db.organization.deleteMany({ where: { id: { in: orgs } } }); await db.user.deleteMany({ where: { email: { in: emails } } }); await db.$disconnect(); });
+async function fixture(existing = false) {
+  const email = `invited-${randomUUID()}@example.test`, ownerEmail = `inviter-${randomUUID()}@example.test`; emails.push(email, ownerEmail);
+  const owner = await db.user.create({ data: { email: ownerEmail, name: "Inviter fixture", passwordHash: "no-login", emailVerifiedAt: new Date() } });
+  const org = await db.organization.create({ data: { name: "Invitation acceptance fixture", wallet: { create: {} }, memberships: { create: { userId: owner.id, role: "OWNER" } }, businesses: { create: { name: "Invited brand fixture", offering: "Architecture consultations" } } }, include: { businesses: true } }); orgs.push(org.id);
+  if (existing) await db.user.create({ data: { email, name: "Existing teammate", passwordHash: await hash(password, 12), emailVerifiedAt: new Date() } });
+  const token = randomBytes(32).toString("base64url"), id = createHash("sha256").update(token).digest("hex");
+  await db.teamInvitation.create({ data: { id, organizationId: org.id, email, role: "VIEWER", createdBy: owner.id, outboxId: `no-email-${randomUUID()}`, expiresAt: new Date(Date.now() + 600000) } });
+  return { email, org, token, id };
+}
+test("invited signup joins only its workspace, preserves viewer permissions and never leaks the link into navigation", async ({ page }) => {
+  const f = await fixture(), requests: string[] = []; page.on("request", r => requests.push(r.url()));
+  await page.goto(`/team-invitation#token=${f.token}`);
+  await expect(page.getByRole("heading", { name: "Join Invitation acceptance fixture", exact: true })).toBeVisible();
+  expect(new URL(page.url()).hash).toBe(""); expect((await db.teamInvitation.findUniqueOrThrow({ where: { id: f.id } })).status).toBe("PENDING");
+  await page.getByLabel("Your name", { exact: true }).fill("New invited viewer");
+  await page.getByLabel("Invited email address", { exact: true }).fill(`wrong-${f.email}`); await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Create account and join workspace" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Use the email address" })).toBeVisible();
+  await page.getByLabel("Invited email address", { exact: true }).fill(f.email);
+  expect((await new AxeBuilder({ page }).include("main").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+  await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole("button", { name: "Create account and join workspace" }).click();
+  await expect(page.getByRole("link", { name: "Open your workspace" })).toBeVisible();
+  const user = await db.user.findUniqueOrThrow({ where: { email: f.email }, include: { memberships: true } });
+  expect(user.emailVerifiedAt).not.toBeNull(); expect(user.memberships).toHaveLength(1); expect(user.memberships[0]).toMatchObject({ role: "VIEWER", organizationId: f.org.id });
+  expect((await db.wallet.findUniqueOrThrow({ where: { organizationId: f.org.id } })).available).toBe(0);
+  expect((await page.request.post(`/api/businesses/${f.org.businesses[0].id}`, { headers, data: { action: "confirm", version: 1 } })).status()).toBe(404);
+  await page.getByRole("link", { name: "Open your workspace" }).click(); await expect(page.getByRole("button", { name: "Brand", exact: true })).toBeVisible();
+  expect(requests.some(url => url.includes(f.token))).toBe(false);
+  await page.goto(`/team-invitation#token=${f.token}`); await expect(page.getByRole("alert").filter({ hasText: "invalid or expired" })).toBeVisible();
+});
+test("existing invitees sign in on the invitation page and explicitly accept", async ({ page }) => {
+  const f = await fixture(true);
+  await page.goto(`/team-invitation#token=${f.token}`); await page.getByRole("button", { name: "Already have an account? Sign in" }).click();
+  await page.getByLabel("Invited email address", { exact: true }).fill(f.email); await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Sign in to continue" }).click();
+  await expect(page.getByRole("button", { name: "Accept workspace invitation" })).toBeEnabled();
+  expect((await db.teamInvitation.findUniqueOrThrow({ where: { id: f.id } })).status).toBe("PENDING");
+  await page.getByRole("button", { name: "Accept workspace invitation" }).click(); await expect(page.getByRole("link", { name: "Open your workspace" })).toBeVisible();
+  expect((await db.teamInvitation.findUniqueOrThrow({ where: { id: f.id } })).status).toBe("ACCEPTED");
+});
+test("revocation after preview blocks signup without leaving an orphan account", async ({ page }) => {
+  const f = await fixture(); await page.goto(`/team-invitation#token=${f.token}`);
+  await expect(page.getByRole("heading", { name: "Join Invitation acceptance fixture", exact: true })).toBeVisible();
+  await db.teamInvitation.update({ where: { id: f.id }, data: { status: "REVOKED" } });
+  await page.getByLabel("Your name", { exact: true }).fill("Revoked invitee"); await page.getByLabel("Invited email address", { exact: true }).fill(f.email); await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Create account and join workspace" }).click(); await expect(page.getByRole("alert").filter({ hasText: "invalid or expired" })).toBeVisible();
+  expect(await db.user.findUnique({ where: { email: f.email } })).toBeNull();
+});

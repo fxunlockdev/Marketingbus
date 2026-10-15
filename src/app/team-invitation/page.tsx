@@ -1,2 +1,2 @@
-import { AcceptTeamInvitation } from "@/components/team-panel";
+import { AcceptTeamInvitation } from "@/components/team-invitation";
 export default function InvitationPage() { return <AcceptTeamInvitation />; }
