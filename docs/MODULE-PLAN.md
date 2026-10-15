@@ -54,7 +54,7 @@ Required internal work: OAuth start/callback/state and supported PKCE; scope val
 
 Existing foundation: explicit memory, observational learning proposals with human promotion/revert, independent approval controls and blocking comments, weekly policy/cycles, one cycle per business/week, a frozen brand version and atomic weekly copy budget authorization.
 
-Added locally: scoped plan history with stable ten-plan pagination, bounded detail reads and only the latest plan loaded initially. Selected plans carry across review, design, video and the calendar; the calendar is explicitly a selected-plan agenda. Earlier current-brand plans retain normal edit/review controls. Superseded, unconfirmed-brand and viewer copy is read-only and shown without today's design palette. Opening history creates no jobs or credit holds. History displays the latest saved copy, not every revision or historical media snapshot.
+Added and deployed: scoped plan history with stable ten-plan pagination, bounded detail reads and only the latest plan loaded initially. Selected plans carry across review, design, video and the calendar; the calendar is explicitly a selected-plan agenda. Earlier current-brand plans retain normal edit/review controls. Superseded, unconfirmed-brand and viewer copy is read-only and shown without today's design palette. Opening history creates no jobs or credit holds. History displays the latest saved copy, not every revision or historical media snapshot.
 
 Required internal work: mixed image/video planning, cancellation/reconciliation experience, cohort/holdout evaluation, promotion thresholds and measured creative outcomes. Test brand/role changes, period boundaries, duplicate ticks, budget exhaustion, worker restarts and evidence invalidation. Autopilot must not silently approve or publish work or bypass the supplier ceiling.
 
@@ -65,6 +65,10 @@ Implemented locally: invitation-aware registration, in-page existing-account sig
 Required internal work and verification: organization MFA policy; recovery and key-rotation procedures; billing/provider reconciliation operations; alerts and dead-letter visibility; backup and restore rehearsal with data assertions; realistic load/chaos tests; manual keyboard/screen-reader review; independent security review. Prove hosted business onboarding through approval/export without fabricating provider outcomes.
 
 ## Current release boundary
+
+Web release `ec4e1ca` is deployed successfully with plan history; the unchanged worker remains at `ac9c00e`. No migration or runtime contract changed. Local and GitHub CI run `38768304268` pass 254 tests across 32 suites, 19 browser journeys, build and audit; one storage case is skipped. Hosted health and unauthenticated history denial pass. This closes basic historical plan navigation, not mixed-media automation or measured learning.
+
+### Previous artwork release
 
 Release `ac9c00e` is deployed on web and worker with all migrations through `20261015210000_motion_storyboards`. Both current deployments reported success. The runtime is `studio-v10-motion-artwork`, public web health returns 200 and unauthenticated video access returns 401. GitHub CI run `38756304205` passed 248 tests across 31 suites, 18 browser journeys, the production build and dependency audit; one private-storage browser case remains skipped. See [release evidence](RELEASE-2026-10-15-MODULES.md). Billing, document, brand-review, saved-export, image-production and motion-storyboard work must not be described as completion of all seven modules. Next complete generated-shot and mixed-media production, then social adapters, measured automation and release assurance, while closing the remaining brand/image quality checks.
 
