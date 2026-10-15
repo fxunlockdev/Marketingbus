@@ -48,7 +48,9 @@ Remaining internal work: generated/uploaded clip quarantine; quote and settlemen
 
 Existing foundation: encrypted token records, exact-revision publishing queue, retries/reconciliation contracts, nullable metric snapshots and customer analytics views.
 
-Required internal work: OAuth start/callback/state and supported PKCE; scope validation; refresh/revocation handling; platform adapters and media transfer; immutable post payloads; operator reconciliation; metric-definition mappings and attribution windows. Test replayed callbacks, cross-workspace account binding, expired tokens, ambiguous publish results, duplicate webhooks and missing metrics. Meta/LinkedIn access approvals and designated live accounts remain external gates. Do not claim a post was published without a verified platform receipt.
+Added locally: frozen text-payload integrity at submission and lookup; invalid-record queue isolation; one leased lookup per worker tick; five-check ceiling and persisted backoff; no resend after uncertain outcomes; destination/credential/snapshot revalidation before receipt persistence; atomic receipt/audit; clear stopped-lookup UI; audited privileged lookup resumption with replay protection. The additive migration `20261015230000_social_reconciliation` records attempt counts and eligibility times. Both services need runtime `studio-v11-social-recovery`. See [social operations](SOCIAL-AND-COMPOSITION.md).
+
+Required internal work: OAuth start/callback/state and supported PKCE; scope validation; refresh/revocation handling; platform adapters and immutable media transfer; operator reconciliation screens and alerts; metric-definition mappings and attribution windows. Test replayed callbacks, cross-workspace account binding, expired tokens, ambiguous publish results, duplicate webhooks and missing metrics. Meta/LinkedIn access approvals and designated live accounts remain external gates. Do not claim a post was published without a verified platform receipt.
 
 ## Module 6 Learning and bounded automation
 

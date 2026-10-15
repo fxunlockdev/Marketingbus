@@ -555,6 +555,8 @@ model SocialPublication {
   attempts Int @default(0)
   leaseUntil DateTime?
   externalPostId String?
+  reconciliationAttempts Int @default(0)
+  nextReconciliationAt DateTime?
   permalink String?
   publishedAt DateTime?
   nextMetricsAt DateTime?
@@ -571,6 +573,7 @@ model SocialPublication {
   @@unique([id, businessId, organizationId])
   @@index([status, scheduledFor])
   @@index([status, nextMetricsAt])
+  @@index([status, nextReconciliationAt])
 }
 
 model MetricSnapshot {

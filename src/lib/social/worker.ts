@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { frozenCopy, MAX_RECONCILIATION_ATTEMPTS } from "./integrity";
+export { MAX_RECONCILIATION_ATTEMPTS } from "./integrity";
 import { db } from "../db";
 import { openSecret } from "../secrets";
 import { lockBusiness } from "../production/service";
@@ -6,7 +7,6 @@ import { creativeSchema } from "../production/content";
 import { approvedFactText, evaluateCreative } from "../production/quality";
 import {
   metricReading,
-  publicationPayload,
   publishedReceipt,
   socialProvider,
   type Account,
@@ -56,6 +56,10 @@ export async function recoverSocialLeases() {
       leaseUntil: null,
     },
   });
+  await db.socialPublication.updateMany({
+    where: { status: "NEEDS_RECONCILIATION", reconciliationAttempts: { gte: MAX_RECONCILIATION_ATTEMPTS }, leaseUntil: { lte: new Date() } },
+    data: { leaseUntil: null, nextReconciliationAt: null, errorCode: "LOOKUP_INTERRUPTED_LIMIT" },
+  });
 }
 export async function runOnePublication(adapters: SocialAdapters) {
   const providers = Object.keys(adapters);
@@ -99,6 +103,8 @@ export async function runOnePublication(adapters: SocialAdapters) {
     if (
       !business.confirmedAt ||
       business.version !== post.brandVersion ||
+      post.revision.item.plan.businessId !== post.businessId ||
+      post.revision.item.plan.brandVersion !== post.brandVersion ||
       post.revision.item.plan.status !== "PROPOSED" ||
       current?.id !== post.revisionId ||
       post.revision.status !== "APPROVED"
@@ -109,28 +115,26 @@ export async function runOnePublication(adapters: SocialAdapters) {
       (post.connection.expiresAt && post.connection.expiresAt <= new Date())
     )
       reason = "RECONNECT_REQUIRED";
-    const payload = publicationPayload.parse(post.payload);
-    if (
-      createHash("sha256").update(JSON.stringify(payload)).digest("hex") !==
-        post.payloadHash ||
-      payload.caption !== creativeSchema.parse(post.revision.content).caption ||
-      payload.channel !== post.connection.provider
-    )
-      reason = "PAYLOAD_CHANGED";
-    if (
-      !evaluateCreative(creativeSchema.parse(post.revision.content), {
-        facts: approvedFactText(business),
-      }).eligible
-    )
-      reason = "FACT_CHECK_FAILED";
-    if (reason) {
+    let payload: ReturnType<typeof frozenCopy> | undefined;
+    try {
+      payload = frozenCopy(post.payload, post.payloadHash, post.connection.provider);
+      const creative = creativeSchema.parse(post.revision.content);
+      if (payload.caption !== creative.caption || payload.channel !== post.revision.item.channel || payload.format !== post.revision.item.format) reason = "PAYLOAD_CHANGED";
+      if (!evaluateCreative(creative, { facts: approvedFactText(business) }).eligible) reason = "FACT_CHECK_FAILED";
+    } catch { reason = "PAYLOAD_INVALID"; }
+    if (reason || !payload) {
       await tx.socialPublication.update({
         where: { id: post.id },
-        data: { status: "CANCELLED", errorCode: reason },
+        data: { status: "CANCELLED", errorCode: reason ?? "PAYLOAD_INVALID" },
       });
       return null;
     }
-    const token = account(post.connection);
+    let token: Account;
+    try { token = account(post.connection); }
+    catch {
+      await tx.socialPublication.update({ where: { id: post.id }, data: { status: "FAILED", errorCode: "CREDENTIAL_UNAVAILABLE" } });
+      return null;
+    }
     await tx.socialPublication.update({
       where: { id: post.id },
       data: {
@@ -240,53 +244,91 @@ export async function runOnePublication(adapters: SocialAdapters) {
   return true;
 }
 
-export async function reconcilePublication(
-  publicationId: string,
-  adapters: SocialAdapters
-) {
-  const post = await db.socialPublication.findUnique({
-    where: { id: publicationId },
-    include: { connection: true },
+const RECONCILIATION_LEASE_MS = 120000;
+function reconciliationDue(now: Date) {
+  return {
+    status: "NEEDS_RECONCILIATION",
+    reconciliationAttempts: { lt: MAX_RECONCILIATION_ATTEMPTS },
+    AND: [
+      { OR: [{ leaseUntil: null }, { leaseUntil: { lte: now } }] },
+      { OR: [{ nextReconciliationAt: { lte: now } }, { nextReconciliationAt: null, reconciliationAttempts: 0 }] },
+    ],
+  };
+}
+
+// At most one lookup per tick. Exhausted/invalid outcomes remain held for operator review.
+export async function runOneReconciliation(adapters: SocialAdapters) {
+  if (!Object.keys(adapters).length) return false;
+  const candidate = await db.socialPublication.findFirst({
+    where: { ...reconciliationDue(new Date()), connection: { provider: { in: Object.keys(adapters) } } },
+    orderBy: [{ nextReconciliationAt: "asc" }, { createdAt: "asc" }],
   });
-  if (!post || post.status !== "NEEDS_RECONCILIATION") return false;
-  const provider = socialProvider.parse(post.connection.provider),
-    adapter = adapters[provider];
-  if (!adapter || post.connection.status !== "CONNECTED") return false;
-  const receipt = await adapter.reconcile(
-    account(post.connection),
-    post.id,
-    publicationPayload.parse(post.payload),
-    AbortSignal.timeout(45000)
-  );
-  // Absence is not proof of non-publication: eventual consistency is common. Never resend.
-  if (!receipt) return false;
-  const verified = publishedReceipt.parse(receipt);
-  if (
-    verified.publishedAt > new Date(Date.now() + 60000) ||
-    verified.publishedAt < post.createdAt
-  )
-    throw Error("Invalid publication time");
-  const result = await db.socialPublication.updateMany({
-    where: { id: post.id, status: "NEEDS_RECONCILIATION" },
-    data: {
-      ...verified,
-      permalink: safePermalink(provider, verified.permalink),
-      status: "PUBLISHED",
-      errorCode: null,
-      nextMetricsAt: new Date(Date.now() + 3600000),
-    },
+  if (!candidate) return false;
+  await reconcilePublication(candidate.id, adapters);
+  return true;
+}
+
+export async function reconcilePublication(publicationId: string, adapters: SocialAdapters) {
+  const candidate = await db.socialPublication.findUnique({ where: { id: publicationId } });
+  if (!candidate) return false;
+  const scope = { businessId: candidate.businessId, organizationId: candidate.organizationId, actorId: "social-reconciler" };
+  const leaseUntil = new Date(Date.now() + RECONCILIATION_LEASE_MS);
+  const claimed = await db.$transaction(async tx => {
+    await lockBusiness(tx, scope);
+    const post = await tx.socialPublication.findFirst({ where: { id: publicationId, ...reconciliationDue(new Date()) }, include: { connection: true } });
+    if (!post) return null;
+    const provider = socialProvider.safeParse(post.connection.provider);
+    if (!provider.success || !adapters[provider.data]) return null;
+    await tx.socialPublication.update({ where: { id: post.id }, data: {
+      reconciliationAttempts: { increment: 1 }, leaseUntil,
+      // A crashed lookup can be repeated after its lease; a publish never can.
+      nextReconciliationAt: leaseUntil,
+    } });
+    return { post, provider: provider.data, attempt: post.reconciliationAttempts + 1 };
   });
-  if (result.count)
-    await db.auditEvent.create({
-      data: {
-        businessId: post.businessId,
-        organizationId: post.organizationId,
-        actorId: "social-reconciler",
-        action: "SOCIAL_RECONCILED",
-        detail: `Provider read-back confirmed publication ${post.id}. No new post submitted.`,
-      },
+  if (!claimed) return false;
+  const { post, provider, attempt } = claimed;
+  const guard = { id: post.id, status: "NEEDS_RECONCILIATION", leaseUntil, reconciliationAttempts: attempt };
+  async function unresolved(code: string, retry = true) {
+    await db.socialPublication.updateMany({ where: guard, data: {
+      leaseUntil: null, errorCode: code,
+      nextReconciliationAt: retry && attempt < MAX_RECONCILIATION_ATTEMPTS ? new Date(Date.now() + 60000 * 2 ** (attempt - 1)) : null,
+    } });
+    return false;
+  }
+  let payload: ReturnType<typeof frozenCopy>, token: Account;
+  try { payload = frozenCopy(post.payload, post.payloadHash, provider); }
+  catch { return unresolved("RECONCILIATION_PAYLOAD_INVALID", false); }
+  if (post.connection.status !== "CONNECTED" || post.connection.expiresAt && post.connection.expiresAt <= new Date())
+    return unresolved("RECONNECT_REQUIRED", false);
+  try { token = account(post.connection); }
+  catch { return unresolved("CREDENTIAL_UNAVAILABLE", false); }
+  try {
+    const receipt = await adapters[provider]!.reconcile(token, post.id, payload, AbortSignal.timeout(45000));
+    // An empty search result is not proof that no remote post exists. Never resend.
+    if (!receipt) return unresolved("PUBLICATION_NOT_CONFIRMED");
+    const verified = publishedReceipt.parse(receipt);
+    const permalink = safePermalink(provider, verified.permalink);
+    if (verified.publishedAt > new Date(Date.now() + 60000) || verified.publishedAt < post.createdAt) throw Error("Invalid publication time");
+    return await db.$transaction(async tx => {
+      await lockBusiness(tx, scope);
+      const fresh = await tx.socialPublication.findFirst({ where: guard, include: { connection: true } });
+      if (!fresh) return false;
+      const validPayload = (() => { try { frozenCopy(fresh.payload, fresh.payloadHash, provider); return fresh.payloadHash === post.payloadHash; } catch { return false; } })();
+      if (!validPayload || fresh.connection.status !== "CONNECTED" || fresh.connection.encryptedToken !== post.connection.encryptedToken ||
+          fresh.connection.externalAccountId !== post.connection.externalAccountId || fresh.connection.provider !== provider ||
+          fresh.connection.expiresAt && fresh.connection.expiresAt <= new Date()) {
+        await tx.socialPublication.update({ where: { id: post.id }, data: { leaseUntil: null, nextReconciliationAt: null, errorCode: "RECONCILIATION_CONTEXT_CHANGED" } });
+        return false;
+      }
+      await tx.socialPublication.update({ where: { id: post.id }, data: {
+        ...verified, permalink, status: "PUBLISHED", errorCode: null, leaseUntil: null, nextReconciliationAt: null,
+        nextMetricsAt: new Date(Date.now() + 3600000),
+      } });
+      await tx.auditEvent.create({ data: { ...scope, action: "SOCIAL_RECONCILED", detail: `Provider read-back confirmed publication ${post.id}. No new post submitted.` } });
+      return true;
     });
-  return result.count > 0;
+  } catch { return unresolved("RECONCILIATION_UNVERIFIED"); }
 }
 
 export async function runOneMetricSync(adapters: SocialAdapters) {

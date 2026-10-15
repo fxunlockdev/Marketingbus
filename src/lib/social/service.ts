@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { payloadHash } from "./integrity";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { db } from "../db";
@@ -246,9 +246,7 @@ export async function manageSocial(
           format: item.format,
           mediaExportId: null,
         });
-        const hash = createHash("sha256")
-          .update(JSON.stringify(payload))
-          .digest("hex");
+        const hash = payloadHash(payload);
         const existing = await tx.socialPublication.findUnique({
           where: {
             revisionId_connectionId: {
@@ -262,6 +260,8 @@ export async function manageSocial(
             409,
             "This exact version has already been submitted. It will not be posted twice."
           );
+        if (existing && existing.payloadHash !== hash)
+          throw new AppError(409, "This saved publication has different content. Create and approve a new copy version instead.");
         if (
           (await tx.socialPublication.count({
             where: { businessId: scope.businessId, status: "SCHEDULED" },
@@ -280,6 +280,8 @@ export async function manageSocial(
           scheduledFor,
           timezone: input.timezone,
           errorCode: null,
+          reconciliationAttempts: 0,
+          nextReconciliationAt: null,
         };
         await tx.socialPublication.upsert({
           where: {

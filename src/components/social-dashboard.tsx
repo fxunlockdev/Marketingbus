@@ -18,6 +18,8 @@ type Dashboard = {
     permalink: string | null;
     externalPostId: string | null;
     errorCode: string | null;
+    reconciliationAttempts: number;
+    nextReconciliationAt: string | null;
     metricsFailures: number;
     connection: { label: string; provider: string };
     revision: { version: number; item: { title: string } };
@@ -251,6 +253,13 @@ export function SocialDashboard({
                   {new Date(p.scheduledFor).toLocaleString()}
                 </p>
                 {p.errorCode && <p>{p.errorCode.replaceAll("_", " ")}</p>}
+                {p.status === "NEEDS_RECONCILIATION" && <div>
+                  <p>Publication is unconfirmed. This post will not be sent again automatically.</p>
+                  <p>Lookup checks: {p.reconciliationAttempts}. {p.nextReconciliationAt
+                    ? `Next eligible lookup: ${new Date(p.nextReconciliationAt).toLocaleString()}.`
+                    : p.reconciliationAttempts > 0 ? "Automatic lookup stopped. Operator review is required."
+                    : "Lookup is waiting for an available publishing integration."}</p>
+                </div>}
                 {p.externalPostId && (
                   <p>Provider post ID: {p.externalPostId}</p>
                 )}

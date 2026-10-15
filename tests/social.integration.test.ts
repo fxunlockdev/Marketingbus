@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
 import { db } from "../src/lib/db";
 import {
@@ -10,6 +10,8 @@ import {
   recoverSocialLeases,
   reconcilePublication,
   runOneMetricSync,
+  runOneReconciliation,
+  MAX_RECONCILIATION_ATTEMPTS,
 } from "../src/lib/social/worker";
 import { actOnProduction } from "../src/lib/production/service";
 import {
@@ -17,6 +19,8 @@ import {
   manageLearning,
 } from "../src/lib/social/analytics";
 import type { SocialAdapter } from "../src/lib/social/contracts";
+import { payloadHash } from "../src/lib/social/integrity";
+import { resumePublicationLookup } from "../src/lib/social/recovery";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (
   process.env.TEST_DATABASE_URL &&
@@ -36,6 +40,7 @@ const creative = {
 };
 suite("social publishing and analytics isolation", () => {
   const orgs: string[] = [];
+  afterEach(async () => { await db.socialPublication.deleteMany({ where: { organizationId: { in: orgs } } }); });
   beforeAll(() => {
     vi.stubEnv(
       "SECRET_ENCRYPTION_KEYS_JSON",
@@ -232,6 +237,7 @@ suite("social publishing and analytics isolation", () => {
       permalink: "https://facebook.com/read-back-id",
       publishedAt: new Date(),
     }));
+    await db.socialPublication.update({ where: { id: post.id }, data: { nextReconciliationAt: new Date(Date.now() - 1000) } });
     expect(await reconcilePublication(post.id, { Facebook: provider })).toBe(
       true
     );
@@ -358,5 +364,140 @@ suite("social publishing and analytics isolation", () => {
       (await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } }))
         .status
     ).toBe("CANCELLED");
+  });
+  it.each(["shape", "hash", "media", "format"])("quarantines %s corruption before submission without blocking later posts", async kind => {
+    const ctx = await setup(), provider = adapter(), post = await queue(ctx, provider);
+    const valid = { caption: creative.caption, channel: "Facebook", format: "static", mediaExportId: null };
+    const payload = kind === "shape" ? { bad: true } : kind === "media" ? { ...valid, mediaExportId: "unverified" } : kind === "format" ? { ...valid, format: "video" } : valid;
+    await db.socialPublication.update({ where: { id: post.id }, data: { payload, payloadHash: kind === "shape" || kind === "hash" ? "invalid" : payloadHash(payload) } });
+    expect(await runOnePublication({ Facebook: provider })).toBe(true);
+    expect(provider.publish).not.toHaveBeenCalled();
+    expect(await db.socialPublication.findUnique({ where: { id: post.id } })).toMatchObject({ status: "CANCELLED", errorCode: "PAYLOAD_INVALID", attempts: 0 });
+    const next = await setup(); await queue(next, provider); await runOnePublication({ Facebook: provider });
+    expect(provider.publish).toHaveBeenCalledTimes(1);
+  });
+  it("handles invalid copy and undecryptable credentials without network writes or queue poisoning", async () => {
+    const a = await setup(), provider = adapter(), post = await queue(a, provider);
+    await db.creativeRevision.update({ where: { id: post.revisionId }, data: { content: {} } });
+    await runOnePublication({ Facebook: provider });
+    expect(await db.socialPublication.findUnique({ where: { id: post.id } })).toMatchObject({ status: "CANCELLED", errorCode: "PAYLOAD_INVALID" });
+    const b = await setup(), badKey = await queue(b, provider);
+    await db.socialConnection.update({ where: { id: b.connection.id }, data: { encryptedToken: "invalid-envelope" } });
+    await runOnePublication({ Facebook: provider });
+    expect(await db.socialPublication.findUnique({ where: { id: badKey.id } })).toMatchObject({ status: "FAILED", errorCode: "CREDENTIAL_UNAVAILABLE", attempts: 0 });
+    expect(provider.publish).not.toHaveBeenCalled();
+  });
+  it("allows date changes but refuses to replace the immutable payload of a saved publication", async () => {
+    const ctx = await setup(), provider = adapter(), post = await queue(ctx, provider);
+    await manageSocial(ctx.scope, { ...ctx.action, scheduledFor: new Date(Date.now() + 240000).toISOString() }, { Facebook: provider });
+    const moved = await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } });
+    expect(moved.payload).toEqual(post.payload); expect(moved.payloadHash).toBe(post.payloadHash);
+    await db.creativeRevision.update({ where: { id: post.revisionId }, data: { content: { ...creative, caption: "Architecture consultations for your home." } } });
+    await expect(manageSocial(ctx.scope, ctx.action, { Facebook: provider })).rejects.toThrow("different content");
+    expect((await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).payload).toEqual(post.payload);
+    expect(provider.publish).not.toHaveBeenCalled();
+  });
+  async function uncertain() {
+    const ctx = await setup(), provider = adapter();
+    provider.publish = vi.fn(async () => ({ state: "uncertain" as const }));
+    const post = await queue(ctx, provider); await runOnePublication({ Facebook: provider });
+    return { ctx, provider, post };
+  }
+  it("bounds lookup retries with persisted backoff and never resubmits an uncertain post", async () => {
+    const { provider, post } = await uncertain();
+    for (let n = 1; n <= MAX_RECONCILIATION_ATTEMPTS; n++) {
+      expect(await runOneReconciliation({ Facebook: provider })).toBe(true);
+      const fresh = await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } });
+      expect(fresh).toMatchObject({ status: "NEEDS_RECONCILIATION", reconciliationAttempts: n, leaseUntil: null });
+      expect(provider.reconcile).toHaveBeenCalledTimes(n);
+      expect(await runOneReconciliation({ Facebook: provider })).toBe(false);
+      if (n < MAX_RECONCILIATION_ATTEMPTS) {
+        expect(fresh.nextReconciliationAt!.getTime()).toBeGreaterThan(Date.now() + 55000);
+        await db.socialPublication.update({ where: { id: post.id }, data: { nextReconciliationAt: new Date(Date.now() - 1000) } });
+      } else expect(fresh.nextReconciliationAt).toBeNull();
+    }
+    await runOnePublication({ Facebook: provider }); expect(provider.publish).toHaveBeenCalledTimes(1);
+  });
+  it("leases concurrent lookup calls and atomically records one receipt and audit event", async () => {
+    const { provider, post } = await uncertain();
+    let release!: () => void, started!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; }), entered = new Promise<void>(resolve => { started = resolve; });
+    provider.reconcile = vi.fn(async () => { started(); await barrier; return { externalPostId: crypto.randomUUID(), permalink: "https://facebook.com/readback", publishedAt: new Date() }; });
+    const first = reconcilePublication(post.id, { Facebook: provider }); await entered;
+    expect(await reconcilePublication(post.id, { Facebook: provider })).toBe(false);
+    release(); expect(await first).toBe(true);
+    expect(provider.reconcile).toHaveBeenCalledTimes(1);
+    expect(await db.auditEvent.count({ where: { businessId: post.businessId, action: "SOCIAL_RECONCILED" } })).toBe(1);
+    expect(await db.socialPublication.findUnique({ where: { id: post.id } })).toMatchObject({ status: "PUBLISHED", reconciliationAttempts: 1, leaseUntil: null, nextReconciliationAt: null });
+  });
+  it.each(["payload", "expired", "key"])("stops %s lookup failures for operator attention without using the provider", async kind => {
+    const { ctx, provider, post } = await uncertain();
+    if (kind === "payload") await db.socialPublication.update({ where: { id: post.id }, data: { payloadHash: "changed" } });
+    else await db.socialConnection.update({ where: { id: ctx.connection.id }, data: kind === "expired" ? { expiresAt: new Date(Date.now() - 1000) } : { encryptedToken: "bad" } });
+    expect(await reconcilePublication(post.id, { Facebook: provider })).toBe(false);
+    expect(provider.reconcile).not.toHaveBeenCalled();
+    expect(await runOneReconciliation({ Facebook: provider })).toBe(false);
+    expect(await db.socialPublication.findUnique({ where: { id: post.id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", nextReconciliationAt: null, leaseUntil: null });
+  });
+  it("rejects changed destination context after a successful remote lookup", async () => {
+    const { ctx, provider, post } = await uncertain();
+    provider.reconcile = vi.fn(async () => {
+      await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { externalAccountId: "changed-during-lookup" } });
+      return { externalPostId: "wrong-context", permalink: null, publishedAt: new Date() };
+    });
+    expect(await reconcilePublication(post.id, { Facebook: provider })).toBe(false);
+    expect(await db.socialPublication.findUnique({ where: { id: post.id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", errorCode: "RECONCILIATION_CONTEXT_CHANGED", externalPostId: null });
+    expect(await db.auditEvent.count({ where: { businessId: post.businessId, action: "SOCIAL_RECONCILED" } })).toBe(0);
+  });
+  it("rejects unsafe receipts and preserves the hold after lookup timeouts", async () => {
+    const { provider, post } = await uncertain();
+    provider.reconcile = vi.fn(async () => ({ externalPostId: "bad-url", permalink: "https://evil.test/post", publishedAt: new Date() }));
+    expect(await reconcilePublication(post.id, { Facebook: provider })).toBe(false);
+    await db.socialPublication.update({ where: { id: post.id }, data: { nextReconciliationAt: new Date(Date.now() - 1000) } });
+    provider.reconcile = vi.fn(async () => { throw Error("secret provider body must not be persisted"); });
+    expect(await reconcilePublication(post.id, { Facebook: provider })).toBe(false);
+    const fresh = await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } });
+    expect(fresh).toMatchObject({ status: "NEEDS_RECONCILIATION", errorCode: "RECONCILIATION_UNVERIFIED", externalPostId: null, reconciliationAttempts: 2 });
+    expect(JSON.stringify(fresh)).not.toContain("secret provider body");
+    expect(provider.publish).toHaveBeenCalledTimes(1);
+  });
+  it("reclaims crashed lookup leases but ignores completions from a replaced lease", async () => {
+    const { provider, post } = await uncertain();
+    await db.socialPublication.update({ where: { id: post.id }, data: { reconciliationAttempts: 1, leaseUntil: new Date(Date.now() - 1000), nextReconciliationAt: new Date(Date.now() - 1000) } });
+    provider.reconcile = vi.fn(async () => {
+      await db.socialPublication.update({ where: { id: post.id }, data: { reconciliationAttempts: 3, leaseUntil: new Date(Date.now() + 300000) } });
+      return { externalPostId: "late-result", permalink: null, publishedAt: new Date() };
+    });
+    expect(await reconcilePublication(post.id, { Facebook: provider })).toBe(false);
+    expect(provider.reconcile).toHaveBeenCalledTimes(1);
+    expect(await db.socialPublication.findUnique({ where: { id: post.id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", externalPostId: null, reconciliationAttempts: 3 });
+  });
+  it("requires explicit audited operator evidence to resume exhausted lookup and deduplicates repeats", async () => {
+    const { provider, post } = await uncertain();
+    const input = { publicationId: post.id, operatorId: "fixture-operator", evidence: "Account and immutable snapshot checked in test." };
+    await expect(resumePublicationLookup({ ...input, evidence: "" })).rejects.toThrow();
+    await db.socialPublication.update({ where: { id: post.id }, data: { reconciliationAttempts: 5, nextReconciliationAt: null } });
+    const results = await Promise.all([resumePublicationLookup(input), resumePublicationLookup(input)]);
+    expect(results.filter(r => r.resumed)).toHaveLength(1);
+    expect(await db.auditEvent.count({ where: { businessId: post.businessId, action: "SOCIAL_LOOKUP_RESUMED" } })).toBe(1);
+    expect(await db.socialPublication.findUnique({ where: { id: post.id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", externalPostId: null, reconciliationAttempts: 0 });
+    expect(provider.publish).toHaveBeenCalledTimes(1);
+  });
+  it("makes an interrupted final lookup visibly stopped rather than promising another attempt", async () => {
+    const { provider, post } = await uncertain();
+    await db.socialPublication.update({ where: { id: post.id }, data: { reconciliationAttempts: 5, leaseUntil: new Date(Date.now() - 1000), nextReconciliationAt: new Date(Date.now() - 1000) } });
+    await recoverSocialLeases();
+    expect(await runOneReconciliation({ Facebook: provider })).toBe(false);
+    expect(await db.socialPublication.findUnique({ where: { id: post.id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", errorCode: "LOOKUP_INTERRUPTED_LIMIT", leaseUntil: null, nextReconciliationAt: null });
+    expect(provider.reconcile).not.toHaveBeenCalled();
+  });
+  it("refuses operator lookup resumption for corrupt snapshots, active leases and confirmed outcomes", async () => {
+    const { post } = await uncertain(), input = { publicationId: post.id, operatorId: "fixture-operator", evidence: "Fixture recovery check only." };
+    await db.socialPublication.update({ where: { id: post.id }, data: { reconciliationAttempts: 5, payloadHash: "corrupt" } });
+    await expect(resumePublicationLookup(input)).rejects.toThrow("immutable");
+    await db.socialPublication.update({ where: { id: post.id }, data: { leaseUntil: new Date(Date.now() + 120000) } });
+    await expect(resumePublicationLookup(input)).rejects.toThrow("active lookup");
+    await db.socialPublication.update({ where: { id: post.id }, data: { status: "PUBLISHED", externalPostId: "already-recorded", publishedAt: new Date(), leaseUntil: null } });
+    await expect(resumePublicationLookup(input)).rejects.toThrow("unconfirmed");
   });
 });

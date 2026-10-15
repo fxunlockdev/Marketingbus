@@ -11,6 +11,7 @@ describe("deployment readiness", () => {
     expect(result.status).toBe(200);
     expect(query).toHaveBeenCalledTimes(38);
     const sql = query.mock.calls.map(call => String(call[0])).join("\n");
+    expect(sql).toContain("reconciliationAttempts"); expect(sql).toContain("nextReconciliationAt");
     for (const table of ["IdentityToken", "EmailOutbox", "KnowledgeSource", "SocialConnection", "SocialPublication", "MetricSnapshot", "LearningProposal", "StaticComposition", "TeamInvitation", "TeamEvent"]) expect(sql).toContain(table);
     expect(result.headers.get("Cache-Control")).toBe("no-store");
   });

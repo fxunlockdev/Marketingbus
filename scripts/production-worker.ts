@@ -16,7 +16,7 @@ import { videoStore } from "../src/lib/video/service";
 import { runOneEmail } from "../src/lib/identity/worker";
 import { expireIdentityArtifacts } from "../src/lib/identity/service";
 import { configuredSocialAdapters } from "../src/lib/social/contracts";
-import { runOnePublication, runOneMetricSync, recoverSocialLeases } from "../src/lib/social/worker";
+import { runOnePublication, runOneMetricSync, recoverSocialLeases, runOneReconciliation } from "../src/lib/social/worker";
 let stopping = false;
 let lastHealthyAt = 0;
 let lastRetentionCheck = 0;
@@ -78,6 +78,7 @@ async function main() {
       if (!stopping && process.env.SOCIAL_EXECUTION_ENABLED === "true") {
         const adapters = configuredSocialAdapters();
         await runOnePublication(adapters);
+        await runOneReconciliation(adapters);
         await runOneMetricSync(adapters);
       }
       if (!stopping && process.env.WEBSITE_EXTRACTION_ENABLED === "true" && await runOneSourceJob()) continue;
