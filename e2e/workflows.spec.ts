@@ -102,6 +102,13 @@ test("compose, preview, approve, export; honest analytics and owner protections"
     const download = page.waitForEvent("download");
     await page.getByRole("button", { name: "Download PNG" }).click();
     expect((await download).suggestedFilename()).toBe("creative-square.png");
+    const savedExports = page.getByRole("region", { name: "Saved publishing exports" });
+    await expect(savedExports.getByRole("button", { name: "Save approved square export" })).toBeEnabled();
+    if (!process.env.ASSET_S3_ENDPOINT) {
+      await savedExports.getByRole("button", { name: "Save approved square export" }).click();
+      await expect(savedExports.getByRole("alert")).toContainText("storage is not configured");
+      expect((await (await page.request.get(`/api/businesses/${id}/exports`)).json()).exports).toEqual([]);
+    }
     await page.getByLabel("Background colour", { exact: true }).fill("#eeeeee");
     await page
       .getByRole("button", { name: "Save layout version · no credits" })
@@ -209,6 +216,8 @@ test("compose, preview, approve, export; honest analytics and owner protections"
     ).toBe(403);
     expect(await db.job.count({ where: { organizationId } })).toBe(0);
   } finally {
+    if (organizationId)
+      await db.compositionExport.deleteMany({ where: { organizationId } });
     if (organizationId)
       await db.organization.delete({ where: { id: organizationId } });
     await db.user.deleteMany({ where: { email } });

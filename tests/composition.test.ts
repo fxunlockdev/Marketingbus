@@ -7,6 +7,14 @@ import {
 } from "../src/lib/composition/document";
 import { renderCanvas } from "../src/lib/composition/render";
 describe("deterministic editable compositions", () => {
+  it("bounds concurrent rendering and releases slots after completion", async () => {
+    const document = initialCanvas({ color: "#123456", designPreset: "editorial" }, []);
+    const render = () => renderCanvas(document, "square", { brand: "Studio", headline: "Made for home", cta: "Meet us" }, new Map());
+    const results = await Promise.allSettled([render(), render(), render()]);
+    expect(results.filter(r => r.status === "fulfilled")).toHaveLength(2);
+    expect(results.filter(r => r.status === "rejected")).toHaveLength(1);
+    expect((await render()).width).toBe(1080);
+  });
   it("renders all placements with exact output dimensions", async () => {
     const document = initialCanvas(
       { color: "#123456", designPreset: "editorial" },

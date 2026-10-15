@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { heartbeat, HEARTBEAT_TTL_MS } from "../src/lib/production/readiness";
 import { purgeExpiredAssets } from "../src/lib/assets/service";
+import { purgeCompositionExports } from "../src/lib/composition/exports";
 import { assetStore } from "../src/lib/assets/storage";
 import { runOneSourceJob } from "../src/lib/knowledge/worker";
 import { runOneBrandAnalysis, recoverBrandAnalysisLeases } from "../src/lib/knowledge/analysis-worker";
@@ -51,7 +52,13 @@ async function main() {
         lastRetentionCheck = Date.now();
         await expireIdentityArtifacts();
         // Separate from paid work. Each pass is bounded, and ambiguous deletes retain their tombstone.
-        if (process.env.ASSET_S3_ENDPOINT) void purgeExpiredAssets(assetStore()).catch(() => console.error("Asset retention check failed; retry remains queued."));
+        if (process.env.ASSET_S3_ENDPOINT) {
+          try {
+            const store = assetStore();
+            void purgeExpiredAssets(store).catch(() => console.error("Asset retention check failed; retry remains queued."));
+            void purgeCompositionExports(store).catch(() => console.error("Export retention check failed; private tombstones retained for retry."));
+          } catch { console.error("Private storage configuration is incomplete; other job types remain available."); }
+        }
       }
       if (!stopping && process.env.EMAIL_DELIVERY_ENABLED === "true") {
         try { await runOneEmail(); } catch { console.error("Email delivery check failed; other job types remain available."); }

@@ -24,7 +24,14 @@ function lines(text: string, capacity: number) {
   if (current) result.push(current);
   return result;
 }
-export async function renderCanvas(
+let activeRenders = 0;
+export async function renderCanvas(raw: unknown, placement: Placement, copy: { brand: string; headline: string; cta: string }, images: Map<string, Uint8Array>) {
+  if (activeRenders >= 2) throw Error("The renderer is busy. Try again shortly; no credits were used.");
+  activeRenders++;
+  try { return await renderCanvasInternal(raw, placement, copy, images); }
+  finally { activeRenders--; }
+}
+async function renderCanvasInternal(
   raw: unknown,
   placement: Placement,
   copy: { brand: string; headline: string; cta: string },

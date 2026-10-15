@@ -1,14 +1,14 @@
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { AppError } from "../http";
 import { MAX_IMAGE_BYTES } from "./images";
-export type AssetStore = { put(key: string, data: Buffer): Promise<void>; get(key: string): Promise<Uint8Array>; remove(key: string): Promise<void> };
+export type AssetStore = { put(key: string, data: Buffer, contentType?: "image/webp" | "image/png", immutable?: boolean): Promise<void>; get(key: string): Promise<Uint8Array>; remove(key: string): Promise<void> };
 export function assetStore(): AssetStore {
   const { ASSET_S3_ENDPOINT: endpoint, ASSET_S3_BUCKET: bucket, ASSET_S3_ACCESS_KEY_ID: accessKeyId, ASSET_S3_SECRET_ACCESS_KEY: secretAccessKey } = process.env;
   if (!endpoint || !bucket || !accessKeyId || !secretAccessKey || new URL(endpoint).protocol !== "https:") throw new AppError(503, "Private asset storage is not configured yet.");
   const client = new S3Client({ endpoint, region: process.env.ASSET_S3_REGION || "auto", credentials: { accessKeyId, secretAccessKey }, maxAttempts: 1, forcePathStyle: false });
   return {
-    async put(key, data) {
-      await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: data, ContentType: "image/webp", CacheControl: "private, no-store" }), { abortSignal: AbortSignal.timeout(30_000) });
+    async put(key, data, contentType = "image/webp", immutable = false) {
+      await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: data, ContentType: contentType, CacheControl: "private, no-store", ...(immutable ? { IfNoneMatch: "*" } : {}) }), { abortSignal: AbortSignal.timeout(30_000) });
     },
     async get(key) {
       const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }), { abortSignal: AbortSignal.timeout(30_000) });

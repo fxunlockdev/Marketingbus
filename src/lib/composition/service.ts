@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { Prisma } from "@prisma/client";
 import { assertReviewer, assertNoBlockingComments } from "../workflows/approvals";
 import { z } from "zod";
 import { db } from "../db";
@@ -160,15 +161,13 @@ export async function manageComposition(scope: Scope, raw: unknown) {
     return { ok: true, composition };
   });
 }
-export async function exportComposition(
+export async function compositionContext(
   scope: Scope,
   id: string,
-  placement: Placement,
   preview = false,
-  store?: AssetStore
+  client: Pick<Prisma.TransactionClient, "staticComposition" | "business" | "productionItem" | "brandAsset"> = db
 ) {
-  async function context() {
-    const composition = await db.staticComposition.findFirst({
+    const composition = await client.staticComposition.findFirst({
       where: {
         id,
         businessId: scope.businessId,
@@ -176,10 +175,10 @@ export async function exportComposition(
       },
     });
     if (!composition) throw new AppError(404, "Composition not found.");
-    const business = await db.business.findFirstOrThrow({
+    const business = await client.business.findFirstOrThrow({
       where: { id: scope.businessId, organizationId: scope.organizationId },
     });
-    const item = await db.productionItem.findFirst({
+    const item = await client.productionItem.findFirst({
       where: {
         id: composition.itemId,
         organizationId: scope.organizationId,
@@ -209,7 +208,7 @@ export async function exportComposition(
       );
     const document = canvasDocument.parse(composition.document);
     const images = document.layers.filter((l) => l.kind === "image");
-    const assets = await db.brandAsset.findMany({
+    const assets = await client.brandAsset.findMany({
       where: {
         id: { in: images.map((l) => l.assetId) },
         businessId: scope.businessId,
@@ -233,8 +232,9 @@ export async function exportComposition(
       assets,
       copy: { brand: business.name, ...creativeSchema.parse(revision.content) },
     };
-  }
-  const initial = await context(),
+}
+export async function exportComposition(scope: Scope, id: string, placement: Placement, preview = false, store?: AssetStore) {
+  const initial = await compositionContext(scope, id, preview),
     images = new Map<string, Uint8Array>();
   for (const asset of initial.assets) {
     const data = await (store ?? assetStore()).get(asset.objectKey);
@@ -259,6 +259,6 @@ export async function exportComposition(
     );
   }
   // Recheck permissions after storage/rendering, which may be slow. Never cache private output.
-  await context();
+  await compositionContext(scope, id, preview);
   return { ...rendered, document: initial.document };
 }

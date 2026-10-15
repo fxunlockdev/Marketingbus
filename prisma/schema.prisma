@@ -117,6 +117,7 @@ model Business {
   socialConnections SocialConnection[]
   publications SocialPublication[]
   compositions StaticComposition[]
+  compositionExports CompositionExport[]
   experiments LearningProposal[]
   independentApproval Boolean @default(false)
   comments ReviewComment[]
@@ -517,8 +518,33 @@ model StaticComposition {
   approvedBy String?
   createdAt DateTime @default(now())
   business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  exports CompositionExport[]
+  @@unique([id, businessId, organizationId])
   @@unique([itemId, version])
   @@index([businessId, itemId])
+}
+
+model CompositionExport {
+  id String @id @default(cuid())
+  businessId String
+  organizationId String
+  compositionId String
+  placement String
+  rendererVersion String
+  manifest Json
+  objectKey String @unique
+  status String @default("STORING")
+  sha256 String @default("")
+  bytes Int
+  leaseUntil DateTime?
+  purgeAfter DateTime
+  createdBy String
+  createdAt DateTime @default(now())
+  business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  composition StaticComposition @relation(fields: [compositionId, businessId, organizationId], references: [id, businessId, organizationId], onDelete: Restrict)
+  @@unique([compositionId, placement, rendererVersion])
+  @@index([businessId, organizationId, createdAt])
+  @@index([status, purgeAfter, leaseUntil])
 }
 
 model TeamInvitation {

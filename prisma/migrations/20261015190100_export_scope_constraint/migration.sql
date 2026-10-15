@@ -1,0 +1,2 @@
+CREATE UNIQUE INDEX "StaticComposition_id_businessId_organizationId_key" ON "StaticComposition"("id", "businessId", "organizationId");
+ALTER TABLE "CompositionExport" ADD CONSTRAINT "CompositionExport_compositionId_businessId_organizationId_fkey" FOREIGN KEY ("compositionId", "businessId", "organizationId") REFERENCES "StaticComposition"("id", "businessId", "organizationId") ON DELETE RESTRICT ON UPDATE CASCADE;

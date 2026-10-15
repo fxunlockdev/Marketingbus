@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { SavedExports } from "./saved-exports";
 import {
   canvasDocument,
   placements,
@@ -348,6 +349,7 @@ export function CompositionEditor({
               ))}
             </div>
           </section>
+          <SavedExports businessId={businessId} compositionId={composition.id} placement={placement} approved={composition.status === "APPROVED" && selected?.revisions[0]?.status === "APPROVED"} />
         </>
       )}
     </div>

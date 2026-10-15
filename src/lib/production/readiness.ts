@@ -4,7 +4,7 @@ import { db } from "../db";
 import { AppError } from "../http";
 import { assertExecutionEnabled, configurationHash, configuredModels, keyFor } from "./router";
 
-export const WORKER_RUNTIME = "studio-v6-brand-intelligence";
+export const WORKER_RUNTIME = "studio-v7-persistent-exports";
 export const HEARTBEAT_TTL_MS = 120_000;
 export function workerConfigurationHash() {
   return createHash("sha256").update(JSON.stringify({

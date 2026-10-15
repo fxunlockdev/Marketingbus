@@ -27,6 +27,7 @@ export async function GET() {
     await db.$queryRaw`SELECT "definitionVersion" FROM "MetricSnapshot" LIMIT 0`;
     await db.$queryRaw`SELECT "evidence" FROM "LearningProposal" LIMIT 0`;
     await db.$queryRaw`SELECT "document" FROM "StaticComposition" LIMIT 0`;
+    await db.$queryRaw`SELECT "manifest", "leaseUntil", "purgeAfter" FROM "CompositionExport" LIMIT 0`;
     await db.$queryRaw`SELECT "outboxId" FROM "TeamInvitation" LIMIT 0`;
     await db.$queryRaw`SELECT "actorId" FROM "TeamEvent" LIMIT 0`;
     await db.$queryRaw`SELECT "enabledAt", "lastStep" FROM "MfaCredential" LIMIT 0`;

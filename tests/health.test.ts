@@ -9,7 +9,7 @@ describe("deployment readiness", () => {
     query.mockResolvedValue([]);
     const result = await GET();
     expect(result.status).toBe(200);
-    expect(query).toHaveBeenCalledTimes(33);
+    expect(query).toHaveBeenCalledTimes(34);
     const sql = query.mock.calls.map(call => String(call[0])).join("\n");
     for (const table of ["IdentityToken", "EmailOutbox", "KnowledgeSource", "SocialConnection", "SocialPublication", "MetricSnapshot", "LearningProposal", "StaticComposition", "TeamInvitation", "TeamEvent"]) expect(sql).toContain(table);
     expect(result.headers.get("Cache-Control")).toBe("no-store");
