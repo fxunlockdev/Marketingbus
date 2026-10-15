@@ -10,6 +10,7 @@ import { purgeCompositionExports } from "../src/lib/composition/exports";
 import { assetStore } from "../src/lib/assets/storage";
 import { runOneSourceJob } from "../src/lib/knowledge/worker";
 import { runOneBrandAnalysis, recoverBrandAnalysisLeases } from "../src/lib/knowledge/analysis-worker";
+import { runOneImage, recoverImageLeases } from "../src/lib/images/worker";
 import { runOneEmail } from "../src/lib/identity/worker";
 import { expireIdentityArtifacts } from "../src/lib/identity/service";
 import { configuredSocialAdapters } from "../src/lib/social/contracts";
@@ -42,6 +43,7 @@ async function main() {
     try {
       await recoverExpiredLeases();
       await recoverBrandAnalysisLeases();
+      await recoverImageLeases();
       await recoverSocialLeases();
       const enabled = await heartbeat(instance);
       lastHealthyAt = Date.now();
@@ -64,6 +66,7 @@ async function main() {
         try { await runOneEmail(); } catch { console.error("Email delivery check failed; other job types remain available."); }
       }
       if (!stopping && enabled) await runOneBrandAnalysis();
+      if (!stopping && enabled) await runOneImage();
       if (!stopping && enabled && await runOneJob()) continue;
       if (!stopping && process.env.SOCIAL_EXECUTION_ENABLED === "true") {
         const adapters = configuredSocialAdapters();

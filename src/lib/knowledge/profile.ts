@@ -11,6 +11,13 @@ export async function replaceBrandProfile(tx: Prisma.TransactionClient, scope: S
   const id = scope.businessId;
   await invalidatePublications(tx, id);
   await invalidateBrandAnalyses(tx, scope);
+  const images = await tx.imageGeneration.findMany({ where: { businessId: id, status: { in: ["OFFERED", "QUEUED", "RUNNING"] } } });
+  for (const image of images) {
+    if (image.reservationId) await finishReservationInTransaction(tx, scope.organizationId, image.reservationId, 0);
+    await tx.imageGeneration.update({ where: { id: image.id }, data: { status: "CANCELLED", leaseUntil: null, errorCode: "BRAND_CHANGED" } });
+    await tx.brandAsset.updateMany({ where: { generationId: image.id }, data: { status: "DELETED", bytes: 0, approvedForGeneration: false } });
+  }
+  await tx.brandAsset.updateMany({ where: { businessId: id, purpose: "generated" }, data: { approvedForGeneration: false } });
   await tx.business.update({ where: { id }, data: { ...profile, version: { increment: 1 }, confirmedAt: null, productionEnabled: false } });
   await tx.productionPlan.updateMany({ where: { businessId: id, status: "PROPOSED" }, data: { status: "SUPERSEDED" } });
   await tx.calendarEntry.deleteMany({ where: { organizationId: scope.organizationId, item: { plan: { businessId: id } } } });

@@ -10,6 +10,7 @@ import { creativeSchema } from "../production/content";
 import { canvasDocument, initialCanvas, type Placement } from "./document";
 import { renderCanvas } from "./render";
 import { assetStore, type AssetStore } from "../assets/storage";
+import { imageReferenceAssets } from "../images/service";
 export const compositionAction = z.discriminatedUnion("action", [
   z
     .object({
@@ -67,10 +68,13 @@ export async function manageComposition(scope: Scope, raw: unknown) {
         organizationId: scope.organizationId,
         status: "READY",
         approvedForGeneration: true,
+        OR: [{ generationId: null }, { generation: { itemId: item.id, revisionId: revision.id, brandVersion: business.version, status: "APPROVED" } }],
       },
       orderBy: [{ createdAt: "desc" }, { id: "asc" }],
       take: 100,
+      include: { generation: true },
     });
+    for (const asset of assets) if (asset.generation) await imageReferenceAssets(tx, asset.generation);
     if (
       (input.action === "create" &&
         revision.version !== input.revisionVersion) ||
@@ -89,6 +93,7 @@ export async function manageComposition(scope: Scope, raw: unknown) {
     if (
       input.action === "create" &&
       previous?.revisionId === revision.id &&
+      previous.status !== "SUPERSEDED" &&
       previous.brandVersion === business.version
     )
       return { ok: true, composition: previous };
@@ -215,8 +220,11 @@ export async function compositionContext(
         organizationId: scope.organizationId,
         status: "READY",
         approvedForGeneration: true,
+        OR: [{ generationId: null }, { generation: { itemId: composition.itemId, revisionId: revision.id, brandVersion: business.version, status: "APPROVED" } }],
       },
+      include: { generation: true },
     });
+    for (const asset of assets) if (asset.generation) await imageReferenceAssets(client, asset.generation);
     if (
       images.some(
         (l) => !assets.some((a) => a.id === l.assetId && a.sha256 === l.sha256)

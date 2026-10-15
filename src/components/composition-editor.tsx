@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { SavedExports } from "./saved-exports";
+import { ImageProduction } from "./image-production";
 import {
   canvasDocument,
   placements,
@@ -27,6 +28,7 @@ export function CompositionEditor({
     revisions: { id: string; version: number; status: string }[];
   }[];
 }) {
+  const [generationRefresh, setGenerationRefresh] = useState(0);
   const [compositions, setCompositions] = useState<Composition[]>([]),
     [itemId, setItemId] = useState(""),
     [document, setDocument] = useState<CanvasDocument | null>(null),
@@ -51,7 +53,7 @@ export function CompositionEditor({
         if (!abort.signal.aborted) setError(String(e.message));
       });
     return () => abort.abort();
-  }, [businessId]);
+  }, [businessId, generationRefresh]);
   useEffect(() => {
     setDocument(composition?.document ?? null);
     setPreview("");
@@ -125,6 +127,7 @@ export function CompositionEditor({
   }
   return (
     <div className="production-list" aria-busy={busy}>
+      <ImageProduction businessId={businessId} items={items} onChange={() => setGenerationRefresh(n => n + 1)} />
       <p role="alert" className="form-error">
         {error}
       </p>

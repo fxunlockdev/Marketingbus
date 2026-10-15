@@ -48,7 +48,8 @@ export function initialCanvas(
   const logo = assets.find((a) => a.purpose === "logo"),
     product = assets.find((a) => a.purpose === "product"),
     reference = assets.find((a) => a.purpose === "reference"),
-    image = product ?? reference;
+    generated = assets.find((a) => a.purpose === "generated"),
+    image = generated ?? product ?? reference;
   const dark = brand.designPreset === "bold";
   const textColor = dark ? "#ffffff" : "#18212b";
   return canvasDocument.parse({
@@ -91,6 +92,7 @@ export function initialCanvas(
               color: textColor,
             },
           ]),
+      ...(generated && product ? [{ kind: "image", assetId: product.id, sha256: product.sha256, x: 0.68, y: 0.66, width: 0.25, height: 0.22 }] : []),
       {
         kind: "text",
         field: "headline",

@@ -114,6 +114,7 @@ model Business {
   assets            BrandAsset[]
   sources           KnowledgeSource[]
   brandAnalyses     BrandAnalysis[]
+  imageGenerations  ImageGeneration[]
   socialConnections SocialConnection[]
   publications SocialPublication[]
   compositions StaticComposition[]
@@ -188,6 +189,44 @@ model BrandSnapshot {
   @@unique([businessId, version])
 }
 
+model ImageGeneration {
+  id String @id @default(cuid())
+  businessId String
+  organizationId String
+  actorId String
+  itemId String
+  revisionId String
+  brandVersion Int
+  version Int
+  parentId String?
+  feedback String @default("")
+  prompt String
+  references Json
+  route Json
+  configurationHash String
+  credits Int
+  supplierCeilingMicros Int
+  status String @default("OFFERED")
+  expiresAt DateTime
+  acceptedAt DateTime?
+  submittedAt DateTime?
+  leaseUntil DateTime?
+  reservationId String? @unique
+  providerResponseId String?
+  supplierCostMicros Int?
+  usage Json?
+  errorCode String?
+  approvedBy String?
+  createdAt DateTime @default(now())
+  output BrandAsset?
+  item ProductionItem @relation(fields: [itemId, organizationId], references: [id, organizationId], onDelete: Restrict, map: "ImageGeneration_item_scope_fkey")
+  business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  @@unique([id, businessId, organizationId])
+  @@unique([itemId, version])
+  @@index([businessId, organizationId, createdAt])
+  @@index([status, leaseUntil])
+}
+
 model ProductionPlan {
   id             String           @id @default(cuid())
   businessId     String
@@ -217,6 +256,7 @@ model ProductionItem {
   revisions      CreativeRevision[]
   quotes         GenerationQuote[]
   schedule       CalendarEntry?
+  images         ImageGeneration[]
 
   @@unique([id, organizationId])
 }
@@ -397,10 +437,13 @@ model BrandAsset {
   archivedFromStatus String?
   purgeAfter     DateTime?
   purgeLeaseUntil DateTime?
+  generationId String? @unique
+  generation ImageGeneration? @relation(fields: [generationId, businessId, organizationId], references: [id, businessId, organizationId], onDelete: Restrict)
   business       Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Restrict)
 
   @@index([businessId, organizationId, status])
   @@index([status, purgeAfter, purgeLeaseUntil])
+  @@unique([generationId, businessId, organizationId])
 }
 
 // Infrastructure metadata, never customer content or secrets.

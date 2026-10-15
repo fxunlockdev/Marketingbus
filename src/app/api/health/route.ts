@@ -17,7 +17,8 @@ export async function GET() {
     await db.$queryRaw`SELECT "submittedAt" FROM "Job" LIMIT 0`;
     await db.$queryRaw`SELECT "lastSeenAt" FROM "WorkerHeartbeat" LIMIT 0`;
     await db.$queryRaw`SELECT "ceilingMicros" FROM "SupplierAuthorization" LIMIT 0`;
-    await db.$queryRaw`SELECT "objectKey", "approvedForGeneration", "purgeLeaseUntil" FROM "BrandAsset" LIMIT 0`;
+    await db.$queryRaw`SELECT "objectKey", "approvedForGeneration", "purgeLeaseUntil", "generationId" FROM "BrandAsset" LIMIT 0`;
+    await db.$queryRaw`SELECT "references", "reservationId", "supplierCostMicros" FROM "ImageGeneration" LIMIT 0`;
     await db.$queryRaw`SELECT "sha256" FROM "KnowledgeSource" LIMIT 0`;
     await db.$queryRaw`SELECT "sources", "reservationId", "appliedFields" FROM "BrandAnalysis" LIMIT 0`;
     await db.$queryRaw`SELECT "expiresAt" FROM "IdentityToken" LIMIT 0`;
