@@ -1,15 +1,15 @@
 # Marketingbus module release verification
 
-Web release `ec4e1ca8e9e88f37cedf15ea2ce450e40175e253` adds scoped plan history to the preceding module, invitation and approved-artwork releases. The unchanged worker remains at `ac9c00e6885a8ba5ddef6bf114d0e5792807bf1b`. Connections contains publishing destinations only. Provider credentials remain operator-managed. Deployment does not establish live media-provider, payment or social-platform acceptance.
+Release `53c5b1e3cc6f2fcc2583370a57e6c3af6c196c7a` is deployed on web and worker. It adds bounded uncertain-publication recovery to the preceding plan-history and module releases. Connections contains publishing destinations only. Provider credentials remain operator-managed. Deployment does not establish live media-provider, payment or social-platform acceptance.
 
 ## Production release
 
 | Service | Deployment | Observed result |
 |---|---|---|
-| Web | `8a0194d1-820a-44a4-ba96-d8b30cdf28f6` | SUCCESS |
-| Worker | `fad61a10-4a7a-4e97-a5be-a7b35dfe02da` | SUCCESS |
+| Web | `2fc11ed0-eee7-4338-a34d-e48bfcdfa99b` | SUCCESS |
+| Worker | `fe91dc8e-56cb-4f28-a824-b83f8dd04fac` | SUCCESS |
 
-Both services use Node 26. Their existing predeployment migration step confirms all 22 migrations through `20261015210000_motion_storyboards` with none pending. Worker runtime is `studio-v10-motion-artwork`. The worker deployment health check succeeded, public `/api/health` returned HTTP 200 with `{"status":"ok"}`, unauthenticated `/studio` redirected to `/login`, and unauthenticated video access returned 401.
+Both services use Node 26. Web predeployment applied `20261015230000_social_reconciliation`; worker predeployment confirmed all 23 migrations with none pending. Worker runtime is `studio-v11-social-recovery`. Both deployment health checks succeeded, public `/api/health` returned HTTP 200 with `{"status":"ok"}`, unauthenticated `/studio` redirected to `/login`, and unauthenticated social access returned 401 with no-store caching.
 
 No new infrastructure services were created. Existing paid-execution flags and supplier budgets were preserved. No generation, email, payment or publishing request was submitted. Motion rendering remains disabled until production encoder/font packaging and storage acceptance; deploying its workflow does not activate rendering.
 
@@ -21,9 +21,15 @@ The update is deployed on web and requires no schema or worker-runtime change. H
 
 ## Verification and limitations
 
+The current social-recovery release passes 271 unit/database tests across 32 suites and 20 browser journeys; one private-storage journey remains skipped. Production build, type checking and dependency audit pass locally and in [GitHub CI run 38773733797](https://github.com/fxunlockdev/Marketingbus/actions/runs/38773733797). New coverage includes queue corruption isolation, immutable rescheduling, five-check backoff, concurrent/crashed lookup leases, destination changes, malformed receipts, audited operator resumption, viewer controls and rejection of forged receipt actions. Browser accessibility and mobile-width checks pass, and the stopped-lookup card was visually inspected.
+
+No production fixtures or live provider outcomes were created. The adapter registry remains empty, so deployment cannot activate actual social publishing. See [social operations](SOCIAL-AND-COMPOSITION.md) for recovery limits and operator requirements.
+
+### Previous plan history release
+
 The plan-history release passes 254 unit/database tests across 32 suites and 19 browser journeys, with one private-storage journey skipped. Production build, TypeScript checks and dependency audit pass locally and in [GitHub CI run 38768304268](https://github.com/fxunlockdev/Marketingbus/actions/runs/38768304268). The new browser flow covers earlier-plan editing, selection across pages, read-only superseded copy, server-side mutation rejection, automated accessibility and mobile width. Visual inspection led to a stacked mobile status notice; the affected browser test passed again after that correction.
 
-Railway reported SUCCESS for the web deployment above. Startup confirmed no pending migrations. Hosted health returned 200, unauthenticated studio access redirected to login, and the new plan-history route returned 401 with no-store caching to an unauthenticated request. These read-only checks created no production fixtures. There is no worker runtime or schema change in this release.
+The earlier plan-history web deployment `8a0194d1-820a-44a4-ba96-d8b30cdf28f6` reported SUCCESS. Startup confirmed no pending migrations. Hosted health returned 200, unauthenticated studio access redirected to login, and the new plan-history route returned 401 with no-store caching to an unauthenticated request. These read-only checks created no production fixtures. That earlier release had no worker runtime or schema change.
 
 ### Previous artwork release
 
