@@ -43,6 +43,8 @@ export async function manageApprovals(scope: Scope, raw: unknown) {
       await tx.staticComposition.updateMany({ where: { businessId: scope.businessId, status: "APPROVED" }, data: { status: "DRAFT", approvedBy: null } });
       await tx.imageGeneration.updateMany({ where: { businessId: scope.businessId, status: "APPROVED" }, data: { status: "READY", approvedBy: null } });
       await tx.brandAsset.updateMany({ where: { businessId: scope.businessId, purpose: "generated" }, data: { approvedForGeneration: false } });
+      await tx.videoStoryboard.updateMany({ where: { businessId: scope.businessId, status: { not: "SUPERSEDED" } }, data: { status: "DRAFT", approvedBy: null, shotApprovals: [] } });
+      await tx.motionRender.updateMany({ where: { businessId: scope.businessId, status: "APPROVED" }, data: { status: "READY", approvedBy: null } });
       await tx.calendarEntry.deleteMany({ where: { item: { plan: { businessId: scope.businessId } } } });
     } else if (input.action === "comment") {
       const item = await currentItem(tx, scope, input.itemId), revision = item.revisions[0];
@@ -57,6 +59,8 @@ export async function manageApprovals(scope: Scope, raw: unknown) {
         await tx.staticComposition.updateMany({ where: { revisionId: revision.id, status: "APPROVED" }, data: { status: "DRAFT", approvedBy: null } });
         await tx.imageGeneration.updateMany({ where: { revisionId: revision.id, status: "APPROVED" }, data: { status: "READY", approvedBy: null } });
         await tx.brandAsset.updateMany({ where: { generation: { revisionId: revision.id } }, data: { approvedForGeneration: false } });
+        await tx.videoStoryboard.updateMany({ where: { copyRevisionId: revision.id, status: { not: "SUPERSEDED" } }, data: { status: "DRAFT", approvedBy: null, shotApprovals: [] } });
+        await tx.motionRender.updateMany({ where: { storyboard: { copyRevisionId: revision.id }, status: "APPROVED" }, data: { status: "READY", approvedBy: null } });
         await tx.calendarEntry.deleteMany({ where: { revisionId: revision.id } });
       }
       await tx.reviewComment.create({ data: { ...scope, revisionId: revision.id, body: input.body, blocking: input.blocking } });

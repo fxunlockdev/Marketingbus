@@ -4,13 +4,16 @@ import { db } from "../db";
 import { AppError } from "../http";
 import { assertExecutionEnabled, configurationHash, configuredModels, keyFor } from "./router";
 import { imageConfigurationHash, imageRates } from "../images/contracts";
+import { motionConfigurationHash } from "../video/limits";
+import { motionRendererAvailable } from "../video/render";
 
-export const WORKER_RUNTIME = "studio-v8-image-production";
+export const WORKER_RUNTIME = "studio-v9-motion-storyboards";
 export const HEARTBEAT_TTL_MS = 120_000;
 export function workerConfigurationHash() {
   return createHash("sha256").update(JSON.stringify({
     rates: configurationHash(), daily: process.env.DAILY_SUPPLIER_BUDGET_MICROS,
     images: imageConfigurationHash(),
+    motion: motionConfigurationHash(),
     total: process.env.TOTAL_SUPPLIER_BUDGET_MICROS,
     providers: { openai: !!keyFor("openai"), anthropic: !!keyFor("anthropic") },
   })).digest("hex");
@@ -21,7 +24,7 @@ export async function heartbeat(id: string) {
     assertExecutionEnabled();
     executionEnabled = configuredModels().some(m => !!keyFor(m.provider) && new Date(m.verifiedUntil).getTime() > Date.now()) || (!!process.env.GEMINI_API_KEY && imageRates().some(m => new Date(m.verifiedUntil).getTime() > Date.now()));
   } catch { /* A paused worker is still operationally healthy. */ }
-  const data = { runtimeVersion: WORKER_RUNTIME, configurationHash: workerConfigurationHash(), executionEnabled, lastSeenAt: new Date() };
+  const data = { runtimeVersion: WORKER_RUNTIME, configurationHash: workerConfigurationHash(), executionEnabled, motionReady: await motionRendererAvailable(), lastSeenAt: new Date() };
   await db.workerHeartbeat.upsert({ where: { id }, create: { id, ...data }, update: data });
   return executionEnabled;
 }

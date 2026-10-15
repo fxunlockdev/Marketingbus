@@ -11,6 +11,8 @@ import { assetStore } from "../src/lib/assets/storage";
 import { runOneSourceJob } from "../src/lib/knowledge/worker";
 import { runOneBrandAnalysis, recoverBrandAnalysisLeases } from "../src/lib/knowledge/analysis-worker";
 import { runOneImage, recoverImageLeases } from "../src/lib/images/worker";
+import { runOneMotion, recoverMotionLeases, purgeMotion } from "../src/lib/video/worker";
+import { videoStore } from "../src/lib/video/service";
 import { runOneEmail } from "../src/lib/identity/worker";
 import { expireIdentityArtifacts } from "../src/lib/identity/service";
 import { configuredSocialAdapters } from "../src/lib/social/contracts";
@@ -44,6 +46,7 @@ async function main() {
       await recoverExpiredLeases();
       await recoverBrandAnalysisLeases();
       await recoverImageLeases();
+      await recoverMotionLeases();
       await recoverSocialLeases();
       const enabled = await heartbeat(instance);
       lastHealthyAt = Date.now();
@@ -59,6 +62,7 @@ async function main() {
             const store = assetStore();
             void purgeExpiredAssets(store).catch(() => console.error("Asset retention check failed; retry remains queued."));
             void purgeCompositionExports(store).catch(() => console.error("Export retention check failed; private tombstones retained for retry."));
+            void purgeMotion(videoStore()).catch(() => console.error("Motion retention check failed; private tombstones retained for retry."));
           } catch { console.error("Private storage configuration is incomplete; other job types remain available."); }
         }
       }
@@ -67,6 +71,9 @@ async function main() {
       }
       if (!stopping && enabled) await runOneBrandAnalysis();
       if (!stopping && enabled) await runOneImage();
+      if (!stopping && process.env.MOTION_RENDERING_ENABLED === "true") {
+        try { await runOneMotion(); } catch { console.error("Motion rendering check failed; other workflows remain available."); }
+      }
       if (!stopping && enabled && await runOneJob()) continue;
       if (!stopping && process.env.SOCIAL_EXECUTION_ENABLED === "true") {
         const adapters = configuredSocialAdapters();

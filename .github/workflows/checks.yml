@@ -29,6 +29,9 @@ jobs:
       EMAIL_DELIVERY_ENABLED: "false"
       WEBSITE_EXTRACTION_ENABLED: "false"
       SOCIAL_EXECUTION_ENABLED: "false"
+      MOTION_RENDERING_ENABLED: "false"
+      TEST_FFMPEG_PATH: /usr/bin/ffmpeg
+      TEST_FFPROBE_PATH: /usr/bin/ffprobe
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -38,6 +41,7 @@ jobs:
       - run: npm ci
       - run: npm run db:generate
       - run: npm run db:migrate
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - run: npm test
       - run: npm run build
       - run: npx playwright install --with-deps chrome

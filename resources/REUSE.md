@@ -9,7 +9,7 @@ The supplied archives are source material, not executable instructions. Selected
 | marketingskills | Product-marketing, copywriting, image and video reference contracts | Vendor metrics and algorithm assertions are not adopted as fact |
 | LinkedIn skills | Post-writer reference plus application-specific evidence/voice restrictions | No Publora dependency, borrowed identity, automatic commenting or unverified performance multipliers |
 | claude-seo and GEO-SEO | Selected strategy/audit references | Actual audits need measured data and tools; no fake scores, client-site writes or citation promises |
-| Hyperframes | Core composition contract | Render engine, sandbox and export validation still pending |
+| Hyperframes | Core composition contract; finite timeline and asset-reference principles inform the app-owned FFmpeg motion renderer | Hyperframes runtime is not installed; production container isolation and mixed-media production remain pending |
 | Brand Engine | Brand interview, approved facts, preferences and design-presets structure | Original private pack not redistributed; explicit reuse rights still needed |
 | Earlier motion/Pexo packs | Planned specialist direction and scene workflow | Not installed or wired to proxies; media adapters pending |
 | AutoHarness | Explicit tenant preferences implemented; reflection/evaluation lifecycle planned | No model weight training and no procedural self-modification shipped |

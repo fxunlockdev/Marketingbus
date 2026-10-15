@@ -31,6 +31,7 @@ import { AssetLibrary } from "./asset-library";
 import { KnowledgeLibrary } from "./knowledge-library";
 import { SocialDashboard } from "./social-dashboard";
 import { CompositionEditor } from "./composition-editor";
+import { VideoStudio } from "./video-studio";
 import { TeamPanel } from "./team-panel";
 import { ProductionCard, CalendarView, type ProductionItemView } from "./production-card";
 import { WorkflowControls } from "./workflow-controls";
@@ -61,6 +62,7 @@ type Page =
   | "Calendar"
   | "Publishing & analytics"
   | "Design studio"
+  | "Video studio"
   | "Team"
   | "Workflows"
   | "Memory"
@@ -72,6 +74,7 @@ const navigation = [
   { title: "Content plan", icon: CalendarDays },
   { title: "Review inbox", icon: Layers3 },
   { title: "Design studio", icon: ImageIcon },
+  { title: "Video studio", icon: Film },
   { title: "Calendar", icon: CalendarDays },
   { title: "Publishing & analytics", icon: ArrowUpRight },
   { title: "Memory", icon: Brain },
@@ -714,7 +717,7 @@ export function Studio({
                       </div>
                     )}
                     <div className="notice subtle">
-                      Planning outlines are free. Add a direction and request a quote for copy production. Paid execution requires verified provider configuration and an available credit balance. Image and video production are not enabled yet.
+                      Planning outlines are free. Add a direction and request a quote for copy production. Image generation requires verified provider configuration and an available credit balance. Video studio supports bounded local motion reels; generated footage is not enabled yet.
                     </div>
                     {items.length ? (
                       <div className="plan-grid">
@@ -763,6 +766,7 @@ export function Studio({
               {page === "Calendar" && <><Heading kicker="MAKE ROOM FOR GOOD WORK" title="Your publishing plan." description="A dated agenda of exact, approved versions. Moving or removing a reservation never regenerates the creative." /><CalendarView items={items} post={production} busy={busy} /></>}
               {page === "Publishing & analytics" && <><Heading kicker="FROM APPROVAL TO EVIDENCE" title="Publishing & analytics" description="Exact-version publishing, verified outcomes and measured experiments. Live providers remain gated until connected." />{business ? <SocialDashboard key={business.id} businessId={business.id} items={items} /> : <Empty title="Choose a business first." text="Publishing and performance belong to a specific business." />}</>}
               {page === "Design studio" && <><Heading kicker="YOUR ASSETS, PRECISELY PLACED" title="Design studio" description="Editable, versioned compositions and downloadable files. No model cost for layout changes." />{business ? <CompositionEditor key={business.id} businessId={business.id} items={items} /> : <Empty title="Choose a business first." text="Designs and assets belong to a specific business." />}</>}
+              {page === "Video studio" && <><Heading kicker="STORY, TIMING AND REVIEW" title="Video studio" description="Versioned storyboards and captioned motion reels made from your approved originals." />{business ? <VideoStudio key={business.id} businessId={business.id} items={items} /> : <Empty title="Choose a business first." text="Storyboards and rendered videos belong to a specific business." />}</>}
               {page === "Team" && <><Heading kicker="THE PEOPLE BEHIND THE WORK" title="Workspace team" description="Invite teammates and control who can view, create and administer your businesses." />{business ? <TeamPanel key={business.organizationId} organizationId={business.organizationId} /> : <Empty title="Choose a business first." text="Team access applies to its workspace." />}</>}
               {page === "Workflows" && <><Heading kicker="CONTROL THE WORK" title="Workflows" description="Independent review and bounded recurring planning." />{business ? <WorkflowControls key={business.id} businessId={business.id} /> : <Empty title="Choose a business first." text="Workflow policies belong to one business." />}</>}
               {page === "Memory" &&

@@ -115,6 +115,8 @@ model Business {
   sources           KnowledgeSource[]
   brandAnalyses     BrandAnalysis[]
   imageGenerations  ImageGeneration[]
+  storyboards       VideoStoryboard[]
+  motionRenders     MotionRender[]
   socialConnections SocialConnection[]
   publications SocialPublication[]
   compositions StaticComposition[]
@@ -257,6 +259,7 @@ model ProductionItem {
   quotes         GenerationQuote[]
   schedule       CalendarEntry?
   images         ImageGeneration[]
+  storyboards    VideoStoryboard[]
 
   @@unique([id, organizationId])
 }
@@ -452,9 +455,63 @@ model WorkerHeartbeat {
   runtimeVersion    String
   configurationHash String
   executionEnabled  Boolean
+  motionReady       Boolean @default(false)
   lastSeenAt        DateTime @default(now())
 
   @@index([lastSeenAt])
+}
+
+model VideoStoryboard {
+  id String @id @default(cuid())
+  businessId String
+  organizationId String
+  itemId String
+  copyRevisionId String?
+  brandVersion Int
+  version Int
+  document Json
+  shotApprovals Json
+  authorId String
+  status String @default("DRAFT")
+  approvedBy String?
+  createdAt DateTime @default(now())
+  business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  item ProductionItem @relation(fields: [itemId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  renders MotionRender[]
+  @@unique([itemId, version])
+  @@unique([id, businessId, organizationId])
+  @@index([businessId, organizationId, createdAt])
+}
+
+model MotionRender {
+  id String @id @default(cuid())
+  businessId String
+  organizationId String
+  storyboardId String
+  rendererVersion String
+  documentHash String
+  objectKey String @unique
+  status String @default("QUEUED")
+  bytes Int
+  sha256 String @default("")
+  durationMs Int
+  createdBy String
+  approvedBy String?
+  errorCode String?
+  leaseUntil DateTime?
+  purgeAfter DateTime
+  createdAt DateTime @default(now())
+  business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  storyboard VideoStoryboard @relation(fields: [storyboardId, businessId, organizationId], references: [id, businessId, organizationId], onDelete: Restrict)
+  @@unique([storyboardId, rendererVersion])
+  @@index([businessId, organizationId, createdAt])
+  @@index([status, leaseUntil])
+}
+
+// Separate admission ledger: deleting a tenant must not reset CPU authorization.
+model MotionAuthorization {
+  key String @id
+  createdAt DateTime @default(now())
 }
 
 // Deliberately not cascade-linked to customer records: deletion must not reset spend authority.
