@@ -21,7 +21,16 @@ The mobile billing status screenshot is saved in `../outputs/marketingbus-billin
 
 ## Deployment
 
-Pending release verification. Runtime is `studio-v14-stripe-billing`. Both web and worker must deploy together. Additive migrations `20261016173000_stripe_refunds` and `20261016174000_billing_reconciliation` bring the total to 27. Existing production data is retained; no fixture records or payment configuration are deployed.
+Source `d5cb6155a88ec56f8cb4e6687fd26b933195b683` is pushed to GitHub and deployed on both services. Runtime is `studio-v14-stripe-billing`.
+
+| Service | Deployment | Observed result |
+|---|---|---|
+| Web | `056005dd-9cfb-4ddd-953b-da89ac21b424` | SUCCESS |
+| Worker | `e7965a9d-2a54-4f7e-982d-b08856f68836` | SUCCESS |
+
+Both startup logs report 27 migrations with none pending, including `20261016173000_stripe_refunds` and `20261016174000_billing_reconciliation`. Existing production data is retained; no fixture records or payment configuration were deployed. Hosted health returned 200 with no-store; signed-out studio access redirected to login; unauthenticated billing and publishing-connections requests returned 401. [GitHub CI run 38941026255](https://github.com/fxunlockdev/Marketingbus/actions/runs/38941026255) passed the complete test, build, browser and audit workflow for this source commit.
+
+The deployed source includes a final compatibility correction for compound Stripe Checkout identifiers such as `cs_test_…`. Updated transport fixtures, all 336 tests, the production build and all 23 browser journeys pass after this correction. The earlier candidate deployment is superseded.
 
 ## Remaining acceptance
 

@@ -14,7 +14,7 @@ Implemented locally: server-owned offer catalog; owner/admin checkout and portal
 
 Verification covers concurrent duplicate events, changed replay payloads, unsafe redirects, cross-workspace access, renewal duplication, partial and out-of-order refunds, held-credit settlement and bounded webhook bodies. Browser checks cover actual empty balances, fail-closed payments, accessibility and mobile width.
 
-Added locally: concrete Stripe transport, raw signature and authoritative event verification, pinned account/mode/version, frozen monthly/top-up price binding, constrained customer portal, cancellation ordering, matching-worker checkout admission, durable operator refund requests with read-only uncertain-outcome lookup, verified event recovery and scoped checkout/refund status screens. See [billing operations](BILLING.md).
+Added and deployed: concrete Stripe transport, raw signature and authoritative event verification, pinned account/mode/version, frozen monthly/top-up price binding, constrained customer portal, cancellation ordering, matching-worker checkout admission, durable operator refund requests with read-only uncertain-outcome lookup, verified event recovery and scoped checkout/refund status screens. See [billing operations](BILLING.md).
 
 Remaining: actual Stripe lifecycle acceptance, tax/discount/dispute policies, full operator dashboard and financial settlement reconciliation. Unsupported commercial adjustments remain held for review. Commercial terms and margin acceptance remain separate. Credits currently carry forward; there is no expiration scheduler or invented initial balance.
 
@@ -73,6 +73,10 @@ Implemented locally: invitation-aware registration, in-page existing-account sig
 Required internal work and verification: organization MFA policy; recovery and key-rotation procedures; billing/provider reconciliation operations; alerts and dead-letter visibility; backup and restore rehearsal with data assertions; realistic load/chaos tests; manual keyboard/screen-reader review; independent security review. Prove hosted business onboarding through approval/export without fabricating provider outcomes.
 
 ## Current release boundary
+
+Release `d5cb615` is deployed successfully on web and worker with all 27 migrations applied and runtime `studio-v14-stripe-billing`. Local and GitHub CI run `38941026255` pass 336 unit/database tests across 36 suites, 23 browser journeys, build/type checking and audit. One private-storage browser journey remains skipped. Hosted health returns 200, studio redirects signed-out users, and unauthenticated billing/connections return 401. Stripe lifecycle acceptance and commercial policy remain; generated-shot/audio production, social adapters, measured learning and enterprise assurance are still unfinished. See [Stripe release evidence](RELEASE-2026-10-16-STRIPE.md).
+
+### Previous typography release
 
 Release `952d4dc` is deployed successfully on web and worker with all 25 migrations applied and runtime `studio-v13-measured-type`. Local and GitHub CI run `38868944015` pass 299 unit/database tests across 34 suites, 22 browser journeys, build/type checking and audit. One private-storage browser journey remains skipped. Hosted health returns 200, studio redirects signed-out users, and unauthenticated connections/compositions return 401. The measured typography milestone is deployed; generated-shot/audio production, social adapters, Stripe, measured learning and enterprise assurance remain unfinished. See [typography release evidence](RELEASE-2026-10-16-TYPOGRAPHY.md).
 
