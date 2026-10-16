@@ -7,7 +7,7 @@ import { imageConfigurationHash, imageRates } from "../images/contracts";
 import { motionConfigurationHash } from "../video/limits";
 import { motionRendererAvailable } from "../video/render";
 
-export const WORKER_RUNTIME = "studio-v11-social-recovery";
+export const WORKER_RUNTIME = "studio-v12-social-oauth";
 export const HEARTBEAT_TTL_MS = 120_000;
 export function workerConfigurationHash() {
   return createHash("sha256").update(JSON.stringify({

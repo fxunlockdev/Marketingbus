@@ -324,6 +324,16 @@ hr {
   max-width: 410px;
   width: 100%;
 }
+.connection-return {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: clamp(20px, 5vw, 64px);
+  overflow-wrap: anywhere;
+}
+.connection-return h1 {
+  font-size: clamp(28px, 4vw, 42px);
+  margin: 16px 0 24px;
+}
 .auth-card h2 {
   font-size: 32px;
   font-weight: 450;

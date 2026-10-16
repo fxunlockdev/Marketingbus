@@ -16,6 +16,7 @@ import { videoStore } from "../src/lib/video/service";
 import { runOneEmail } from "../src/lib/identity/worker";
 import { expireIdentityArtifacts } from "../src/lib/identity/service";
 import { configuredSocialAdapters } from "../src/lib/social/contracts";
+import { expireSocialOAuth } from "../src/lib/social/oauth";
 import { runOnePublication, runOneMetricSync, recoverSocialLeases, runOneReconciliation } from "../src/lib/social/worker";
 let stopping = false;
 let lastHealthyAt = 0;
@@ -56,6 +57,7 @@ async function main() {
       if (Date.now() - lastRetentionCheck > 300000) {
         lastRetentionCheck = Date.now();
         await expireIdentityArtifacts();
+        await expireSocialOAuth();
         // Separate from paid work. Each pass is bounded, and ambiguous deletes retain their tombstone.
         if (process.env.ASSET_S3_ENDPOINT) {
           try {

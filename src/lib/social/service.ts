@@ -70,8 +70,14 @@ export async function invalidatePublications(
 }
 
 // Server-only completion hook for a verified OAuth exchange. No generic token-ingestion HTTP route.
-// The future callback must verify one-use state, session, account ownership and granted scopes first.
+// Callers must verify one-use state, session, account ownership and granted scopes first.
 export async function saveVerifiedConnection(scope: Scope, raw: unknown) {
+  return db.$transaction(async (tx) => {
+    await lockBusiness(tx, scope);
+    return saveVerifiedConnectionInTransaction(tx, scope, raw);
+  });
+}
+export async function saveVerifiedConnectionInTransaction(tx: Prisma.TransactionClient, scope: Scope, raw: unknown) {
   const input = z
     .object({
       provider: socialProvider,
@@ -83,8 +89,6 @@ export async function saveVerifiedConnection(scope: Scope, raw: unknown) {
     })
     .strict()
     .parse(raw);
-  return db.$transaction(async (tx) => {
-    await lockBusiness(tx, scope);
     await assertNoPublicationInFlight(tx, scope.businessId);
     const existing = await tx.socialConnection.findUnique({
       where: {
@@ -127,7 +131,6 @@ export async function saveVerifiedConnection(scope: Scope, raw: unknown) {
       },
     });
     return { id };
-  });
 }
 export async function manageSocial(
   scope: Scope,

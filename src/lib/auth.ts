@@ -14,6 +14,12 @@ export async function session() {
 export async function requireUser() {
   const user = await session(); if (!user) throw new AppError(401, "Please sign in."); return user;
 }
+// Never return the raw session cookie to a service or the browser.
+export async function requireSessionId() {
+  const token = (await cookies()).get(cookieName)?.value;
+  if (!token) throw new AppError(401, "Please sign in.");
+  return digest(token);
+}
 export async function startSession(userId: string, expectedAuthVersion: number) {
   await endSession();
   const token = randomBytes(32).toString("base64url");

@@ -28,6 +28,7 @@ model Session {
   expiresAt DateTime
   authVersion Int @default(0)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  socialFlows SocialOAuthFlow[]
 
   @@index([userId])
   @@index([expiresAt])
@@ -118,6 +119,7 @@ model Business {
   storyboards       VideoStoryboard[]
   motionRenders     MotionRender[]
   socialConnections SocialConnection[]
+  socialFlows SocialOAuthFlow[]
   publications SocialPublication[]
   compositions StaticComposition[]
   compositionExports CompositionExport[]
@@ -129,6 +131,27 @@ model Business {
 
   @@unique([id, organizationId])
   @@index([organizationId])
+}
+
+model SocialOAuthFlow {
+  id String @id
+  businessId String
+  organizationId String
+  actorId String
+  sessionId String
+  provider String
+  stateHash String @unique
+  configurationHash String
+  status String @default("PENDING")
+  encryptedVerifier String?
+  encryptedCandidates String?
+  errorCode String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  @@index([businessId, sessionId, createdAt])
+  @@index([expiresAt])
 }
 
 model KnowledgeSource {

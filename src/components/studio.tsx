@@ -30,6 +30,7 @@ import { BrandForm, presets } from "./brand-form";
 import { AssetLibrary } from "./asset-library";
 import { KnowledgeLibrary } from "./knowledge-library";
 import { SocialDashboard } from "./social-dashboard";
+import { SocialConnections } from "./social-connections";
 import { CompositionEditor } from "./composition-editor";
 import { VideoStudio } from "./video-studio";
 import { TeamPanel } from "./team-panel";
@@ -867,28 +868,7 @@ export function Studio({
                     title="Publishing destinations"
                     description="Your business's social accounts for publishing approved content and tracking performance."
                   />
-                  <section className="panel">
-                    <h2>Social accounts</h2>
-                    <p className="muted">
-                      Instagram, Facebook, LinkedIn, X and YouTube integrations
-                      require official OAuth setup and platform-specific
-                      permissions. No account is connected or able to publish
-                      yet.
-                    </p>
-                    <div className="tag-row">
-                      {[
-                        "Instagram",
-                        "Facebook",
-                        "LinkedIn",
-                        "X",
-                        "YouTube",
-                      ].map((s) => (
-                        <span className="tag" key={s}>
-                          {s} · not connected
-                        </span>
-                      ))}
-                    </div>
-                  </section>
+                  {business ? <SocialConnections key={business.id} businessId={business.id} /> : <p>Create or select a business to manage its publishing destinations.</p>}
                 </>
               )}
               {page === "Credits" && (

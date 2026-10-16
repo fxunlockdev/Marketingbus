@@ -10,7 +10,9 @@ const config: NextConfig = {
       { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
       { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
       { key: "Content-Security-Policy", value: `default-src 'self'; script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'` }
-    ]}];
+    ]},
+    { source: "/api/social/:provider/callback", headers: [{ key: "Referrer-Policy", value: "no-referrer" }] },
+    { source: "/social-connect", headers: [{ key: "Referrer-Policy", value: "no-referrer" }] }];
   }
 };
 export default config;

@@ -50,7 +50,9 @@ Existing foundation: encrypted token records, exact-revision publishing queue, r
 
 Added and deployed: frozen text-payload integrity at submission and lookup; invalid-record queue isolation; one leased lookup per worker tick; five-check ceiling and persisted backoff; no resend after uncertain outcomes; destination/credential/snapshot revalidation before receipt persistence; atomic receipt/audit; clear stopped-lookup UI; audited privileged lookup resumption with replay protection. The additive migration `20261015230000_social_reconciliation` records attempt counts and eligibility times. Both services run runtime `studio-v11-social-recovery`. See [social operations](SOCIAL-AND-COMPOSITION.md).
 
-Required internal work: OAuth start/callback/state and supported PKCE; scope validation; refresh/revocation handling; platform adapters and immutable media transfer; operator reconciliation screens and alerts; metric-definition mappings and attribution windows. Test replayed callbacks, cross-workspace account binding, expired tokens, ambiguous publish results, duplicate webhooks and missing metrics. Meta/LinkedIn access approvals and designated live accounts remain external gates. Do not claim a post was published without a verified platform receipt.
+Added locally: provider-neutral OAuth start/callback with mandatory S256 PKCE, session/business/provider binding, one-use state, encrypted temporary account choices, explicit owner/admin selection, atomic activation and temporary-secret cleanup. The publishing-only Connections screen now shows actual scoped records, unavailable destinations and pending-request cancellation. Migration `20261016030000_social_oauth` adds temporary flows; runtime `studio-v12-social-oauth` cleans expired rows. The production OAuth registry is empty and has no fixture adapter.
+
+Required internal work: verified official authorization/exchange/account-discovery adapters; platform-specific token audience, management-right and permission checks; refresh/revocation handling; publishing adapters and immutable media transfer; operator reconciliation screens and alerts; metric-definition mappings and attribution windows. Test actual permission denial, duplicate webhooks and missing metrics with approved accounts. Meta/LinkedIn access approvals and designated live accounts remain external gates. Do not claim a post was published without a verified platform receipt.
 
 ## Module 6 Learning and bounded automation
 
@@ -67,6 +69,8 @@ Implemented locally: invitation-aware registration, in-page existing-account sig
 Required internal work and verification: organization MFA policy; recovery and key-rotation procedures; billing/provider reconciliation operations; alerts and dead-letter visibility; backup and restore rehearsal with data assertions; realistic load/chaos tests; manual keyboard/screen-reader review; independent security review. Prove hosted business onboarding through approval/export without fabricating provider outcomes.
 
 ## Current release boundary
+
+The OAuth application workflow is built locally and has passed 288 unit/database tests across 33 suites, 22 browser journeys, a production build and dependency audit. One private-storage journey remains skipped. Deployment is pending for this update; the release below remains the deployed baseline until it finishes.
 
 Release `53c5b1e` is deployed successfully on web and worker with all 23 migrations applied. Local and GitHub CI run `38773733797` pass 271 tests across 32 suites, 20 browser journeys, build and audit; one private-storage case is skipped. Hosted health and unauthenticated social denial pass. The bounded recovery loop has no live platform adapter and made no real publication or provider request. OAuth, platform media transfer, operator screens, generated-shot production and measured learning remain incomplete.
 
