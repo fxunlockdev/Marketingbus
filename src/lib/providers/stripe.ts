@@ -7,7 +7,7 @@ import { billingTermsHash } from "../billing/terms";
 // Snapshot contracts are pinned deliberately. The webhook destination must use
 // this same API version; unsupported versions are never guessed or translated.
 export const STRIPE_API_VERSION = "2024-06-20";
-const id = (prefix: string) => z.string().regex(new RegExp(`^${prefix}_[A-Za-z0-9]+$`)).max(200);
+const id = (prefix: string) => z.string().regex(new RegExp(`^${prefix}_[A-Za-z0-9_]+$`)).max(200);
 const seconds = z.number().int().positive().max(4102444800);
 const money = z.number().int().nonnegative().max(1000000);
 const metadata = z.object({ app: z.literal("marketingbus"), checkout_id: z.string().min(1).max(200), organization_id: z.string().min(1).max(200), terms_hash: z.string().regex(/^[a-f0-9]{64}$/), price_id: id("price") });
