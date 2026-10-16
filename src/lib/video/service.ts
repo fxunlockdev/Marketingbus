@@ -49,7 +49,7 @@ export async function listVideo(scope: Scope) {
   return { canEdit: ["OWNER", "ADMIN", "EDITOR"].includes(member.role),
     storyboards: await db.videoStoryboard.findMany({ where, orderBy: { createdAt: "desc" }, take: 100 }),
     assets: (await eligibleMotionAssets(db, scope, business.version)).map(a => ({ id: a.id, sha256: a.sha256, label: a.label, purpose: a.purpose, generated: a.generationId !== null })),
-    renders: await db.motionRender.findMany({ where, orderBy: { createdAt: "desc" }, take: 50, select: { id: true, storyboardId: true, status: true, durationMs: true, bytes: true, createdAt: true, purgeAfter: true, errorCode: true } }),
+    renders: await db.motionRender.findMany({ where, orderBy: { createdAt: "desc" }, take: 50, select: { id: true, storyboardId: true, rendererVersion: true, status: true, durationMs: true, bytes: true, createdAt: true, purgeAfter: true, errorCode: true } }),
   };
 }
 export async function manageVideo(scope: Scope, raw: unknown, storage: () => AssetStore = videoStore) {
@@ -91,7 +91,7 @@ export async function manageVideo(scope: Scope, raw: unknown, storage: () => Ass
         await tx.motionRender.update({ where: { id: render.id }, data: { status: "ARCHIVED", approvedBy: null, purgeAfter: new Date(Date.now() + 7 * 86400000) } });
       } else {
         const ctx = await storyboardContext(scope, render.storyboardId, tx);
-        if (ctx.row.status !== "APPROVED" || motionHash(ctx.document) !== render.documentHash || !["READY", "APPROVED", "REJECTED"].includes(render.status) || render.purgeAfter <= new Date()) throw new AppError(409, "Only a current verified render can be reviewed.");
+        if (render.rendererVersion !== MOTION_RENDERER_VERSION || ctx.row.status !== "APPROVED" || motionHash(ctx.document) !== render.documentHash || !["READY", "APPROVED", "REJECTED"].includes(render.status) || render.purgeAfter <= new Date()) throw new AppError(409, "Only a current verified render can be reviewed.");
         await assertReviewer(tx, scope, business.independentApproval, ctx.row.authorId);
         if (input.action === "approve-render" && input.continuityReviewed !== true) throw new AppError(400, "Watch the complete video and confirm continuity, caption and brand review.");
         await tx.motionRender.update({ where: { id: render.id }, data: { status: input.action === "approve-render" ? "APPROVED" : "REJECTED", approvedBy: input.action === "approve-render" ? scope.actorId : null } });

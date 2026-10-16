@@ -34,7 +34,9 @@ Added locally: Gemini REST image transport and a complete supporting-artwork job
 
 Failures before submission release credits; unknown supplier outcomes retain the hold for operator reconciliation without another call. Known-cost but invalid/stale output releases customer credits and records supplier expense. Ambiguous stored media remains private and is queued for seven-day cleanup. An approval replay does not invalidate a previously approved composition. See [image operations](IMAGE-PRODUCTION.md).
 
-Remaining internal work: automated semantic visual-claim checks, calibrated fidelity/revision-adherence evaluation, professional typography and social media-transfer linkage. The current acceptance gate is explicit human visual review, not automated fidelity certification. Live Gemini capabilities/prices, real bucket behavior and output quality remain unverified. No paid Gemini calls were made.
+Added and locally verified: bundled Figtree outlines, measured kerning/wrapping and ink bounds, explicit overflow/unsupported-character rejection, font fingerprints in exports and renderer-version-bound approval. Old approvals require preview and explicit reapproval; old stored bytes are retained rather than overwritten. Motion captions share the measured renderer. See [typography release evidence](RELEASE-2026-10-16-TYPOGRAPHY.md).
+
+Remaining internal work: automated semantic visual-claim checks, calibrated fidelity/revision-adherence evaluation, broader template art direction, custom/multilingual fonts and social media-transfer linkage. The current acceptance gate is explicit human visual review, not automated fidelity certification. Live Gemini capabilities/prices, real bucket behavior and output quality remain unverified. No paid Gemini calls were made.
 
 ## Module 4 Video and motion
 
@@ -69,6 +71,8 @@ Implemented locally: invitation-aware registration, in-page existing-account sig
 Required internal work and verification: organization MFA policy; recovery and key-rotation procedures; billing/provider reconciliation operations; alerts and dead-letter visibility; backup and restore rehearsal with data assertions; realistic load/chaos tests; manual keyboard/screen-reader review; independent security review. Prove hosted business onboarding through approval/export without fabricating provider outcomes.
 
 ## Current release boundary
+
+The measured typography update passes 299 unit/database tests across 34 suites and all 22 browser journeys, build/type checking and audit locally. One private-storage browser journey remains skipped. Migration 25 and runtime `studio-v13-measured-type` are ready for deployment; production still runs the prior release below until both services are verified. See [typography release evidence](RELEASE-2026-10-16-TYPOGRAPHY.md).
 
 Release `5af22d3` is deployed successfully on web and worker with all 24 migrations applied and runtime `studio-v12-social-oauth`. Local and GitHub CI run `38864919029` pass 288 unit/database tests across 33 suites, 22 browser journeys, production build and audit. One private-storage journey remains skipped. Hosted health, signed-out access denial and callback no-referrer/recovery behavior pass. This completes the provider-neutral account-connection workflow, not live OAuth adapters or the remaining product modules. See [release evidence](RELEASE-2026-10-16-OAUTH.md).
 

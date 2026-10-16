@@ -102,6 +102,25 @@ test("compose, preview, approve, export; honest analytics and owner protections"
     const download = page.waitForEvent("download");
     await page.getByRole("button", { name: "Download PNG" }).click();
     expect((await download).suggestedFilename()).toBe("creative-square.png");
+    const composition = await db.staticComposition.findFirstOrThrow({ where: { itemId: item.id } });
+    const svg = await page.request.get(`/api/businesses/${id}/compositions?export=${composition.id}&format=svg`);
+    expect(svg.ok()).toBe(true);
+    const outlines = await svg.text();
+    expect(outlines).toContain("<path"); expect(outlines).not.toContain("<text");
+    // Simulate a pre-upgrade approval only in the explicitly local fixture DB.
+    await db.staticComposition.update({ where: { id: composition.id }, data: { approvedRendererVersion: null } });
+    expect((await page.request.get(`/api/businesses/${id}/compositions?export=${composition.id}`)).status()).toBe(409);
+    expect((await page.request.post(`/api/businesses/${id}/compositions`, { headers, data: { action: "approve", itemId: item.id, version: 1 } })).status()).toBe(400);
+    await page.reload();
+    await page.getByRole("button", { name: "Design studio", exact: true }).click();
+    await page.getByLabel("Creative", { exact: true }).selectOption(item.id);
+    await expect(page.getByText("Typography has changed since this layout was approved.", { exact: false })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Download PNG" })).toBeDisabled();
+    await page.getByRole("button", { name: "Render saved preview" }).click();
+    await expect(image).toBeVisible();
+    await image.screenshot({ path: "../outputs/marketingbus-measured-typography.png" });
+    await page.getByRole("button", { name: "Approve saved composition" }).click();
+    await expect(page.getByRole("button", { name: "Download PNG" })).toBeEnabled();
     const savedExports = page.getByRole("region", { name: "Saved publishing exports" });
     await expect(savedExports.getByRole("button", { name: "Save approved square export" })).toBeEnabled();
     if (!process.env.ASSET_S3_ENDPOINT) {

@@ -1,7 +1,9 @@
 import { db } from "@/lib/db";
+import { typographyManifest } from "@/lib/typography";
 export const dynamic="force-dynamic";
 export async function GET() {
   try {
+    typographyManifest();
     // Connectivity alone cannot detect an unapplied initial migration.
     await db.$queryRaw`SELECT "id", "emailVerifiedAt", "authVersion" FROM "User" LIMIT 0`;
     await db.$queryRaw`SELECT "authVersion" FROM "Session" LIMIT 0`;
@@ -31,7 +33,7 @@ export async function GET() {
     await db.$queryRaw`SELECT "payloadHash", "metricsLeaseUntil", "reconciliationAttempts", "nextReconciliationAt" FROM "SocialPublication" LIMIT 0`;
     await db.$queryRaw`SELECT "definitionVersion" FROM "MetricSnapshot" LIMIT 0`;
     await db.$queryRaw`SELECT "evidence" FROM "LearningProposal" LIMIT 0`;
-    await db.$queryRaw`SELECT "document" FROM "StaticComposition" LIMIT 0`;
+    await db.$queryRaw`SELECT "document", "approvedRendererVersion" FROM "StaticComposition" LIMIT 0`;
     await db.$queryRaw`SELECT "manifest", "leaseUntil", "purgeAfter" FROM "CompositionExport" LIMIT 0`;
     await db.$queryRaw`SELECT "outboxId" FROM "TeamInvitation" LIMIT 0`;
     await db.$queryRaw`SELECT "actorId" FROM "TeamEvent" LIMIT 0`;

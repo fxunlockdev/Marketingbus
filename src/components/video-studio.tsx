@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
+import { MOTION_RENDERER_VERSION } from "@/lib/video/version";
 import { storyboardDocument, subtitleVtt, totalDuration, type StoryboardDocument } from "@/lib/video/document";
 type Board = { id: string; itemId: string; version: number; status: string; document: StoryboardDocument; shotApprovals: { shotId: string }[] };
-type Render = { id: string; storyboardId: string; status: string; durationMs: number; errorCode: string | null };
+type Render = { id: string; storyboardId: string; rendererVersion: string; status: string; durationMs: number; errorCode: string | null };
 type Asset = { id: string; sha256: string; label: string; purpose: string; generated: boolean };
 export function VideoStudio({ businessId, items }: { businessId: string; items: { id: string; title: string }[] }) {
   const [boards, setBoards] = useState<Board[]>([]), [renders, setRenders] = useState<Render[]>([]), [assets, setAssets] = useState<Asset[]>([]), [canEdit, setCanEdit] = useState(false), [itemId, setItemId] = useState(""), [boardId, setBoardId] = useState(""), [document, setDocument] = useState<StoryboardDocument | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState(""), [message, setMessage] = useState(""), [preview, setPreview] = useState(""), [captions, setCaptions] = useState(""), [watched, setWatched] = useState(false), [confirmRemove, setConfirmRemove] = useState(false);
@@ -70,10 +71,11 @@ export function VideoStudio({ businessId, items }: { businessId: string; items: 
         <button className="button dark" disabled={readonly || dirty || board.status !== "APPROVED"} onClick={() => act({ action: "render", storyboardId: board.id })}>Render approved storyboard</button>
         {board.status !== "APPROVED" && <p>Approve every saved shot and the complete storyboard to enable rendering.</p>}
         {render && <><p role="status">Render: {render.status.replaceAll("_", " ").toLowerCase()}</p>
+          {render.rendererVersion !== MOTION_RENDERER_VERSION && <p role="status">This video uses an older renderer. Render the approved storyboard again and review the new caption layout before approval or download. The original stored file is retained until its scheduled cleanup.</p>}
           {render.status === "QUEUED" && <button className="button" disabled={busy || !canEdit} onClick={() => act({ action: "cancel-render", renderId: render.id })}>Cancel queued render</button>}
           {["RUNNING", "STORING"].includes(render.status) && <p>Rendering or storage is in progress. Refresh to check completion; you can remove the output once it settles.</p>}
           {render.status === "FAILED" && <><p>No verified video is available. Check whether storage completed, or save a new storyboard version to explicitly request another render.</p><button className="button" disabled={readonly} onClick={() => act({ action: "recover-render", renderId: render.id })}>Check stored video · no rerender</button></>}
-          {["READY", "APPROVED", "REJECTED"].includes(render.status) && <><button className="button" disabled={busy || dirty} onClick={() => media("mp4", false)}>Preview saved video</button>
+          {render.rendererVersion === MOTION_RENDERER_VERSION && ["READY", "APPROVED", "REJECTED"].includes(render.status) && <><button className="button" disabled={busy || dirty} onClick={() => media("mp4", false)}>Preview saved video</button>
             {preview && <video controls playsInline preload="metadata" src={preview} aria-label="Saved silent motion reel for final review" style={{ maxWidth: "100%", maxHeight: 650 }}><track kind="captions" src={captions} srcLang="en" label="On-screen captions" default /></video>}
             <label className="checkbox-label"><input type="checkbox" checked={watched} onChange={e => setWatched(e.target.checked)} /> I watched the complete saved video and reviewed continuity, captions and brand fidelity.</label>
             <div className="tag-row"><button className="button" disabled={readonly || dirty || !preview || !watched} onClick={() => act({ action: "approve-render", renderId: render.id, continuityReviewed: true })}>Approve finished video</button><button className="button" disabled={readonly || dirty} onClick={() => act({ action: "reject-render", renderId: render.id })}>Reject finished video</button></div>

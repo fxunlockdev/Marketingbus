@@ -6,6 +6,7 @@ import { isAbsolute, join } from "node:path";
 import sharp from "sharp";
 import { storyboardDocument, totalDuration, type StoryboardDocument } from "./document";
 import { MAX_VIDEO_BYTES, motionDailyLimit } from "./limits";
+import { outlinedText, typographyManifest } from "../typography";
 const exec = promisify(execFile);
 const width = 720, height = 1280, fps = 24;
 export type MotionResult = { bytes: Buffer; durationMs: number; width: number; height: number };
@@ -19,23 +20,13 @@ const childEnv: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin", LANG: "C", NODE_ENV
 let probe: { key: string; until: number; ok: boolean } | undefined;
 export async function motionRendererAvailable() {
   try {
+    typographyManifest();
     motionDailyLimit(); const paths = binaries(), key = JSON.stringify(paths);
     if (probe?.key === key && probe.until > Date.now()) return probe.ok;
     const results = await Promise.all([exec(paths.ffmpeg, ["-hide_banner", "-encoders"], { timeout: 5000, maxBuffer: 1000000, env: childEnv, encoding: "utf8" }), exec(paths.ffprobe, ["-version"], { timeout: 5000, maxBuffer: 100000, env: childEnv, encoding: "utf8" })]);
     const ok = /\blibx264\b/.test(results[0].stdout) && /ffprobe version/.test(results[1].stdout);
     probe = { key, until: Date.now() + 60000, ok }; return ok;
   } catch { return false; }
-}
-const escape = (value: string) => value.replace(/[<>&"']/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" }[c]!));
-function captionLines(caption: string) {
-  const lines: string[] = []; let line = "";
-  for (const word of caption.split(/\s+/)) {
-    if (word.length > 27) throw Error("A caption word does not fit. Shorten it before rendering.");
-    if ((line + " " + word).trim().length > 27) { lines.push(line); line = word; } else line = (line + " " + word).trim();
-  }
-  if (line) lines.push(line);
-  if (lines.length > 6) throw Error("Caption does not fit the safe area.");
-  return lines;
 }
 export async function renderShotFrame(document: StoryboardDocument, index: number, assets: Map<string, Uint8Array>) {
   const shot = document.shots[index], parts = [`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="${document.background}"/>`];
@@ -48,7 +39,7 @@ export async function renderShotFrame(document: StoryboardDocument, index: numbe
   if (shot.asset) await image(shot.asset.id, 56, 240, 608, 620);
   // Fixed dark caption panel gives predictable contrast regardless of brand colour.
   parts.push('<rect x="36" y="906" width="648" height="310" rx="20" fill="#18212b"/>');
-  captionLines(shot.caption).forEach((line, n) => parts.push(`<text x="62" y="958" fill="#ffffff" font-family="sans-serif" font-weight="600" font-size="36" transform="translate(0 ${n * 44})">${escape(line)}</text>`));
+  parts.push(outlinedText(shot.caption, { x: 62, y: 922, width: 596, height: 264, fontSize: 36, lineHeight: 44, maxLines: 6, weight: 600, color: "#ffffff" }).svg);
   parts.push("</svg>");
   return sharp(Buffer.from(parts.join("")), { limitInputPixels: width * height }).png().toBuffer();
 }

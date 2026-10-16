@@ -29,6 +29,11 @@ suite("actual local FFmpeg rendering", () => {
     const frame = await renderShotFrame(d, 0, new Map([["original", bytes]]));
     expect(await sharp(frame).metadata()).toMatchObject({ width: 720, height: 1280, format: "png" });
   });
+  it("rejects unsupported captions and measured overflow before encoding", async () => {
+    for (const caption of ["An emoji 🚀", "W".repeat(100)]) {
+      await expect(renderShotFrame({ ...document, shots: [{ ...document.shots[0], caption }] }, 0, new Map())).rejects.toThrow();
+    }
+  });
   it("refuses overlapping local renders instead of overloading the process", async () => {
     const first = renderMotion(document, new Map());
     await expect(renderMotion(document, new Map())).rejects.toThrow("busy"); await first;

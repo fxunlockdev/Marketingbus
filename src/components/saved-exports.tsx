@@ -1,7 +1,8 @@
 "use client";
 import { useCallback, useEffect, useId, useState } from "react";
 import type { Placement } from "@/lib/composition/document";
-type Export = { id: string; compositionId: string; placement: string; status: string; bytes: number; sha256: string; purgeAfter: string };
+import { STATIC_RENDERER_VERSION } from "@/lib/composition/version";
+type Export = { id: string; compositionId: string; rendererVersion: string; placement: string; status: string; bytes: number; sha256: string; purgeAfter: string };
 export function SavedExports({ businessId, compositionId, placement, approved }: { businessId: string; compositionId: string; placement: Placement; approved: boolean }) {
   const uid = useId(), endpoint = `/api/businesses/${businessId}/exports`;
   const [rows, setRows] = useState<Export[]>([]), [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState(""), [removing, setRemoving] = useState("");
@@ -28,7 +29,8 @@ export function SavedExports({ businessId, compositionId, placement, approved }:
     {!approved && <p className="small">Approve the saved copy and composition before saving a publishing export.</p>}
     {!rows.length && <p>No saved exports yet. The regular preview and download controls remain available above.</p>}
     {rows.map(row => <article key={row.id} className="export-row"><h3>{row.placement} · {row.compositionId === compositionId ? "selected layout" : "another layout version"}</h3><p>{row.status.toLowerCase()} · {(row.bytes / 1024).toFixed(0)} KB · cleanup after {new Date(row.purgeAfter).toLocaleDateString()}</p>
-      {row.status === "READY" && <button className="button secondary" type="button" disabled={busy} onClick={() => download(row)}>Download saved {row.placement}</button>}
+      {row.rendererVersion !== STATIC_RENDERER_VERSION && <p className="small">Created with an older renderer. Review the current preview and save a new approved export. This file is retained until its scheduled cleanup.</p>}
+      {row.status === "READY" && row.rendererVersion === STATIC_RENDERER_VERSION && <button className="button secondary" type="button" disabled={busy} onClick={() => download(row)}>Download saved {row.placement}</button>}
       {["FAILED", "STORING"].includes(row.status) && (row.sha256 ? <><p className="small">Storage is not verified. Check the existing object without submitting another upload.</p><button className="button secondary" type="button" disabled={busy} onClick={() => act({ action: "reconcile", exportId: row.id })}>Check storage outcome</button></> : <p className="small">No storage write has started. Once any active operation finishes, use Save approved export to retry this layout and canvas size.</p>)}
       {!["ARCHIVED", "DELETING"].includes(row.status) && (removing === row.id ? <div><p>Remove access to this saved export? It will be physically removed after seven days. Save a new layout version if you need another export.</p><button className="button secondary" type="button" disabled={busy} onClick={() => act({ action: "archive", exportId: row.id })}>Confirm export removal</button><button className="text-button" type="button" onClick={() => setRemoving("")}>Keep export</button></div> : <button className="text-button" type="button" disabled={busy} onClick={() => setRemoving(row.id)}>Remove saved {row.placement}</button>)}
     </article>)}

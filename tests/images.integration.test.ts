@@ -62,7 +62,7 @@ suite("image production lifecycle", () => {
     await manageImage(f.scope, { action: "approve", generationId: id, fidelityReviewed: true }, () => store);
     const composition = await manageComposition(f.scope, { action: "create", itemId: f.item.id, revisionVersion: 1 });
     expect(JSON.stringify(composition.composition.document)).toContain((await row(id)).output!.id); expect(JSON.stringify(composition.composition.document)).toContain(logo.asset.id);
-    await manageComposition(f.scope, { action: "approve", itemId: f.item.id, version: composition.composition.version });
+    await manageComposition(f.scope, { action: "approve", rendererVersion: "static-outlines-v2", itemId: f.item.id, version: composition.composition.version });
     expect((await exportComposition(f.scope, composition.composition.id, "square", false, store)).width).toBe(1080);
     await manageImage(f.scope, { action: "reject", generationId: id }, () => store);
     await expect(exportComposition(f.scope, composition.composition.id, "square", false, store)).rejects.toThrow("changed");
@@ -157,7 +157,7 @@ suite("image production lifecycle", () => {
     const id = await accept(f); await runOneImage(f.generate, () => store);
     await manageImage(f.scope, { action: "approve", generationId: id, fidelityReviewed: true }, () => store);
     const { composition } = await manageComposition(f.scope, { action: "create", itemId: f.item.id, revisionVersion: 1 });
-    await manageComposition(f.scope, { action: "approve", itemId: f.item.id, version: composition.version });
+    await manageComposition(f.scope, { action: "approve", rendererVersion: "static-outlines-v2", itemId: f.item.id, version: composition.version });
     await changeAsset(f.scope, ref.asset.id, { action: "approve", approved: false });
     await expect(exportComposition(f.scope, composition.id, "square", false, store)).rejects.toThrow("reference changed");
   });
@@ -166,7 +166,7 @@ suite("image production lifecycle", () => {
     const approval = { action: "approve", generationId: id, fidelityReviewed: true };
     await manageImage(f.scope, approval, () => store);
     const { composition } = await manageComposition(f.scope, { action: "create", itemId: f.item.id, revisionVersion: 1 });
-    await manageComposition(f.scope, { action: "approve", itemId: f.item.id, version: composition.version });
+    await manageComposition(f.scope, { action: "approve", rendererVersion: "static-outlines-v2", itemId: f.item.id, version: composition.version });
     await manageImage(f.scope, approval, () => store);
     expect((await db.staticComposition.findUniqueOrThrow({ where: { id: composition.id } })).status).toBe("APPROVED");
   });

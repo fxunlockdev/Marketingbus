@@ -8,12 +8,14 @@ import { assetStore, type AssetStore } from "../assets/storage";
 import { MAX_IMAGE_BYTES } from "../assets/images";
 import { compositionContext, exportComposition } from "./service";
 import { placements, type Placement } from "./document";
-export const EXPORT_RENDERER_VERSION = "static-png-v1";
+import { STATIC_RENDERER_VERSION } from "./version";
+import { typographyManifest } from "../typography";
+export const EXPORT_RENDERER_VERSION = STATIC_RENDERER_VERSION;
 const MAX_BUSINESS_EXPORT_BYTES = 50 * 1024 * 1024;
 const hash = (data: string | Uint8Array) => createHash("sha256").update(data).digest("hex");
 export const exportFields = { id: true, compositionId: true, placement: true, status: true, bytes: true, sha256: true, rendererVersion: true, manifest: true, createdAt: true, purgeAfter: true } as const;
 function manifest(ctx: Awaited<ReturnType<typeof compositionContext>>, placement: Placement) {
-  return { version: 1, renderer: EXPORT_RENDERER_VERSION, compositionId: ctx.composition.id, compositionVersion: ctx.composition.version,
+  return { version: 2, renderer: EXPORT_RENDERER_VERSION, typography: typographyManifest(), compositionId: ctx.composition.id, compositionVersion: ctx.composition.version,
     revisionId: ctx.composition.revisionId, brandVersion: ctx.composition.brandVersion, placement,
     width: placements[placement][0], height: placements[placement][1], documentHash: hash(JSON.stringify(ctx.document)), copyHash: hash(JSON.stringify(ctx.copy)),
     assets: ctx.assets.map(a => ({ id: a.id, sha256: a.sha256 })).sort((a, b) => a.id.localeCompare(b.id)),
@@ -24,9 +26,9 @@ async function assertReader(scope: Scope, client: Pick<Prisma.TransactionClient,
 }
 async function assertCurrent(scope: Scope, row: CompositionExport, client: Prisma.TransactionClient | typeof db = db) {
   const ctx = await compositionContext(scope, row.compositionId, false, client);
+  if (row.rendererVersion !== EXPORT_RENDERER_VERSION) throw new AppError(409, "Create an export with the current renderer.");
   // PostgreSQL JSONB may reorder keys; compare canonical values, not insertion order.
   if (canonical(row.manifest) !== canonical(manifest(ctx, row.placement as Placement))) throw new AppError(409, "The export no longer matches the approved brand, copy or assets.");
-  if (row.rendererVersion !== EXPORT_RENDERER_VERSION) throw new AppError(409, "Create an export with the current renderer.");
 }
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;

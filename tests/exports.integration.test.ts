@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { db } from "../src/lib/db";
-import { manageComposition } from "../src/lib/composition/service";
+import { manageComposition, compositionContext } from "../src/lib/composition/service";
 import { saveCompositionExport, readCompositionExport, listCompositionExports, reconcileCompositionExport, archiveCompositionExport, purgeCompositionExports } from "../src/lib/composition/exports";
 import { changeAsset, uploadAsset } from "../src/lib/assets/service";
 import type { AssetStore } from "../src/lib/assets/storage";
@@ -24,9 +24,28 @@ suite("immutable approved exports", () => {
     }
     const itemId = plan.items[0].id;
     const made = await manageComposition(scope, { action: "create", itemId, revisionVersion: 1 });
-    await manageComposition(scope, { action: "approve", itemId, version: 1 });
+    await manageComposition(scope, { action: "approve", rendererVersion: "static-outlines-v2", itemId, version: 1 });
     return { scope, itemId, composition: made.composition, assetId };
   }
+  it("requires explicit current-renderer approval before upgrading legacy exports", async () => {
+    const f = await setup(), saved = await saveCompositionExport(f.scope, f.composition.id, "square", store);
+    const old = await db.compositionExport.update({ where: { id: saved.id }, data: { rendererVersion: "static-legacy" } });
+    const originalBytes = Buffer.from(objects.get(old.objectKey)!);
+    await db.staticComposition.update({ where: { id: f.composition.id }, data: { approvedRendererVersion: null } });
+    expect((await compositionContext(f.scope, f.composition.id, true)).composition.id).toBe(f.composition.id);
+    const writes = vi.mocked(store.put).mock.calls.length;
+    await expect(saveCompositionExport(f.scope, f.composition.id, "square", store)).rejects.toThrow("Typography has changed");
+    await expect(readCompositionExport(f.scope, old.id, store)).rejects.toThrow("Typography has changed");
+    for (const rendererVersion of [undefined, "static-legacy"]) await expect(manageComposition(f.scope, { action: "approve", itemId: f.itemId, version: 1, rendererVersion })).rejects.toThrow();
+    expect(vi.mocked(store.put).mock.calls.length).toBe(writes);
+    await manageComposition(f.scope, { action: "approve", itemId: f.itemId, version: 1, rendererVersion: "static-outlines-v2" });
+    await expect(readCompositionExport(f.scope, old.id, store)).rejects.toThrow("current renderer");
+    const replacement = await saveCompositionExport(f.scope, f.composition.id, "square", store);
+    expect(replacement.id).not.toBe(old.id); expect(objects.get(old.objectKey)).toEqual(originalBytes);
+    expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(0);
+    await db.compositionExport.update({ where: { id: replacement.id }, data: { manifest: { tamperedFont: true } } });
+    await expect(readCompositionExport(f.scope, replacement.id, store)).rejects.toThrow("no longer matches");
+  });
   it("persists an exact PNG once, reuses it and verifies the manifest and stored bytes", async () => {
     const f = await setup(), before = vi.mocked(store.put).mock.calls.length;
     const outcomes = await Promise.allSettled([1, 2].map(() => saveCompositionExport(f.scope, f.composition.id, "square", store)));
@@ -34,7 +53,7 @@ suite("immutable approved exports", () => {
     const saved = await saveCompositionExport(f.scope, f.composition.id, "square", store);
     expect(saved.reused).toBe(true); expect(vi.mocked(store.put).mock.calls.length - before).toBe(1);
     const entry = (await listCompositionExports(f.scope))[0];
-    expect(entry.manifest).toMatchObject({ compositionVersion: 1, brandVersion: 1, width: 1080, height: 1080, renderer: "static-png-v1" });
+    expect(entry.manifest).toMatchObject({ compositionVersion: 1, brandVersion: 1, width: 1080, height: 1080, renderer: "static-outlines-v2", typography: { version: "figtree-outlines-v1", family: "Figtree" } });
     const result = await readCompositionExport(f.scope, saved.id, store);
     expect((await sharp(result.bytes).metadata()).format).toBe("png"); expect(result.sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(vi.mocked(store.put).mock.calls.at(-1)?.slice(2)).toEqual(["image/png", true]);
@@ -103,7 +122,7 @@ suite("immutable approved exports", () => {
     await db.staticComposition.update({ where: { id: f.composition.id }, data: { status: "DRAFT" } });
     await expect(saveCompositionExport(f.scope, f.composition.id, "square", store)).rejects.toThrow("Approve");
     expect(await db.compositionExport.count({ where: { businessId: f.scope.businessId } })).toBe(0);
-    await manageComposition(f.scope, { action: "approve", itemId: f.itemId, version: 1 });
+    await manageComposition(f.scope, { action: "approve", rendererVersion: "static-outlines-v2", itemId: f.itemId, version: 1 });
     const saved = await saveCompositionExport(f.scope, f.composition.id, "square", store);
     await db.compositionExport.update({ where: { id: saved.id }, data: { purgeAfter: new Date(0) } });
     await expect(readCompositionExport(f.scope, saved.id, store)).rejects.toThrow("unavailable");

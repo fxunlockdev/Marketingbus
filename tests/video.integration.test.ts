@@ -57,6 +57,19 @@ suite("storyboard and motion lifecycle", () => {
     const document = storyboardDocument.parse((await board(f.id)).document); document.shots[0].asset = { id: asset.id, sha256: asset.sha256 };
     return (await manageVideo(f.scope, { action: "save", storyboardId: f.id, document }, () => store)).storyboardId!;
   }
+  it("blocks legacy renderer approval and download while retaining bytes and allowing a reviewed replacement", async () => {
+    const f = await setup(), id = await queue(f); await runOneMotion(f.renderer, () => store);
+    await manageVideo(f.scope, { action: "approve-render", renderId: id, continuityReviewed: true }, () => store);
+    const old = await db.motionRender.update({ where: { id }, data: { rendererVersion: "motion-legacy" } });
+    const originalBytes = Buffer.from(objects.get(old.objectKey)!);
+    await expect(manageVideo(f.scope, { action: "approve-render", renderId: id, continuityReviewed: true }, () => store)).rejects.toThrow("current verified render");
+    await expect(readMotion(f.scope, id, true, store)).rejects.toThrow("current storyboard");
+    const next = await manageVideo(f.scope, { action: "render", storyboardId: f.id }, () => store);
+    expect(next.renderId).not.toBe(id); await runOneMotion(f.renderer, () => store);
+    await expect(readMotion(f.scope, next.renderId!, true, store)).rejects.toThrow("awaiting approval");
+    expect(objects.get(old.objectKey)).toEqual(originalBytes);
+    expect((await listVideo(f.scope)).renders.find(r => r.id === id)?.rendererVersion).toBe("motion-legacy");
+  });
   it("reuses approved same-business artwork without generating or charging again", async () => {
     const f = await setup(), image = await artwork(f), storyboardId = await useArtwork(f, image.asset);
     expect((await listVideo(f.scope)).assets).toContainEqual(expect.objectContaining({ id: image.asset.id, generated: true }));

@@ -642,6 +642,7 @@ model StaticComposition {
   status String @default("DRAFT")
   authorId String?
   approvedBy String?
+  approvedRendererVersion String?
   createdAt DateTime @default(now())
   business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
   exports CompositionExport[]

@@ -11,6 +11,8 @@ import { canvasDocument, initialCanvas, type Placement } from "./document";
 import { renderCanvas } from "./render";
 import { assetStore, type AssetStore } from "../assets/storage";
 import { imageReferenceAssets } from "../images/service";
+import { STATIC_RENDERER_VERSION } from "./version";
+import { assertBrandEditor } from "../knowledge/analysis";
 export const compositionAction = z.discriminatedUnion("action", [
   z
     .object({
@@ -30,6 +32,7 @@ export const compositionAction = z.discriminatedUnion("action", [
   z
     .object({
       action: z.literal("approve"),
+      rendererVersion: z.literal(STATIC_RENDERER_VERSION),
       itemId: z.string().min(1),
       version: z.number().int().positive(),
     })
@@ -41,6 +44,7 @@ export async function manageComposition(scope: Scope, raw: unknown) {
     const business = await lockBusiness(tx, scope),
       item = await currentItem(tx, scope, input.itemId),
       revision = item.revisions[0];
+    await assertBrandEditor(tx, scope);
     if (
       !business.confirmedAt ||
       item.plan.brandVersion !== business.version ||
@@ -123,13 +127,13 @@ export async function manageComposition(scope: Scope, raw: unknown) {
         );
       const composition = await tx.staticComposition.update({
         where: { id: previous!.id },
-        data: { status: "APPROVED", approvedBy: scope.actorId },
+        data: { status: "APPROVED", approvedBy: scope.actorId, approvedRendererVersion: STATIC_RENDERER_VERSION },
       });
       await tx.auditEvent.create({
         data: {
           ...scope,
           action: "COMPOSITION_APPROVED",
-          detail: `Composition ${composition.id}, copy version ${revision.version}: explicit visual approval. Export checks still enforce asset permissions and layout fit.`,
+          detail: `Composition ${composition.id}, copy version ${revision.version}, renderer ${STATIC_RENDERER_VERSION}: explicit visual approval. Export checks still enforce asset permissions and layout fit.`,
         },
       });
       return { ok: true, composition };
@@ -211,6 +215,8 @@ export async function compositionContext(
         409,
         "Approve the exact copy and composition before downloading."
       );
+    if (!preview && composition.approvedRendererVersion !== STATIC_RENDERER_VERSION)
+      throw new AppError(409, "Typography has changed. Preview and approve this composition with the current renderer before downloading.");
     const document = canvasDocument.parse(composition.document);
     const images = document.layers.filter((l) => l.kind === "image");
     const assets = await client.brandAsset.findMany({

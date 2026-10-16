@@ -18,6 +18,7 @@ if (
 )
   throw Error("Local test DB required");
 suite("approved asset compositions", () => {
+  const users: string[] = [];
   const ids: string[] = [],
     objects = new Map<string, Buffer>();
   const store: AssetStore = {
@@ -32,6 +33,7 @@ suite("approved asset compositions", () => {
   afterAll(async () => {
     await db.brandAsset.deleteMany({ where: { organizationId: { in: ids } } });
     await db.organization.deleteMany({ where: { id: { in: ids } } });
+    await db.user.deleteMany({ where: { id: { in: users } } });
     await db.$disconnect();
   });
   async function setup() {
@@ -39,13 +41,16 @@ suite("approved asset compositions", () => {
       data: { name: "COMPOSITION FIXTURE" },
     });
     ids.push(org.id);
+    const user = await db.user.create({ data: { email: `composition-${crypto.randomUUID()}@example.test`, name: "Local composition fixture", passwordHash: "not-a-login" } });
+    users.push(user.id);
+    await db.membership.create({ data: { userId: user.id, organizationId: org.id, role: "OWNER" } });
     const business = await db.business.create({
       data: { organizationId: org.id, name: "Brand", confirmedAt: new Date() },
     });
     const scope = {
       businessId: business.id,
       organizationId: org.id,
-      actorId: "test",
+      actorId: user.id,
     };
     const plan = await db.productionPlan.create({
       data: {
@@ -120,6 +125,7 @@ suite("approved asset compositions", () => {
     ).toBe(1080);
     await manageComposition(ctx.scope, {
       action: "approve",
+      rendererVersion: "static-outlines-v2",
       itemId: ctx.itemId,
       version: 1,
     });
@@ -163,6 +169,7 @@ suite("approved asset compositions", () => {
     await expect(
       manageComposition(a.scope, {
         action: "approve",
+        rendererVersion: "static-outlines-v2",
         itemId: a.itemId,
         version: 1,
       })
@@ -181,6 +188,7 @@ suite("approved asset compositions", () => {
     await expect(
       manageComposition(a.scope, {
         action: "approve",
+        rendererVersion: "static-outlines-v2",
         itemId: a.itemId,
         version: 2,
       })

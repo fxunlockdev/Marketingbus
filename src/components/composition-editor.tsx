@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { SavedExports } from "./saved-exports";
 import { ImageProduction } from "./image-production";
+import { STATIC_RENDERER_VERSION } from "@/lib/composition/version";
 import {
   canvasDocument,
   placements,
@@ -14,6 +15,7 @@ type Composition = {
   revisionId: string;
   version: number;
   status: string;
+  approvedRendererVersion: string | null;
   document: CanvasDocument;
 };
 export function CompositionEditor({
@@ -277,10 +279,12 @@ export function CompositionEditor({
           <section className="panel">
             <h2>Preview and export</h2>
             <p>
-              Preview renders the saved layout. Oversized text is rejected
-              instead of silently cut off. Review every placement before using
-              it.
+              Preview renders the saved layout with measured Figtree typography.
+              Oversized text and unsupported characters are rejected instead of
+              silently changed. Review every placement before using it.
             </p>
+            <p className="muted">Latin and supported Latin-extended text are available. Emoji and other writing systems need additional fonts. SVG downloads contain fixed outlines; edit text through the copy and JSON layout, not the exported outlines.</p>
+            {composition.status === "APPROVED" && composition.approvedRendererVersion !== STATIC_RENDERER_VERSION && <p role="status">Typography has changed since this layout was approved. Render a new preview and approve it again before downloading.</p>}
             <label htmlFor="composition-placement">Canvas size</label>
             <select
               id="composition-placement"
@@ -309,13 +313,14 @@ export function CompositionEditor({
                 disabled={
                   busy ||
                   selected?.revisions[0]?.status !== "APPROVED" ||
-                  composition.status === "APPROVED"
+                  (composition.status === "APPROVED" && composition.approvedRendererVersion === STATIC_RENDERER_VERSION)
                 }
                 onClick={() =>
                   act({
                     action: "approve",
                     itemId,
                     version: composition.version,
+                    rendererVersion: STATIC_RENDERER_VERSION,
                   })
                 }
               >
@@ -344,7 +349,7 @@ export function CompositionEditor({
                 <button
                   key={format}
                   className="button"
-                  disabled={busy || composition.status !== "APPROVED"}
+                  disabled={busy || composition.status !== "APPROVED" || composition.approvedRendererVersion !== STATIC_RENDERER_VERSION}
                   onClick={() => download(format)}
                 >
                   Download {format.toUpperCase()}
@@ -352,7 +357,7 @@ export function CompositionEditor({
               ))}
             </div>
           </section>
-          <SavedExports businessId={businessId} compositionId={composition.id} placement={placement} approved={composition.status === "APPROVED" && selected?.revisions[0]?.status === "APPROVED"} />
+          <SavedExports businessId={businessId} compositionId={composition.id} placement={placement} approved={composition.status === "APPROVED" && composition.approvedRendererVersion === STATIC_RENDERER_VERSION && selected?.revisions[0]?.status === "APPROVED"} />
         </>
       )}
     </div>
