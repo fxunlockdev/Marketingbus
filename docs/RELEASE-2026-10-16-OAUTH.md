@@ -12,7 +12,9 @@ Local acceptance: 288 tests across 33 unit/database suites; 22 browser journeys;
 
 ## Deployment
 
-Pending. Both existing Railway services require migration `20261016030000_social_oauth` and runtime `studio-v12-social-oauth`. The migration is additive and is applied locally. The previous production release remains `53c5b1e` until the new deployments report success.
+Source release `5af22d301ed605cc4c7fd85989a0cc647b916709` is deployed on both existing Railway services. The web deployment `3441b2b9-f77a-4bd1-b2ae-92f1245e1302` and worker deployment `0294814a-d829-480b-902b-eed6c85235be` both reported SUCCESS. Migration `20261016030000_social_oauth` applied successfully; the worker confirmed no pending migrations among all 24. Both use runtime `studio-v12-social-oauth`.
+
+[GitHub CI run 38864919029](https://github.com/fxunlockdev/Marketingbus/actions/runs/38864919029) independently passed tests, build, browser journeys and audit. Read-only hosted checks returned health 200, studio 307 to login, unauthenticated connections 401 with no-store, callback 303 to the fixed recovery page with no-store/no-referrer, and recovery page 200 with no-referrer. The worker passed its private health check. No production test account or fixture was created. Authenticated live-provider acceptance remains separate.
 
 ## Remaining gates
 
