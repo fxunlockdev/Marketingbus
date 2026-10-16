@@ -14,7 +14,9 @@ Implemented locally: server-owned offer catalog; owner/admin checkout and portal
 
 Verification covers concurrent duplicate events, changed replay payloads, unsafe redirects, cross-workspace access, renewal duplication, partial and out-of-order refunds, held-credit settlement and bounded webhook bodies. Browser checks cover actual empty balances, fail-closed payments, accessibility and mobile width.
 
-Remaining: implement and verify the Stripe adapter, authoritative account/livemode/signature validation, monthly-price mapping, checkout/cancellation and portal behavior, provider refund initiation and operator review/reconciliation tooling. Test discounts, taxes, disputes and provider-specific event ordering before release. Commercial terms and margin acceptance remain separate. Credits currently carry forward; there is no expiration scheduler or invented initial balance.
+Added locally: concrete Stripe transport, raw signature and authoritative event verification, pinned account/mode/version, frozen monthly/top-up price binding, constrained customer portal, cancellation ordering, matching-worker checkout admission, durable operator refund requests with read-only uncertain-outcome lookup, verified event recovery and scoped checkout/refund status screens. See [billing operations](BILLING.md).
+
+Remaining: actual Stripe lifecycle acceptance, tax/discount/dispute policies, full operator dashboard and financial settlement reconciliation. Unsupported commercial adjustments remain held for review. Commercial terms and margin acceptance remain separate. Credits currently carry forward; there is no expiration scheduler or invented initial balance.
 
 ## Module 2 Brand intelligence
 

@@ -14,5 +14,6 @@ export async function receivePaymentWebhook(request: Request, adapter: PaymentAd
   }
   // Preserve exact bytes for signature verification. No browser-origin check on a server webhook.
   const event = await adapter.verify(Buffer.concat(chunks), request.headers);
+  if (!event) return { accepted: true, ignored: true };
   return ingestVerifiedPayment(event);
 }

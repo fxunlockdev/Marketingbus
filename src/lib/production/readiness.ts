@@ -7,13 +7,14 @@ import { imageConfigurationHash, imageRates } from "../images/contracts";
 import { motionConfigurationHash } from "../video/limits";
 import { motionRendererAvailable } from "../video/render";
 
-export const WORKER_RUNTIME = "studio-v13-measured-type";
+export const WORKER_RUNTIME = "studio-v14-stripe-billing";
 export const HEARTBEAT_TTL_MS = 120_000;
 export function workerConfigurationHash() {
   return createHash("sha256").update(JSON.stringify({
     rates: configurationHash(), daily: process.env.DAILY_SUPPLIER_BUDGET_MICROS,
     images: imageConfigurationHash(),
     motion: motionConfigurationHash(),
+    billing: { enabled: process.env.BILLING_EXECUTION_ENABLED, account: process.env.STRIPE_ACCOUNT_ID, mode: process.env.STRIPE_MODE, offers: process.env.BILLING_OFFERS_JSON },
     total: process.env.TOTAL_SUPPLIER_BUDGET_MICROS,
     providers: { openai: !!keyFor("openai"), anthropic: !!keyFor("anthropic") },
   })).digest("hex");
@@ -34,4 +35,7 @@ export async function assertWorkerReady(client: Pick<Prisma.TransactionClient, "
     lastSeenAt: { gt: new Date(Date.now() - HEARTBEAT_TTL_MS) },
   }, select: { id: true } });
   if (!worker) throw new AppError(503, "Production worker is not ready with matching settings. No new credits were reserved.");
+}
+export async function assertBillingWorkerReady() {
+  if (!await db.workerHeartbeat.findFirst({ where: { runtimeVersion: WORKER_RUNTIME, configurationHash: workerConfigurationHash(), lastSeenAt: { gt: new Date(Date.now() - HEARTBEAT_TTL_MS) } }, select: { id: true } })) throw new AppError(503, "Billing worker is not ready with matching settings. Checkout has not started.");
 }

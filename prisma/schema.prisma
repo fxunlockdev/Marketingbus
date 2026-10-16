@@ -73,6 +73,7 @@ model Organization {
   billingCheckouts BillingCheckout[]
   billingSubscriptions BillingSubscription[]
   billingPayments BillingPayment[]
+  billingRefunds BillingRefundOperation[]
 }
 
 model Membership {
@@ -813,6 +814,7 @@ model BillingPayment {
   reclaimedRevision Int @default(0)
   createdAt DateTime @default(now())
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  refunds BillingRefundOperation[]
   @@unique([subscriptionId, periodStart])
   @@index([organizationId, createdAt])
 }
@@ -826,5 +828,34 @@ model BillingEvent {
   attempts Int @default(0)
   availableAt DateTime @default(now())
   createdAt DateTime @default(now())
+  reconciliations BillingReconciliation[]
   @@index([status, availableAt])
+}
+
+model BillingReconciliation {
+  id String @id
+  eventId String
+  operatorId String
+  evidence String
+  createdAt DateTime @default(now())
+  event BillingEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  @@index([eventId, createdAt])
+}
+
+// Operator-only money movement. No cascade and no customer HTTP initiation route.
+model BillingRefundOperation {
+  id String @id
+  paymentId String
+  organizationId String
+  amountMinor Int
+  status String @default("SUBMITTING")
+  providerRefundId String? @unique
+  operatorId String
+  evidence String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  payment BillingPayment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  @@index([paymentId, status])
+  @@index([organizationId, createdAt])
 }

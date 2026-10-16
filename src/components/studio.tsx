@@ -140,6 +140,10 @@ export function Studio({
   wallets: { organizationId: string; available: number; held: number }[];
 }) {
   const router = useRouter();
+  useEffect(() => {
+    // A payment return only opens billing. It never grants or confirms credits.
+    if (["returned", "cancelled"].includes(new URLSearchParams(window.location.search).get("billing") ?? "")) setPage("Credits");
+  }, []);
   const [page, setPage] = useState<Page>("Overview"),
     [selected, setSelected] = useState(initialBusinesses[0]?.id ?? ""),
     [editing, setEditing] = useState<"new" | "edit" | null>(null),

@@ -9,7 +9,7 @@ describe("deployment readiness", () => {
     query.mockResolvedValue([]);
     const result = await GET();
     expect(result.status).toBe(200);
-    expect(query).toHaveBeenCalledTimes(39);
+    expect(query).toHaveBeenCalledTimes(41);
     const sql = query.mock.calls.map(call => String(call[0])).join("\n");
     expect(sql).toContain("reconciliationAttempts"); expect(sql).toContain("nextReconciliationAt");
     for (const table of ["IdentityToken", "EmailOutbox", "KnowledgeSource", "SocialConnection", "SocialPublication", "MetricSnapshot", "LearningProposal", "StaticComposition", "TeamInvitation", "TeamEvent"]) expect(sql).toContain(table);

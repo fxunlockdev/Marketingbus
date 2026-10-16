@@ -5,6 +5,8 @@ import { db } from "../db";
 import { AppError } from "../http";
 import { addCreditsInTransaction } from "./wallet";
 import { billingOffers, offerSchema, paymentEvent, paymentAdapter, type PaymentAdapter, type PaymentEvent } from "./contracts";
+import { billingTermsHash } from "./terms";
+import { assertBillingWorkerReady } from "../production/readiness";
 
 type Scope = { organizationId: string; actorId: string };
 async function membership(tx: Prisma.TransactionClient, scope: Scope, write = false) {
@@ -22,6 +24,8 @@ export async function readBilling(scope: Scope) {
       wallet: await tx.wallet.findUnique({ where: { organizationId: scope.organizationId }, select: { available: true, revisionAvailable: true, held: true, debt: true, revisionDebt: true } }),
       subscriptions: canManage ? await tx.billingSubscription.findMany({ where: { organizationId: scope.organizationId }, select: { id: true, offer: true, status: true, currentPeriodEnd: true }, orderBy: { currentPeriodEnd: "desc" }, take: 20 }) : [],
       payments: canManage ? await tx.billingPayment.findMany({ where: { organizationId: scope.organizationId }, select: { id: true, amountMinor: true, currency: true, generalCredits: true, revisionCredits: true, refundedMinor: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 50 }) : [],
+      checkouts: canManage ? await tx.billingCheckout.findMany({ where: { organizationId: scope.organizationId }, select: { id: true, status: true, createdAt: true, expiresAt: true }, orderBy: { createdAt: "desc" }, take: 10 }) : [],
+      refunds: canManage ? await tx.billingRefundOperation.findMany({ where: { organizationId: scope.organizationId }, select: { id: true, amountMinor: true, status: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 20 }) : [],
       entries: await tx.creditEntry.findMany({ where: { organizationId: scope.organizationId }, select: { id: true, kind: true, amount: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 50 }),
     };
   });
@@ -36,17 +40,21 @@ function redirectUrl(raw: string) {
   return url.href;
 }
 // Adapter injection is internal/test-only, never chosen by an HTTP caller.
-export async function manageBilling(scope: Scope, raw: unknown, adapter: PaymentAdapter | null = paymentAdapter()) {
+export async function manageBilling(scope: Scope, raw: unknown, injectedAdapter?: PaymentAdapter | null) {
+  const adapter = injectedAdapter === undefined ? paymentAdapter() : injectedAdapter;
   const action = actionSchema.parse(raw);
   await db.$transaction(tx => membership(tx, scope, true));
   if (!adapter) throw new AppError(503, "Payments are not activated. No charge was made.");
   if (action.action === "portal") {
     const sub = await db.billingSubscription.findFirst({ where: { id: action.subscriptionId, organizationId: scope.organizationId } });
     if (!sub) throw new AppError(404, "Subscription not found.");
-    return { url: redirectUrl((await adapter.portal(sub.customerId)).url) };
+    const result = await adapter.portal(sub.customerId);
+    await db.$transaction(tx => membership(tx, scope, true));
+    return { url: redirectUrl(result.url) };
   }
   const offer = billingOffers().find(o => o.id === action.offerId);
   if (!offer) throw new AppError(404, "Offer is not available.");
+  if (injectedAdapter === undefined) await assertBillingWorkerReady();
   const checkout = await db.$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM "Organization" WHERE id = ${scope.organizationId} FOR UPDATE`;
     await membership(tx, scope, true);
@@ -62,7 +70,10 @@ export async function manageBilling(scope: Scope, raw: unknown, adapter: Payment
   try {
     const result = await adapter.checkout({ id: checkout.id, organizationId: scope.organizationId, offer: offerSchema.parse(checkout.offer), expiresAt: checkout.expiresAt });
     const url = redirectUrl(result.url);
-    await db.billingCheckout.updateMany({ where: { id: checkout.id, status: { in: ["CREATED", "UNKNOWN", "READY"] } }, data: { status: "READY", providerSessionId: result.sessionId, url } });
+    await db.$transaction(async tx => {
+      await membership(tx, scope, true);
+      await tx.billingCheckout.updateMany({ where: { id: checkout.id, status: { in: ["CREATED", "UNKNOWN", "READY"] } }, data: { status: "READY", providerSessionId: result.sessionId, url } });
+    });
     return { url };
   } catch {
     await db.billingCheckout.updateMany({ where: { id: checkout.id, status: "CREATED" }, data: { status: "UNKNOWN" } });
@@ -83,6 +94,7 @@ class PendingDependency extends Error {}
 class ReviewRequired extends Error {}
 function requirePayment(condition: unknown, reason: string): asserts condition { if (!condition) throw new ReviewRequired(reason); }
 async function applyEvent(tx: Prisma.TransactionClient, event: PaymentEvent) {
+  if (event.kind === "REVIEW") throw new ReviewRequired(event.reason);
   if (event.kind === "PAID") {
     const previous = await tx.billingPayment.findUnique({ where: { id: event.paymentId } });
     if (previous) {
@@ -95,6 +107,8 @@ async function applyEvent(tx: Prisma.TransactionClient, event: PaymentEvent) {
     requirePayment(!event.checkoutId || checkout, "UNKNOWN_CHECKOUT");
     const organizationId = checkout?.organizationId ?? subscription!.organizationId;
     const offer = offerSchema.parse(checkout?.offer ?? subscription!.offer);
+    if (offer.stripePriceId) requirePayment(event.proof, "PAYMENT_BINDING_MISSING");
+    if (event.proof) requirePayment(event.proof.organizationId === organizationId && event.proof.termsHash === billingTermsHash(offer) && event.proof.priceId === offer.stripePriceId, "PAYMENT_BINDING_MISMATCH");
     requirePayment(event.amountMinor === offer.amountMinor && event.currency === offer.currency, "PAYMENT_TERMS_MISMATCH");
     if (checkout) requirePayment(checkout.status !== "PAID", "CHECKOUT_ALREADY_PAID");
     if (subscription) requirePayment(subscription.organizationId === organizationId && subscription.customerId === event.customerId && JSON.stringify(offerSchema.parse(subscription.offer)) === JSON.stringify(offer), "SUBSCRIPTION_SCOPE_MISMATCH");
@@ -102,7 +116,7 @@ async function applyEvent(tx: Prisma.TransactionClient, event: PaymentEvent) {
       requirePayment(event.subscriptionId && event.periodStart && event.periodEnd && new Date(event.periodEnd) > new Date(event.periodStart), "SUBSCRIPTION_PERIOD_MISSING");
       requirePayment(!await tx.billingPayment.count({ where: { subscriptionId: event.subscriptionId, periodStart: new Date(event.periodStart) } }), "SUBSCRIPTION_PERIOD_ALREADY_GRANTED");
       if (!subscription) await tx.billingSubscription.create({ data: { id: event.subscriptionId, organizationId, customerId: event.customerId, offer, status: "ACTIVE", currentPeriodEnd: new Date(event.periodEnd), updatedThrough: new Date(event.occurredAt) } });
-      else if (new Date(event.occurredAt) > subscription.updatedThrough) await tx.billingSubscription.update({ where: { id: subscription.id }, data: { status: "ACTIVE", currentPeriodEnd: new Date(event.periodEnd), updatedThrough: new Date(event.occurredAt) } });
+      else if (new Date(event.periodEnd) > subscription.currentPeriodEnd) await tx.billingSubscription.update({ where: { id: subscription.id }, data: { currentPeriodEnd: new Date(event.periodEnd) } });
     } else requirePayment(!event.subscriptionId && !event.periodStart && !event.periodEnd, "TOPUP_HAS_SUBSCRIPTION_PERIOD");
     await tx.$queryRaw`SELECT "organizationId" FROM "Wallet" WHERE "organizationId" = ${organizationId} FOR UPDATE`;
     await addCreditsInTransaction(tx, organizationId, offer.generalCredits, offer.revisionCredits);
@@ -129,7 +143,9 @@ async function applyEvent(tx: Prisma.TransactionClient, event: PaymentEvent) {
   const sub = await tx.billingSubscription.findUnique({ where: { id: event.subscriptionId } });
   if (!sub) throw new PendingDependency("SUBSCRIPTION_MISSING");
   requirePayment(sub.customerId === event.customerId, "SUBSCRIPTION_CUSTOMER_MISMATCH");
-  if (new Date(event.occurredAt) <= sub.updatedThrough) return;
+  if (event.proof) requirePayment(event.proof.organizationId === sub.organizationId && event.proof.termsHash === billingTermsHash(offerSchema.parse(sub.offer)) && event.proof.priceId === offerSchema.parse(sub.offer).stripePriceId, "SUBSCRIPTION_BINDING_MISMATCH");
+  // Cancellation wins same-second events and cannot be undone by a late payment.
+  if (sub.status === "CANCELLED" || new Date(event.occurredAt) < sub.updatedThrough || (new Date(event.occurredAt).getTime() === sub.updatedThrough.getTime() && event.status !== "CANCELLED")) return;
   await tx.billingSubscription.update({ where: { id: sub.id }, data: { status: event.status, currentPeriodEnd: new Date(event.periodEnd), updatedThrough: new Date(event.occurredAt) } });
 }
 
