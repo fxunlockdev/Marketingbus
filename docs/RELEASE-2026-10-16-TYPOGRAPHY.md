@@ -18,7 +18,9 @@ The generated static preview was visually inspected. Browser checks also confirm
 
 ## Deployment
 
-Pending release verification. The previously deployed source is `5af22d3`. Web and worker must both report SUCCESS with all 25 migrations applied, then pass hosted read-only health and access checks before this milestone is described as deployed.
+Source `952d4dccaa8121a9f6839a61dbb4f7fd40a00e45` is deployed on both existing Railway services. Web deployment `b01a08a0-375e-474b-93b4-69c4313edc17` and worker deployment `fffca608-c2bc-4367-b188-ef42173a1263` both reported SUCCESS. The web applied migration `20261016080000_typography_approval`; the worker confirmed all 25 migrations with none pending and passed its private health check. Both run `studio-v13-measured-type`.
+
+[GitHub CI run 38868944015](https://github.com/fxunlockdev/Marketingbus/actions/runs/38868944015) passed tests, build, browser checks and audit independently. Hosted read-only checks returned health 200 with no-store, studio 307 to login, and unauthenticated connections/compositions 401 with no-store. These checks establish deployment and access gating, not authenticated live-provider or bucket acceptance. No production fixture was created.
 
 ## Remaining scope
 

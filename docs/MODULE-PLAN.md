@@ -34,7 +34,7 @@ Added locally: Gemini REST image transport and a complete supporting-artwork job
 
 Failures before submission release credits; unknown supplier outcomes retain the hold for operator reconciliation without another call. Known-cost but invalid/stale output releases customer credits and records supplier expense. Ambiguous stored media remains private and is queued for seven-day cleanup. An approval replay does not invalidate a previously approved composition. See [image operations](IMAGE-PRODUCTION.md).
 
-Added and locally verified: bundled Figtree outlines, measured kerning/wrapping and ink bounds, explicit overflow/unsupported-character rejection, font fingerprints in exports and renderer-version-bound approval. Old approvals require preview and explicit reapproval; old stored bytes are retained rather than overwritten. Motion captions share the measured renderer. See [typography release evidence](RELEASE-2026-10-16-TYPOGRAPHY.md).
+Added and deployed: bundled Figtree outlines, measured kerning/wrapping and ink bounds, explicit overflow/unsupported-character rejection, font fingerprints in exports and renderer-version-bound approval. Old approvals require preview and explicit reapproval; old stored bytes are retained rather than overwritten. Motion captions share the measured renderer. See [typography release evidence](RELEASE-2026-10-16-TYPOGRAPHY.md).
 
 Remaining internal work: automated semantic visual-claim checks, calibrated fidelity/revision-adherence evaluation, broader template art direction, custom/multilingual fonts and social media-transfer linkage. The current acceptance gate is explicit human visual review, not automated fidelity certification. Live Gemini capabilities/prices, real bucket behavior and output quality remain unverified. No paid Gemini calls were made.
 
@@ -72,7 +72,9 @@ Required internal work and verification: organization MFA policy; recovery and k
 
 ## Current release boundary
 
-The measured typography update passes 299 unit/database tests across 34 suites and all 22 browser journeys, build/type checking and audit locally. One private-storage browser journey remains skipped. Migration 25 and runtime `studio-v13-measured-type` are ready for deployment; production still runs the prior release below until both services are verified. See [typography release evidence](RELEASE-2026-10-16-TYPOGRAPHY.md).
+Release `952d4dc` is deployed successfully on web and worker with all 25 migrations applied and runtime `studio-v13-measured-type`. Local and GitHub CI run `38868944015` pass 299 unit/database tests across 34 suites, 22 browser journeys, build/type checking and audit. One private-storage browser journey remains skipped. Hosted health returns 200, studio redirects signed-out users, and unauthenticated connections/compositions return 401. The measured typography milestone is deployed; generated-shot/audio production, social adapters, Stripe, measured learning and enterprise assurance remain unfinished. See [typography release evidence](RELEASE-2026-10-16-TYPOGRAPHY.md).
+
+### Previous social connection release
 
 Release `5af22d3` is deployed successfully on web and worker with all 24 migrations applied and runtime `studio-v12-social-oauth`. Local and GitHub CI run `38864919029` pass 288 unit/database tests across 33 suites, 22 browser journeys, production build and audit. One private-storage journey remains skipped. Hosted health, signed-out access denial and callback no-referrer/recovery behavior pass. This completes the provider-neutral account-connection workflow, not live OAuth adapters or the remaining product modules. See [release evidence](RELEASE-2026-10-16-OAUTH.md).
 
