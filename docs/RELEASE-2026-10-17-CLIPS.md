@@ -16,7 +16,11 @@ Local unit/database verification: 388 passing tests across 38 suites. New cases 
 
 All 25 browser journeys pass; one private-storage journey remains skipped without a test bucket. The new journey plays real local encoder bytes through test-only media transport and exercises actual scoped approval, scene selection, dependent invalidation, repair, viewer/anonymous denial, automated accessibility and mobile width. Its initial exact-label selector was corrected to use the control's accessible role/name. The footage-library screenshot was inspected for layout and readability.
 
-Deployment results are recorded after their final verification. No paid model calls, social posts, payment operations, real emails or production fixtures were used.
+GitHub CI run [39002189095](https://github.com/fxunlockdev/Marketingbus/actions/runs/39002189095) passes the same 388 tests, 25 browser journeys, production build and dependency audit for source `022753ae556f7d7c374be914acaa56da970e3df4`.
+
+Web deployment `d61443d8-f6e4-477c-8700-6d85173693a3` and worker deployment `eb194804-db8e-4df2-8b4b-c1bc76c6ab51` both reported SUCCESS. Migration logs confirm all 28 migrations applied, including the new clip table. Hosted `/api/health` returns 200 with no-store; `/studio` redirects signed-out users to login; unauthenticated clip-library and clip-media reads return 401 with no-store.
+
+No paid model calls, social posts, payment operations, real emails or production fixtures were used.
 
 ## Release gates
 
