@@ -1,8 +1,8 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { db } from "../src/lib/db";
 import { actOnProduction } from "../src/lib/production/service";
 import { manageApprovals, readApprovals } from "../src/lib/workflows/approvals";
-import { savePlanning, createDuePlan, runOneWeeklyDraft, nextWeekly, weekKey } from "../src/lib/workflows/planning";
+import { savePlanning, createDuePlan, runOneWeeklyDraft, nextWeekly, weekKey, cancelWeeklyCycle, readPlanning } from "../src/lib/workflows/planning";
 import { heartbeat } from "../src/lib/production/readiness";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (process.env.TEST_DATABASE_URL && (process.env.TEST_DATABASE_URL !== process.env.DATABASE_URL || !["localhost", "127.0.0.1"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Local fixture database required");
@@ -18,6 +18,7 @@ suite("approval policy, comments and bounded recurring work", () => {
     await db.supplierAuthorization.deleteMany({ where: { key: { in: quotes.map(q => q.id) } } });
     await db.organization.deleteMany({ where: { id: { in: orgs } } }); await db.user.deleteMany({ where: { id: { in: users } } }); await db.workerHeartbeat.deleteMany({ where: { id: workerId } }); vi.unstubAllEnvs(); await db.$disconnect();
   });
+  afterEach(async () => { await db.weeklyCycle.updateMany({ where: { organizationId: { in: orgs }, status: "OPEN" }, data: { status: "CANCELLED", leaseUntil: null } }); });
   async function setup() {
     const actors = await Promise.all(["OWNER", "ADMIN", "EDITOR"].map(async role => { const user = await db.user.create({ data: { name: role, email: `${crypto.randomUUID()}@example.test`, passwordHash: "fixture" } }); users.push(user.id); return { userId: user.id, role }; }));
     const org = await db.organization.create({ data: { name: "WORKFLOW FIXTURE", wallet: { create: { available: 1000 } }, memberships: { create: actors } } }); orgs.push(org.id);
@@ -83,5 +84,124 @@ suite("approval policy, comments and bounded recurring work", () => {
   it("handles UTC week/year boundaries without local DST ambiguity", () => {
     expect(weekKey(new Date("2027-01-01T23:00:00Z"))).toBe("2026-12-28");
     expect(nextWeekly(1, 9, new Date("2026-10-19T09:00:00Z")).toISOString()).toBe("2026-10-26T09:00:00.000Z");
+  });
+  async function draftCycle() {
+    const c = await setup(); await savePlanning(c.scope, { ...policy, mode: "DRAFTS", maxItems: 2, creditsPerWeek: 10 }); await due(c.scope.businessId); await createDuePlan();
+    const cycle = await db.weeklyCycle.findFirstOrThrow({ where: { businessId: c.scope.businessId }, include: { tasks: { orderBy: { id: "asc" } } } });
+    return { ...c, cycle, cancel: { action: "cancelCycle", cycleId: cycle.id, policyVersion: cycle.policyVersion } };
+  }
+  it("stops only the selected run, revokes unaccepted quotes and preserves future policy and spend counters", async () => {
+    const c = await draftCycle(), task = c.cycle.tasks[0];
+    const result = await actOnProduction(c.scope, { action: "quote", itemId: task.itemId, mode: "initial", direction: "Use confirmed brand facts only in this synthetic fixture." });
+    if (!("quote" in result) || !result.quote) throw Error("Expected quote");
+    await db.weeklyTask.update({ where: { id: task.id }, data: { status: "QUOTED", quoteId: result.quote.id } });
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: c.scope.organizationId } });
+    await Promise.all([cancelWeeklyCycle(c.scope, c.cancel), cancelWeeklyCycle(c.admin, c.cancel)]);
+    const row = await db.weeklyCycle.findUniqueOrThrow({ where: { id: c.cycle.id }, include: { tasks: true } });
+    expect(row.status).toBe("CANCELLED"); expect(row.creditsAuthorized).toBe(0); expect(row.tasks.every(t => t.status === "CANCELLED")).toBe(true);
+    expect((await db.generationQuote.findUniqueOrThrow({ where: { id: result.quote.id } })).status).toBe("CANCELLED");
+    await expect(actOnProduction(c.scope, { action: "accept", quoteId: result.quote.id })).rejects.toThrow("expired or changed");
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: c.scope.organizationId } })).toEqual(wallet);
+    expect((await db.weeklyPolicy.findUniqueOrThrow({ where: { businessId: c.scope.businessId } })).enabled).toBe(true);
+    expect(await db.auditEvent.count({ where: { businessId: c.scope.businessId, action: "WEEKLY_RUN_CANCELLED" } })).toBe(1);
+    await due(c.scope.businessId); await createDuePlan(); expect(await db.weeklyCycle.count({ where: { businessId: c.scope.businessId } })).toBe(1);
+  });
+  it("preserves queued and uncertain authorized jobs, held credits and supplier ceilings when stopping", async () => {
+    for (const status of ["QUEUED", "NEEDS_RECONCILIATION"]) {
+      const c = await draftCycle(); await runOneWeeklyDraft();
+      await db.job.updateMany({ where: { businessId: c.scope.businessId }, data: { status } });
+      const jobs = await db.job.findMany({ where: { businessId: c.scope.businessId } });
+      const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: c.scope.organizationId } });
+      const authorizations = await db.supplierAuthorization.findMany({ where: { key: { in: jobs.flatMap(j => j.quoteId ? [j.quoteId] : []) } } });
+      await cancelWeeklyCycle(c.scope, c.cancel);
+      expect(await db.job.findMany({ where: { businessId: c.scope.businessId } })).toEqual(jobs);
+      expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: c.scope.organizationId } })).toEqual(wallet);
+      expect(await db.supplierAuthorization.findMany({ where: { key: { in: authorizations.map(a => a.key) } } })).toEqual(authorizations);
+      const read = (await readPlanning(c.scope)).cycles[0]; expect(read.creditsAuthorized).toBe(1); expect(read.tasks.find(t => t.status === "AUTHORIZED")).toMatchObject({ jobStatus: status, heldCredits: 1 });
+      expect(read.canCancel).toBe(false);
+    }
+  });
+  it("denies cross-tenant, non-admin, stale-version and completed-run cancellation", async () => {
+    const c = await draftCycle(), other = await setup();
+    await expect(cancelWeeklyCycle(c.editor, c.cancel)).rejects.toThrow("administrators");
+    await expect(cancelWeeklyCycle(other.scope, c.cancel)).rejects.toThrow("not found");
+    await expect(cancelWeeklyCycle(c.scope, { ...c.cancel, policyVersion: 99 })).rejects.toThrow("changed");
+    await db.weeklyCycle.update({ where: { id: c.cycle.id }, data: { status: "COMPLETE" } });
+    await expect(cancelWeeklyCycle(c.scope, c.cancel)).rejects.toThrow("finished");
+  });
+  it("revokes quotes for blocked runs when the recurring policy is changed", async () => {
+    const c = await draftCycle();
+    await db.weeklyCycle.update({ where: { id: c.cycle.id }, data: { status: "BLOCKED" } });
+    await db.weeklyTask.update({ where: { id: c.cycle.tasks[0].id }, data: { status: "STOPPED" } });
+    await savePlanning(c.scope, { ...policy, enabled: false, version: 1 });
+    const row = await db.weeklyCycle.findUniqueOrThrow({ where: { id: c.cycle.id }, include: { tasks: true } });
+    expect(row.status).toBe("CANCELLED"); expect(row.tasks.every(t => t.status === "CANCELLED")).toBe(true);
+  });
+  it("cancellation during quote construction cannot resurrect tasks or authorize a late quote", async () => {
+    const c = await draftCycle(); let quoteId = "";
+    await runOneWeeklyDraft(async (...args) => {
+      const result = await actOnProduction(...args);
+      if ("quote" in result && result.quote) { quoteId = result.quote.id; await cancelWeeklyCycle(c.scope, c.cancel); }
+      return result;
+    });
+    const cycle = await db.weeklyCycle.findUniqueOrThrow({ where: { id: c.cycle.id }, include: { tasks: true } });
+    expect(cycle.status).toBe("CANCELLED"); expect(cycle.tasks.every(t => t.status === "CANCELLED")).toBe(true);
+    expect((await db.generationQuote.findUniqueOrThrow({ where: { id: quoteId } })).status).toBe("CANCELLED");
+    expect(await db.job.count({ where: { businessId: c.scope.businessId } })).toBe(0);
+  });
+  it("an expired worker cannot accept a quote, mark tasks stopped or clear the replacement lease", async () => {
+    const c = await draftCycle(), replacement = new Date(Date.now() + 600000);
+    await runOneWeeklyDraft(async (...args) => {
+      const action = args[1] as { action: string };
+      if (action.action === "accept") await db.weeklyCycle.update({ where: { id: c.cycle.id }, data: { leaseUntil: replacement } });
+      return actOnProduction(...args);
+    });
+    const row = await db.weeklyCycle.findUniqueOrThrow({ where: { id: c.cycle.id }, include: { tasks: true } });
+    expect(row).toMatchObject({ status: "OPEN", leaseUntil: replacement, creditsAuthorized: 0 });
+    expect(row.tasks.some(t => t.status === "QUOTED")).toBe(true); expect(await db.job.count({ where: { businessId: c.scope.businessId } })).toBe(0);
+    expect((await db.wallet.findUniqueOrThrow({ where: { organizationId: c.scope.organizationId } })).held).toBe(0);
+  });
+  it("an expired quote-building worker cannot attach a quote to a newly leased run", async () => {
+    const c = await draftCycle(), replacement = new Date(Date.now() + 600000);
+    await runOneWeeklyDraft(async (...args) => {
+      const result = await actOnProduction(...args);
+      await db.weeklyCycle.update({ where: { id: c.cycle.id }, data: { leaseUntil: replacement } }); return result;
+    });
+    const row = await db.weeklyCycle.findUniqueOrThrow({ where: { id: c.cycle.id }, include: { tasks: true } });
+    expect(row).toMatchObject({ status: "OPEN", leaseUntil: replacement }); expect(row.tasks.every(t => t.status === "PENDING" && !t.quoteId)).toBe(true);
+    expect((await db.generationQuote.findFirstOrThrow({ where: { businessId: c.scope.businessId } })).status).toBe("CANCELLED");
+  });
+  it("cancellation immediately before acceptance rolls back all spend authorization", async () => {
+    const c = await draftCycle();
+    await runOneWeeklyDraft(async (...args) => {
+      if ((args[1] as { action: string }).action === "accept") await cancelWeeklyCycle(c.scope, c.cancel);
+      return actOnProduction(...args);
+    });
+    expect((await db.weeklyCycle.findUniqueOrThrow({ where: { id: c.cycle.id } })).status).toBe("CANCELLED");
+    expect(await db.job.count({ where: { businessId: c.scope.businessId } })).toBe(0);
+    const quote = await db.generationQuote.findFirstOrThrow({ where: { businessId: c.scope.businessId } });
+    expect(await db.supplierAuthorization.count({ where: { key: quote.id } })).toBe(0);
+    expect((await db.wallet.findUniqueOrThrow({ where: { organizationId: c.scope.organizationId } })).held).toBe(0);
+  });
+  it("a restarted worker can recover an expired pre-acceptance lease exactly once", async () => {
+    const c = await draftCycle();
+    await runOneWeeklyDraft(async (...args) => {
+      if ((args[1] as { action: string }).action === "accept") await db.weeklyCycle.update({ where: { id: c.cycle.id }, data: { leaseUntil: new Date(Date.now() - 1) } });
+      return actOnProduction(...args);
+    });
+    expect(await db.job.count({ where: { businessId: c.scope.businessId } })).toBe(0);
+    await Promise.all([runOneWeeklyDraft(), runOneWeeklyDraft()]);
+    expect(await db.job.count({ where: { businessId: c.scope.businessId } })).toBe(1);
+    expect((await db.weeklyCycle.findUniqueOrThrow({ where: { id: c.cycle.id } })).creditsAuthorized).toBe(1);
+    expect((await db.wallet.findUniqueOrThrow({ where: { organizationId: c.scope.organizationId } })).held).toBe(1);
+  });
+  it("planning reads enforce membership and return only safe task progress", async () => {
+    const c = await draftCycle(), other = await setup(); await runOneWeeklyDraft();
+    const jobs = await db.job.findMany({ where: { businessId: c.scope.businessId } });
+    await db.job.update({ where: { id: jobs[0].id }, data: { errorCode: "private-error", payload: { secret: "private-prompt" }, providerTaskId: "private-receipt" } });
+    const result = await readPlanning(c.editor); expect(result.canManage).toBe(false); expect(result.cycles[0].canCancel).toBe(false);
+    expect(JSON.stringify(result)).not.toMatch(/private-|actorId|quoteId|reservationId|errorCode|payload|configurationHash/);
+    await expect(readPlanning({ ...c.scope, actorId: other.scope.actorId })).rejects.toThrow("not found");
+    await expect(readPlanning({ ...c.scope, businessId: other.scope.businessId })).rejects.toThrow("not found");
   });
 });

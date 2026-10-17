@@ -1691,6 +1691,10 @@ hr {
 .composition-controls label { min-width: 0; }
 .composition-controls input { width: 100%; }
 fieldset { border: 1px solid #d9d6cf; padding: 16px; margin: 16px 0; border-radius: 10px; }
+.weekly-policy-fields { display: grid; gap: 12px; border: 0; padding: 0; min-width: 0; }
+.weekly-run { border: 1px solid var(--line, #d9d6cf); border-radius: 16px; padding: 20px; margin-top: 16px; }
+.weekly-run h3 { margin: 0 0 8px; }
+.weekly-run li { margin-block: 16px; }
 .production-list table { width: 100%; border-collapse: collapse; text-align: left; }
 .production-list th, .production-list td { padding: 10px 6px; border-bottom: 1px solid #d9d6cf; }
 .intelligence-panel { margin-block: 24px; }

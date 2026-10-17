@@ -51,7 +51,7 @@ async function assertIdle(tx: Prisma.TransactionClient, itemId: string, organiza
   if (item) await assertNoPublicationInFlight(tx, item.plan.businessId, itemId);
   if (await tx.job.count({ where: { organizationId, quote: { itemId }, status: { in: ["QUEUED", "RUNNING", "SUBMITTING", "NEEDS_RECONCILIATION"] } } })) throw new AppError(409, "This creative has an active or unresolved production job.");
 }
-export async function actOnProduction(scope: Scope, raw: unknown, internal?: { weeklyTaskId: string }) {
+export async function actOnProduction(scope: Scope, raw: unknown, internal?: { weeklyTaskId: string; weeklyLeaseUntil: Date }) {
   const input = productionAction.parse(raw);
   // Build skill context outside the transaction. Recheck all mutable inputs under lock below.
   if (input.action === "quote") {
@@ -113,7 +113,7 @@ export async function actOnProduction(scope: Scope, raw: unknown, internal?: { w
       if (quote.baseVersion && item.revisions[0]?.status !== "CHANGES_REQUESTED") throw new AppError(409, "This revision is no longer awaiting changes.");
       await assertIdle(tx, item.id, scope.organizationId);
       await authorizeSupplier(tx, quote.id, quote.supplierCeilingMicros);
-      if (internal) await reserveWeeklyAuthorization(tx, scope, internal.weeklyTaskId, quote);
+      if (internal) await reserveWeeklyAuthorization(tx, scope, internal.weeklyTaskId, quote, internal.weeklyLeaseUntil);
       const reservation = await reserveCreditsInTransaction(tx, scope.organizationId, quote.id, quote.credits, quote.mode !== "initial");
       const job = await tx.job.create({ data: { organizationId: scope.organizationId, businessId: scope.businessId, key: `generation:${quote.id}`, kind: "STATIC_COPY", payload: { actorId: scope.actorId }, quoteId: quote.id, reservationId: reservation.id, maxAttempts: 1 } });
       await tx.generationQuote.update({ where: { id: quote.id }, data: { status: "ACCEPTED", acceptedAt: new Date() } });

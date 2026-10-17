@@ -50,6 +50,18 @@ The calendar is a month-filtered internal agenda, not a drag-and-drop calendar o
 
 ## Verification
 
+### Weekly-run cancellation and progress
+
+The Workflows page shows up to 20 recent runs with up to 12 tasks per run; older or oversized legacy histories are explicitly labelled rather than silently treated as complete. Owners and administrators can stop one OPEN or BLOCKED run after an inline confirmation. Editors/viewers may inspect progress but cannot change authorization. The service checks membership again independently of the route.
+
+Stopping cancels only remaining unaccepted tasks and their still-unaccepted offers. Already-authorized jobs—including queued jobs and uncertain submissions—remain unchanged. Existing holds, supplier ceilings and cumulative weekly authorization are not refunded or reset. Uncertain outcomes require operator evidence reconciliation; the customer cannot release a hold by stopping a run. The action is idempotent and audited. It does not disable future weekly runs; use recurring policy settings to pause future authorization. Changing policy now also cancels unaccepted tasks/offers from open and blocked runs.
+
+Quote attachment, weekly acceptance and failure/completion updates are bound to the exact unexpired worker lease. A cancelled run cannot be revived by a late quote. A worker that lost ownership cannot block the replacement worker's tasks, clear its lease or authorize more credits. Pre-acceptance work may resume after an expired lease, subject to the original policy, current week, brand, role and budget checks. There is no automatic resubmission of an uncertain model operation.
+
+“Authorization finished” is not a delivery claim. Each task separately shows its authorization state, associated job state and currently held credits. Completed output still needs human review. The read API never returns quote prompts, provider receipts, job payloads, raw error strings or reservation identifiers. No new model call, email, publication or payment is made by viewing, refreshing or stopping a run.
+
+Runtime `studio-v20-weekly-cancellation` requires matching web/worker releases before further paid admission. No schema migration, provider registration or new infrastructure is needed. The authenticated browser journey uses synthetic local records, not production data or a real model outcome. Actual production multi-user acceptance and wider mixed-media automation remain separate gates.
+
 ### Read-only operator queue inventory
 
 With authorized server/database access, run `npm run ops:queues -- --organization ORGANIZATION_ID`, optionally adding `--business BUSINESS_ID`. Use `--all` only for an explicitly cross-tenant operator review. A missing organization or mismatched business fails instead of returning a misleading empty report. This is a privileged local/server command, not a customer route or a new staff authentication boundary. Prefer a database role limited to SELECT. Never expose the command through an unauthenticated endpoint or customer-supplied shell arguments.
