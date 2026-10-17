@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-export type StudioClip = { id: string; label: string; status: string; sha256: string; durationMs: number; purgeAfter: string };
+export type StudioClip = { id: string; label: string; status: string; sha256: string; durationMs: number; purgeAfter: string; usable: boolean; processorVersion: string };
 export function ClipLibrary({ businessId, clips, canEdit, onChange }: { businessId: string; clips: StudioClip[]; canEdit: boolean; onChange: () => Promise<void> }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [message, setMessage] = useState(""), [label, setLabel] = useState(""), [rights, setRights] = useState(false), [preview, setPreview] = useState<{ id: string; url: string } | null>(null), [watched, setWatched] = useState(false), [removeId, setRemoveId] = useState("");
   const file = useRef<HTMLInputElement>(null), endpoint = `/api/businesses/${businessId}/clips`;
@@ -43,6 +43,7 @@ export function ClipLibrary({ businessId, clips, canEdit, onChange }: { business
     {!clips.length && <p>No clips uploaded yet.</p>}
     {clips.map(c => <article key={c.id} aria-label={`Clip ${c.label}`}>
       <h3>{c.label}</h3><p>{c.status.toLowerCase()} {c.durationMs ? `· ${(c.durationMs / 1000).toFixed(2)} seconds · silent` : ""}</p>
+      {c.status === "APPROVED" && !c.usable && <p>Not available for the current brand or retention window. This historical approval does not authorize reuse.</p>}
       {["READY", "APPROVED", "REJECTED"].includes(c.status) && <>
         <button className="button" disabled={busy} onClick={() => show(c.id)}>Preview {c.label}</button>
         {preview?.id === c.id && <><video controls playsInline preload="metadata" src={preview.url} aria-label={`Silent clip ${c.label}`} style={{ maxWidth: "100%", maxHeight: 450 }} /><p>Silent footage. Review visible claims and any source text; there is no speech track.</p>

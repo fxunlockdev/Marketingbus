@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import sharp from "sharp";
 import { assertClipSignature, boundedClipUpload, clipMetadata, normalizeClip } from "../src/lib/video/clip-normalizer";
 import { renderMotion } from "../src/lib/video/render";
 import { storyboardDocument } from "../src/lib/video/document";
@@ -18,7 +19,7 @@ describe("clip boundaries", () => {
     const m = metadata(); (m.streams as unknown[]).push({ codec_type: "audio", codec_name: "aac" });
     expect(clipMetadata(m).durationMs).toBe(2000); expect(() => clipMetadata(m, true)).toThrow();
   });
-  it.each(["size", "fps", "duration", "codec", "pixel", "rotation", "truncated", "subtitle", "nonfinite"])("rejects unsafe %s metadata", field => {
+  it.each(["size", "fps", "duration", "codec", "pixel", "rotation", "truncated", "subtitle", "nonfinite", "anamorphic"])("rejects unsafe %s metadata", field => {
     const m = metadata(), v = m.streams[0];
     if (field === "size") v.width = 4096;
     if (field === "fps") v.avg_frame_rate = "120/1";
@@ -29,6 +30,7 @@ describe("clip boundaries", () => {
     if (field === "truncated") v.duration = "1";
     if (field === "subtitle") (m.streams as unknown[]).push({ codec_type: "subtitle", codec_name: "mov_text" });
     if (field === "nonfinite") v.avg_frame_rate = "0/0";
+    if (field === "anamorphic") Object.assign(v, { sample_aspect_ratio: "4:3" });
     expect(() => clipMetadata(m)).toThrow();
   });
   it("counts actual streamed bytes and cancels oversized upload, ignoring claimed length", async () => {
@@ -66,4 +68,26 @@ suite("real clip quarantine normalization and assembly", () => {
   it("refuses overlapping decoder work", async () => {
     const first = normalizeClip(source); await expect(normalizeClip(source)).rejects.toThrow("busy"); await first;
   }, 40000);
+  it("preserves landscape aspect and uses the selected time and crop in actual encoded pixels", async () => {
+    const pattern = "color=c=red:s=640x360:r=24:d=2,drawbox=x=320:y=0:w=320:h=360:color=blue:t=fill,drawbox=x=0:y=0:w=320:h=360:color=green:t=fill:enable='gte(t,1)',drawbox=x=320:y=0:w=320:h=360:color=yellow:t=fill:enable='gte(t,1)'";
+    await exec(process.env.TEST_FFMPEG_PATH!, ["-nostdin", "-v", "error", "-f", "lavfi", "-i", pattern, "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", join(dir, "colour-source.mp4")], { timeout: 10000 });
+    const normalized = await normalizeClip(await readFile(join(dir, "colour-source.mp4")));
+    const normalizedFile = join(dir, "landscape.mp4"); await writeFile(normalizedFile, normalized.bytes);
+    const p = JSON.parse((await exec(process.env.TEST_FFPROBE_PATH!, ["-v", "error", "-show_entries", "stream=width,height", "-of", "json", normalizedFile], { timeout: 5000 })).stdout);
+    expect(p.streams).toEqual([{ width: 640, height: 360 }]);
+    async function sample(startMs: number, fit: "cover" | "contain", x: number) {
+      const d = storyboardDocument.parse({ title: "Pixel evidence", background: "#ffffff", logo: null, shots: [{ id: "clip", label: "Footage", caption: "Pixel test", durationMs: 1000, motion: "hold", asset: null, clip: { id: "fixture", sha256: "a".repeat(64) }, clipEdit: { startMs, fit, x, y: 50 } }] });
+      const result = await renderMotion(d, new Map([["fixture", normalized.bytes]]));
+      const file = join(dir, `result-${startMs}-${fit}-${x}.mp4`); await writeFile(file, result.bytes);
+      const frame = await exec(process.env.TEST_FFMPEG_PATH!, ["-nostdin", "-v", "error", "-ss", "0.5", "-i", file, "-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "pipe:1"], { timeout: 10000, encoding: "buffer", maxBuffer: 2000000 });
+      const { data } = await sharp(frame.stdout).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+      const at = (px: number, py: number) => [...data.subarray((py * 720 + px) * 3, (py * 720 + px) * 3 + 3)];
+      return { center: at(360, 550), top: at(360, 245), bytes: result.bytes };
+    }
+    const left = await sample(0, "cover", 0), right = await sample(0, "cover", 100), later = await sample(1000, "cover", 0), fit = await sample(0, "contain", 50);
+    expect(left.center[0]).toBeGreaterThan(180); expect(left.center[2]).toBeLessThan(80);
+    expect(right.center[2]).toBeGreaterThan(180); expect(right.center[0]).toBeLessThan(80);
+    expect(later.center[1]).toBeGreaterThan(80); expect(later.center[0]).toBeLessThan(80); expect(later.center[2]).toBeLessThan(80);
+    expect(fit.top.every(v => v > 220)).toBe(true); expect(left.top.some(v => v < 80)).toBe(true);
+  }, 60000);
 });

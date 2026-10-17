@@ -10,7 +10,7 @@ import { approvedFactText, evaluateCreative } from "../production/quality";
 import { invalidatePublications } from "../social/service";
 import { assetStore, type AssetStore } from "../assets/storage";
 import { WORKER_RUNTIME, HEARTBEAT_TTL_MS, workerConfigurationHash } from "../production/readiness";
-import { storyboardDocument, shotApprovals, totalDuration, type StoryboardDocument, type VideoShot } from "./document";
+import { storyboardDocument, shotApprovals, totalDuration, clipRangeFits, type StoryboardDocument, type VideoShot } from "./document";
 import { MAX_VIDEO_BYTES, MOTION_RENDERER_VERSION, motionDailyLimit, motionHash } from "./limits";
 import { eligibleMotionAssets, type MotionAssetClient } from "./assets";
 import { eligibleClips, listClips } from "./clips";
@@ -37,7 +37,7 @@ export async function storyboardContext(scope: Scope, id: string, client: Pick<P
   if (validateAssets && refs.some(r => !assets.some(a => a.id === r.id && a.sha256 === r.sha256))) throw new AppError(409, "A storyboard asset or its source approval changed. Use current approved originals or artwork.");
   if (validateAssets && document.logo && !assets.some(a => a.id === document.logo!.id && a.generationId === null && a.purpose === "logo")) throw new AppError(409, "Use an approved original logo, not generated artwork.");
   const clips = await eligibleClips(client, scope, business.version, document.shots.flatMap(s => s.clip ? [s.clip.id] : []));
-  if (validateAssets && document.shots.some(s => s.clip && !clips.some(c => c.id === s.clip!.id && c.sha256 === s.clip!.sha256 && c.durationMs >= s.durationMs))) throw new AppError(409, "A scene clip is unavailable, unapproved or shorter than its shot. Choose a current approved clip or shorten the shot.");
+  if (validateAssets && document.shots.some(s => s.clip && !clips.some(c => c.id === s.clip!.id && c.sha256 === s.clip!.sha256 && clipRangeFits(s, c.durationMs)))) throw new AppError(409, "A scene clip is unavailable, unapproved or shorter than its selected range. Choose current approved footage or adjust its start and duration.");
   for (const shot of document.shots) {
     const quality = evaluateCreative({ headline: shot.caption, caption: shot.caption, cta: "", visualDirection: "", rationale: "", evidenceUsed: [] }, { facts: approvedFactText(business) });
     if (!quality.eligible) throw new AppError(409, quality.defects[0].detail);

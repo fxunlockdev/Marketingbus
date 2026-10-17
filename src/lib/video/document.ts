@@ -1,11 +1,21 @@
 import { z } from "zod";
 export const assetRef = z.object({ id: z.string().min(1).max(100), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export const clipEdit = z.object({
+  startMs: z.number().int().min(0).max(7000).multipleOf(250),
+  fit: z.enum(["contain", "cover"]),
+  x: z.number().int().min(0).max(100).multipleOf(5),
+  y: z.number().int().min(0).max(100).multipleOf(5),
+}).strict();
+export const DEFAULT_CLIP_EDIT: z.infer<typeof clipEdit> = { startMs: 0, fit: "contain", x: 50, y: 50 };
 export const videoShot = z.object({
   id: z.string().regex(/^[a-zA-Z0-9_-]{1,60}$/), label: z.string().trim().min(1).max(80),
   caption: z.string().trim().min(1).max(120), durationMs: z.number().int().min(1000).max(8000).multipleOf(250),
   motion: z.enum(["hold", "fade"]), asset: assetRef.nullable(),
   clip: assetRef.nullable().optional(),
+  clipEdit: clipEdit.optional(),
 }).strict().refine(s => !(s.clip && s.asset), "Choose an image or a clip for each scene, not both.")
+  .refine(s => !s.clipEdit || !!s.clip, "Choose footage before setting a trim or crop.")
+  .refine(s => !s.clip || (s.clipEdit?.startMs ?? 0) + s.durationMs <= 8000, "The selected footage range must end within eight seconds.")
   .refine(s => s.caption.length / (s.durationMs / 1000) <= 24, "Allow more reading time or shorten the caption (at most 24 characters per second).");
 export const storyboardDocument = z.object({
   title: z.string().trim().min(1).max(100), background: z.string().regex(/^#[a-fA-F0-9]{6}$/),
@@ -16,6 +26,17 @@ export type StoryboardDocument = z.infer<typeof storyboardDocument>;
 export type VideoShot = z.infer<typeof videoShot>;
 export const shotApprovals = z.array(z.object({ shotId: z.string(), hash: z.string(), reviewer: z.string(), at: z.string() }).strict()).max(6);
 export function totalDuration(document: StoryboardDocument) { return document.shots.reduce((n, s) => n + s.durationMs, 0); }
+export function shotTimeline(document: StoryboardDocument) {
+  let elapsed = 0;
+  return document.shots.map(shot => {
+    const startMs = elapsed; elapsed += shot.durationMs;
+    const sourceStartMs = shot.clip ? (shot.clipEdit?.startMs ?? 0) : null;
+    return { id: shot.id, label: shot.label, startMs, endMs: elapsed, sourceStartMs, sourceEndMs: sourceStartMs === null ? null : sourceStartMs + shot.durationMs };
+  });
+}
+export function clipRangeFits(shot: VideoShot, clipDurationMs: number) {
+  return !!shot.clip && videoShot.safeParse(shot).success && Number.isSafeInteger(clipDurationMs) && (shot.clipEdit?.startMs ?? 0) + shot.durationMs <= clipDurationMs;
+}
 export function subtitleVtt(document: StoryboardDocument) {
   let elapsed = 0;
   const time = (ms: number) => `00:${String(Math.floor(ms / 60000)).padStart(2, "0")}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}.${String(ms % 1000).padStart(3, "0")}`;

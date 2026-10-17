@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile, stat, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import sharp from "sharp";
-import { storyboardDocument, totalDuration, type StoryboardDocument } from "./document";
+import { storyboardDocument, totalDuration, DEFAULT_CLIP_EDIT, type StoryboardDocument } from "./document";
 import { MAX_VIDEO_BYTES, motionDailyLimit } from "./limits";
 import { outlinedText, typographyManifest } from "../typography";
 const exec = promisify(execFile);
@@ -64,9 +64,13 @@ export const renderMotion: MotionRenderer = async (raw, assets) => {
       let inputs = ["-protocol_whitelist", "file", "-loop", "1", "-framerate", String(fps), "-i", png], filters = ["-vf", filter];
       if (shot.clip) {
         const data = assets.get(shot.clip.id); if (!data) throw Error("Approved scene clip missing.");
+        const edit = shot.clipEdit ?? DEFAULT_CLIP_EDIT;
         const source = `source-${index}.mp4`; await writeFile(join(directory, source), data, { flag: "wx", mode: 0o600 });
         inputs = [...inputs, "-threads", "1", "-protocol_whitelist", "file", "-f", "mov", "-enable_drefs", "0", "-use_absolute_path", "0", "-i", source];
-        filters = ["-filter_complex", `[1:v:0]scale=608:620:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=720:1280:(ow-iw)/2:240:color=${document.background},setsar=1,fps=24[footage];[footage][0:v:0]overlay=shortest=1,${filter}[scene]`, "-map", "[scene]"];
+        const framing = edit.fit === "cover"
+          ? `scale=608:620:force_original_aspect_ratio=increase:force_divisible_by=2,crop=608:620:(iw-608)*${edit.x}/100:(ih-620)*${edit.y}/100`
+          : `scale=608:620:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=608:620:(ow-iw)/2:(oh-ih)/2:color=${document.background}`;
+        filters = ["-filter_complex", `[1:v:0]trim=start=${edit.startMs / 1000}:duration=${seconds},setpts=PTS-STARTPTS,${framing},pad=720:1280:56:240:color=${document.background},setsar=1,fps=24[footage];[footage][0:v:0]overlay=shortest=1,${filter}[scene]`, "-map", "[scene]"];
       }
       await run(tools.ffmpeg, ["-nostdin", "-hide_banner", "-loglevel", "error", "-max_alloc", "67108864", "-filter_threads", "1", "-filter_complex_threads", "1", "-threads", "1", ...inputs, ...filters, "-frames:v", String(shot.durationMs * fps / 1000), "-an", "-c:v", "libx264", "-threads", "1", "-preset", "veryfast", "-crf", "24", "-maxrate", "3M", "-bufsize", "6M", "-pix_fmt", "yuv420p", "-map_metadata", "-1", "-fs", String(MAX_VIDEO_BYTES), "-movflags", "+faststart", "-f", "mp4", clip]);
       clips.push(clip);

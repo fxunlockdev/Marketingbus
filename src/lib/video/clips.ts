@@ -10,18 +10,21 @@ import { invalidatePublications } from "../social/service";
 import { assetStore, type AssetStore } from "../assets/storage";
 import { WORKER_RUNTIME, HEARTBEAT_TTL_MS, workerConfigurationHash } from "../production/readiness";
 import { MAX_VIDEO_BYTES, motionDailyLimit } from "./limits";
-import { assertClipSignature, CLIP_PROCESSOR_VERSION, normalizeClip, type ClipNormalizer } from "./clip-normalizer";
+import { assertClipSignature, CLIP_PROCESSOR_VERSION, READABLE_CLIP_VERSIONS, normalizeClip, type ClipNormalizer } from "./clip-normalizer";
 export const clipStore = () => assetStore(MAX_VIDEO_BYTES);
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const scopeOf = (r: { businessId: string; organizationId: string; createdBy: string }): Scope => ({ businessId: r.businessId, organizationId: r.organizationId, actorId: r.createdBy });
 const activeStatuses = ["UPLOADING", "QUEUED", "RUNNING", "STORING"];
-export const clipFields = { id: true, label: true, status: true, sha256: true, durationMs: true, brandVersion: true, createdAt: true, purgeAfter: true, errorCode: true } as const;
+export const clipFields = { id: true, label: true, status: true, sha256: true, durationMs: true, brandVersion: true, processorVersion: true, createdAt: true, purgeAfter: true, errorCode: true } as const;
 export async function eligibleClips(client: Pick<Prisma.TransactionClient, "videoClip">, scope: Scope, brandVersion: number, ids?: string[]) {
-  return client.videoClip.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId, brandVersion, status: "APPROVED", approvedBy: { not: null }, processorVersion: CLIP_PROCESSOR_VERSION, purgeAfter: { gt: new Date() }, ...(ids ? { id: { in: ids } } : {}) }, take: 100 });
+  return client.videoClip.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId, brandVersion, status: "APPROVED", approvedBy: { not: null }, processorVersion: { in: READABLE_CLIP_VERSIONS }, purgeAfter: { gt: new Date() }, ...(ids ? { id: { in: ids } } : {}) }, take: 100 });
 }
 export async function listClips(scope: Scope) {
   if (!await db.membership.findUnique({ where: { organizationId_userId: { organizationId: scope.organizationId, userId: scope.actorId } } })) throw new AppError(404, "Workspace not found.");
-  return db.videoClip.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId }, select: clipFields, orderBy: { createdAt: "desc" }, take: 50 });
+  const business = await db.business.findFirst({ where: { id: scope.businessId, organizationId: scope.organizationId } });
+  if (!business) throw new AppError(404, "Business not found.");
+  const rows = await db.videoClip.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId }, select: { ...clipFields, approvedBy: true }, orderBy: { createdAt: "desc" }, take: 50 });
+  return rows.map(({ approvedBy, ...row }) => ({ ...row, usable: !!business.confirmedAt && business.version === row.brandVersion && row.status === "APPROVED" && !!approvedBy && READABLE_CLIP_VERSIONS.includes(row.processorVersion) && row.purgeAfter > new Date() }));
 }
 export async function uploadClip(scope: Scope, raw: unknown, input: Buffer, store: AssetStore = clipStore()) {
   const fields = z.object({ label: z.string().trim().min(1).max(80), rightsConfirmed: z.literal(true) }).strict().parse(raw);
@@ -61,7 +64,7 @@ async function clipContext(scope: Scope, id: string, client: Prisma.TransactionC
   const row = await client.videoClip.findFirst({ where: { id, businessId: scope.businessId, organizationId: scope.organizationId } });
   const business = await client.business.findFirst({ where: { id: scope.businessId, organizationId: scope.organizationId } });
   if (!row || !business) throw new AppError(404, "Clip not found.");
-  if (!business.confirmedAt || business.version !== row.brandVersion || row.processorVersion !== CLIP_PROCESSOR_VERSION || row.purgeAfter <= new Date()) throw new AppError(409, "Clip brand or retention changed. Upload and review a current clip.");
+  if (!business.confirmedAt || business.version !== row.brandVersion || !READABLE_CLIP_VERSIONS.includes(row.processorVersion) || row.purgeAfter <= new Date()) throw new AppError(409, "Clip brand or retention changed. Upload and review a current clip.");
   return { row, business };
 }
 export async function readClip(scope: Scope, id: string, store: AssetStore = clipStore()) {
@@ -114,7 +117,7 @@ export async function runOneClip(processor: ClipNormalizer = normalizeClip, stor
   const fresh = async (tx: Prisma.TransactionClient, status: string) => {
     await lockBusiness(tx, scope); await assertBrandEditor(tx, scope);
     const { row } = await clipContext(scope, claimed.id, tx);
-    if (row.status !== status || row.leaseUntil?.getTime() !== claimed.leaseUntil?.getTime() || !row.leaseUntil || row.leaseUntil <= new Date()) throw Error("Clip authorization changed.");
+    if (row.status !== status || row.processorVersion !== CLIP_PROCESSOR_VERSION || row.leaseUntil?.getTime() !== claimed.leaseUntil?.getTime() || !row.leaseUntil || row.leaseUntil <= new Date()) throw Error("Clip authorization changed.");
     return row;
   };
   try {

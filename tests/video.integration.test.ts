@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { db } from "../src/lib/db";
 import { manageVideo, listVideo, readMotion } from "../src/lib/video/service";
 import { runOneMotion, recoverMotionLeases, recoverMotionStorage, purgeMotion } from "../src/lib/video/worker";
-import { storyboardDocument, totalDuration, type StoryboardDocument } from "../src/lib/video/document";
+import { storyboardDocument, totalDuration, DEFAULT_CLIP_EDIT, type StoryboardDocument } from "../src/lib/video/document";
 import { WORKER_RUNTIME, workerConfigurationHash } from "../src/lib/production/readiness";
 import { uploadAsset, changeAsset } from "../src/lib/assets/service";
 import type { AssetStore } from "../src/lib/assets/storage";
@@ -175,6 +175,66 @@ suite("storyboard and motion lifecycle", () => {
     const other = await setup(); vi.stubEnv("MOTION_RENDER_DAILY_LIMIT", "1");
     await db.workerHeartbeat.update({ where: { id: workerId }, data: { configurationHash: workerConfigurationHash() } });
     await expect(upload(other)).rejects.toThrow("daily video processing");
+  });
+  it("validates selected source bounds before saving and resets only the changed shot review", async () => {
+    const f = await setup(), clip = await readyClip(f); await reviewClip(f.scope, clip.id, { action: "approve", watched: true });
+    const id = await useClip(f, clip); await approve(f, id);
+    const document = storyboardDocument.parse((await board(id)).document);
+    document.shots[0].clipEdit = { ...DEFAULT_CLIP_EDIT, startMs: 1250 };
+    await expect(manageVideo(f.scope, { action: "save", storyboardId: id, document }, () => store)).rejects.toThrow("selected range");
+    expect((await board(id)).status).toBe("APPROVED");
+    document.shots[0].clipEdit = { startMs: 1000, fit: "cover", x: 75, y: 25 };
+    const next = (await manageVideo(f.scope, { action: "save", storyboardId: id, document }, () => store)).storyboardId!;
+    expect((await board(next)).shotApprovals).toHaveLength(2);
+    await expect(manageVideo(f.scope, { action: "approve-storyboard", storyboardId: next }, () => store)).rejects.toThrow("every current shot");
+    const renderId = await queue(f, next); await runOneMotion(f.renderer, () => store);
+    expect(f.renderer.mock.calls[0][0].shots[0].clipEdit).toEqual({ startMs: 1000, fit: "cover", x: 75, y: 25 });
+    await manageVideo(f.scope, { action: "approve-render", renderId, continuityReviewed: true }, () => store);
+    const changed = storyboardDocument.parse((await board(next)).document); changed.shots[0].clipEdit!.x = 25;
+    const third = (await manageVideo(f.scope, { action: "save", storyboardId: next, document: changed }, () => store)).storyboardId!;
+    expect((await board(third)).shotApprovals).toHaveLength(2);
+    await expect(readMotion(f.scope, renderId, true, store)).rejects.toThrow("changed");
+    expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(0);
+  });
+  it.each(["before-encoding", "during-encoding", "before-download"])("rechecks the selected range %s", async phase => {
+    const f = await setup(), clip = await readyClip(f); await reviewClip(f.scope, clip.id, { action: "approve", watched: true });
+    const document = storyboardDocument.parse((await board(f.id)).document); document.shots[0].clip = { id: clip.id, sha256: clip.sha256 }; document.shots[0].clipEdit = { ...DEFAULT_CLIP_EDIT, startMs: 1000 };
+    const storyboardId = (await manageVideo(f.scope, { action: "save", storyboardId: f.id, document }, () => store)).storyboardId!, id = await queue(f, storyboardId);
+    const shorten = () => db.videoClip.update({ where: { id: clip.id }, data: { durationMs: 5500 } });
+    if (phase === "before-encoding") await shorten();
+    if (phase === "during-encoding") f.renderer.mockImplementationOnce(async document => {
+      await shorten(); return { bytes: Buffer.from("controlled stale output"), durationMs: totalDuration(document), width: 720, height: 1280 };
+    });
+    await runOneMotion(f.renderer, () => store);
+    if (phase === "before-download") {
+      await manageVideo(f.scope, { action: "approve-render", renderId: id, continuityReviewed: true }, () => store);
+      await shorten();
+      await expect(readMotion(f.scope, id, true, store)).rejects.toThrow("selected range");
+    } else {
+      expect(f.renderer).toHaveBeenCalledTimes(phase === "before-encoding" ? 0 : 1);
+      expect((await row(id)).status).toBe("FAILED");
+      expect(objects.has((await row(id)).objectKey)).toBe(false);
+    }
+  });
+  it("retains reviewed legacy clip bytes but refuses unknown processors and silent legacy queue upgrades", async () => {
+    const f = await setup(), clip = await readyClip(f); await reviewClip(f.scope, clip.id, { action: "approve", watched: true });
+    await db.videoClip.update({ where: { id: clip.id }, data: { processorVersion: "silent-clip-v1" } });
+    expect((await listClips(f.scope)).find(c => c.id === clip.id)?.usable).toBe(true);
+    expect(await readClip(f.scope, clip.id, store)).toEqual(processed.bytes);
+    await useClip(f, clip);
+    await db.videoClip.update({ where: { id: clip.id }, data: { processorVersion: "unverified-future-processor" } });
+    expect((await listClips(f.scope)).find(c => c.id === clip.id)?.usable).toBe(false);
+    await expect(readClip(f.scope, clip.id, store)).rejects.toThrow("changed");
+    const queued = await upload(f); await db.videoClip.update({ where: { id: queued }, data: { processorVersion: "silent-clip-v1" } });
+    const process = vi.fn(async () => processed); await runOneClip(process, () => store);
+    expect(process).not.toHaveBeenCalled(); expect((await db.videoClip.findUniqueOrThrow({ where: { id: queued } })).status).toBe("FAILED");
+  });
+  it.each(["expired", "unconfirmed", "brand-version"])("does not offer historically approved %s clips for scene selection", async reason => {
+    const f = await setup(), clip = await readyClip(f); await reviewClip(f.scope, clip.id, { action: "approve", watched: true });
+    if (reason === "expired") await db.videoClip.update({ where: { id: clip.id }, data: { purgeAfter: new Date(0) } });
+    if (reason === "unconfirmed") await db.business.update({ where: { id: f.scope.businessId }, data: { confirmedAt: null } });
+    if (reason === "brand-version") await db.business.update({ where: { id: f.scope.businessId }, data: { version: { increment: 1 } } });
+    expect((await listClips(f.scope)).find(c => c.id === clip.id)).toMatchObject({ status: "APPROVED", usable: false });
   });
   it("blocks legacy renderer approval and download while retaining bytes and allowing a reviewed replacement", async () => {
     const f = await setup(), id = await queue(f); await runOneMotion(f.renderer, () => store);
