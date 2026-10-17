@@ -50,7 +50,7 @@ Added and deployed: private MP4 quarantine, bounded single-submit normalization,
 
 Added and deployed: quarter-second source trimming, fit/fill framing and keyboard crop-position controls; separate source/output timeline; bounded draft footage preview; native-aspect normalization without upscaling; exact edit-bound shot reviews and legacy-byte preservation. Actual encoded pixel checks verify time selection, crop direction and padding; database checks reject invalid ranges before encoding, after encoding and before download. Browser tests cover editing, preview bounds, keyboard controls, unchanged-review retention and repair.
 
-Added locally: approved-scene generated-shot quotes and explicit authorization; single-submit asynchronous supplier jobs; unique provider-job binding; bounded polling; private MP4 quarantine; normalization-gated credit settlement; source approval/provenance checks; shared supplier/CPU/storage admission; status and cancellation controls; privileged uncertain-expense reconciliation. Production has no registered generated-video adapter. See [generated-shot operations](GENERATED-SHOTS.md).
+Added and deployed: approved-scene generated-shot quotes and explicit authorization; single-submit asynchronous supplier jobs; unique provider-job binding; bounded polling; private MP4 quarantine; normalization-gated credit settlement; source approval/provenance checks; shared supplier/CPU/storage admission; status and cancellation controls; privileged uncertain-expense reconciliation. Production has no registered generated-video adapter. See [generated-shot operations](GENERATED-SHOTS.md).
 
 Remaining internal work: actual Higgsfield transport and expense verification; reference-led shot revisions; licensed audio/voiceover; semantic continuity/fidelity evaluation and platform exports. The current customer-deliverable path is silent app-owned motion rendering, not a Higgsfield or Hyperframes runtime integration. Production binary/container packaging and real bucket acceptance remain. Higgsfield account/model/rate verification and paid acceptance are external gates, not substitutes for the unfinished transport.
 
@@ -82,7 +82,7 @@ Required internal work and verification: organization MFA policy; recovery and k
 
 ## Current release boundary
 
-The generated-shot lifecycle is implemented locally with 451 passing unit/database tests across 39 suites, 26 passing browser journeys and a successful production build. One private-storage browser journey remains skipped. Deployment and CI verification are pending. This extends the video workflow but does not enable a supplier transport or finish the seven-module scope. See [generated-shot release evidence](RELEASE-2026-10-17-GENERATED-SHOTS.md).
+Release `e99d29a` is deployed successfully on web and worker with all 31 migrations applied and runtime `studio-v18-shot-jobs`. Local and GitHub CI run `39007817819` pass 451 unit/database tests across 39 suites, 26 browser journeys, build/type checking and audit. One private-storage browser journey remains skipped. Hosted health returns 200, studio redirects signed-out users, and unauthenticated generated-shot/clip reads return 401. This extends the video workflow but does not enable a supplier transport or finish the seven-module scope. See [generated-shot release evidence](RELEASE-2026-10-17-GENERATED-SHOTS.md).
 
 ### Previous shot editing release
 
