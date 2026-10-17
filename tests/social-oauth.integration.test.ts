@@ -40,6 +40,13 @@ suite("session-bound social authorization", () => {
     return { scope, adapter, adapters, exchange, begin };
   }
   it("has no production or environment-enabled fixture adapters", () => expect(configuredSocialOAuthAdapters()).toEqual({}));
+  it("blocks a previously started callback if workspace MFA becomes required", async () => {
+    const f = await fixture(), b = await f.begin();
+    await db.organization.update({ where: { id: f.scope.organizationId }, data: { requireMfa: true } });
+    await expect(completeSocialOAuth(f.scope.sessionId, "Facebook", b.params, f.adapters)).rejects.toThrow(/requires MFA/);
+    expect(f.exchange).not.toHaveBeenCalled();
+    expect(await db.socialConnection.count({ where: { businessId: f.scope.businessId } })).toBe(0);
+  });
   it("binds S256 and hashed state, encrypts temporary tokens, and requires one explicit account selection", async () => {
     const f = await fixture(), b = await f.begin();
     expect(b.url.searchParams.get("code_challenge_method")).toBe("S256");

@@ -64,6 +64,7 @@ model EmailOutbox {
 model Organization {
   id          String       @id @default(cuid())
   name        String
+  requireMfa  Boolean      @default(false)
   createdAt   DateTime     @default(now())
   memberships Membership[]
   businesses  Business[]

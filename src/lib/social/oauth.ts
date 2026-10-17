@@ -7,6 +7,7 @@ import { encryptionReady, openSecret, sealSecret } from "../secrets";
 import { lockBusiness, type Scope } from "../production/service";
 import { socialProvider } from "./contracts";
 import { saveVerifiedConnectionInTransaction } from "./service";
+import { assertWorkspaceMfa } from "../identity/workspace-security";
 
 type Provider = z.infer<typeof socialProvider>;
 export type OAuthScope = Scope & { sessionId: string };
@@ -60,6 +61,7 @@ async function authorize(tx: Prisma.TransactionClient, scope: OAuthScope, write 
     throw new AppError(401, "Sign in again before connecting an account.");
   const member = await tx.membership.findUnique({ where: { organizationId_userId: { organizationId: scope.organizationId, userId: scope.actorId } } });
   if (!member || (write && !["OWNER", "ADMIN"].includes(member.role))) throw new AppError(403, "A workspace owner or admin must manage connections.");
+  await assertWorkspaceMfa(tx, scope.organizationId, scope.actorId);
   await lockBusiness(tx, scope);
   return member;
 }

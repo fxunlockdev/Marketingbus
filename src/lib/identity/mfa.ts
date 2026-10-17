@@ -31,9 +31,10 @@ export async function mfaStatus(userId: string) {
     enabled: !!record?.enabledAt,
     available: encryptionReady(),
     recoveryCodesRemaining: record?.recoveryHashes.length ?? 0,
+    requiredByWorkspace: await db.membership.count({ where: { userId, organization: { requireMfa: true } } }) > 0,
   };
 }
-async function consumeFactor(
+export async function consumeFactor(
   tx: Prisma.TransactionClient,
   userId: string,
   code: string,
@@ -97,6 +98,8 @@ export async function manageMfa(
   if (!(await compare(input.password, user.passwordHash)))
     throw new AppError(401, "Password is incorrect.");
   return db.$transaction(async (tx) => {
+    // Policy changes and disabling a factor must not race.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(71403221)`;
     await tx.$queryRaw`SELECT id FROM "User" WHERE id=${userId} FOR UPDATE`;
     const current = await tx.user.findUniqueOrThrow({ where: { id: userId } });
     if (
@@ -171,6 +174,8 @@ export async function manageMfa(
       return { ok: true, secret: "", recoveryCodes: codes, signInAgain: true };
     }
     if (!record?.enabledAt) throw new AppError(409, "MFA is not enabled.");
+    if (await tx.membership.count({ where: { userId, organization: { requireMfa: true } } }))
+      throw new AppError(409, "A workspace requires MFA. Its owner must remove that requirement or your membership before you can disable MFA.");
     await consumeFactor(tx, userId, input.code, now);
     await tx.mfaCredential.delete({ where: { userId } });
     await tx.user.update({

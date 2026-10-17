@@ -7,6 +7,7 @@ import { sealSecret } from "../secrets";
 import { hash } from "bcryptjs";
 import type { Prisma, TeamInvitation } from "@prisma/client";
 import { passwordSchema } from "./service";
+import { assertWorkspaceMfa } from "./workspace-security";
 const roles = z.enum(["OWNER", "ADMIN", "EDITOR", "VIEWER"]);
 export const teamAction = z.discriminatedUnion("action", [
   z
@@ -36,6 +37,8 @@ export async function readTeam(organizationId: string, actorId: string) {
     where: { organizationId_userId: { organizationId, userId: actorId } },
   });
   if (!membership) throw new AppError(404, "Workspace not found.");
+  await assertWorkspaceMfa(db, organizationId, actorId);
+  const organization = await db.organization.findUniqueOrThrow({ where: { id: organizationId } });
   const canManage = ["OWNER", "ADMIN"].includes(membership.role);
   const members = await db.membership.findMany({
     where: { organizationId },
@@ -48,6 +51,7 @@ export async function readTeam(organizationId: string, actorId: string) {
   });
   return {
     role: membership.role,
+    requireMfa: organization.requireMfa,
     members,
     invitations: canManage
       ? await db.teamInvitation.findMany({
@@ -86,6 +90,7 @@ export async function manageTeam(
     });
     if (!actor || !["OWNER", "ADMIN"].includes(actor.role))
       throw new AppError(403, "Workspace administrator access required.");
+    await assertWorkspaceMfa(tx, organizationId, actorId);
     if (input.action === "invite") {
       if (!actor.user.emailVerifiedAt)
         throw new AppError(403, "Verify your email before inviting teammates.");

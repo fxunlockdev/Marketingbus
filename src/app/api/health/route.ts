@@ -7,6 +7,7 @@ export async function GET() {
     // Connectivity alone cannot detect an unapplied initial migration.
     await db.$queryRaw`SELECT "id", "emailVerifiedAt", "authVersion" FROM "User" LIMIT 0`;
     await db.$queryRaw`SELECT "authVersion" FROM "Session" LIMIT 0`;
+    await db.$queryRaw`SELECT "requireMfa" FROM "Organization" LIMIT 0`;
     await db.$queryRaw`SELECT "key" FROM "RateLimit" LIMIT 0`;
     await db.$queryRaw`SELECT "organizationId", "revisionAvailable", "debt", "revisionDebt" FROM "Wallet" LIMIT 0`;
     await db.$queryRaw`SELECT "purpose", "revisionCredits" FROM "Reservation" LIMIT 0`;

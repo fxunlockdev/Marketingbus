@@ -5,6 +5,7 @@ export function MfaSettings() {
       enabled: boolean;
       available: boolean;
       recoveryCodesRemaining: number;
+      requiredByWorkspace: boolean;
     } | null>(null),
     [password, setPassword] = useState(""),
     [code, setCode] = useState(""),
@@ -89,6 +90,7 @@ export function MfaSettings() {
               ? `MFA enabled · ${status.recoveryCodesRemaining} recovery codes remaining`
               : "MFA not enabled"}
           </p>
+          {status?.requiredByWorkspace && <p>A workspace requires MFA. You can enroll here, but cannot disable your authenticator while that membership requires it. Password recovery does not bypass this policy.</p>}
           {!status?.available && (
             <p>
               MFA setup requires the operator to configure the server encryption
@@ -144,7 +146,7 @@ export function MfaSettings() {
             )}
             <button
               className="button secondary"
-              disabled={busy || !status?.available}
+              disabled={busy || !status?.available || (!!status.enabled && status.requiredByWorkspace)}
             >
               {status?.enabled
                 ? "Disable MFA and sign out"

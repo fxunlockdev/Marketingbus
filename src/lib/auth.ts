@@ -7,12 +7,22 @@ const digest = (value: string) => createHash("sha256").update(value).digest("hex
 export async function session() {
   const token = (await cookies()).get(cookieName)?.value;
   if (!token) return null;
-  const record = await db.session.findUnique({ where: { id: digest(token) }, include: { user: { include: { memberships: { include: { organization: true } } } } } });
+  const record = await db.session.findUnique({ where: { id: digest(token) }, include: { user: { include: { mfa: { select: { enabledAt: true } }, memberships: { include: { organization: true } } } } } });
   if (!record || record.expiresAt <= new Date() || record.authVersion !== record.user.authVersion) return null;
-  return record.user;
+  // Enrollment increments authVersion and revokes all old sessions. An enabled
+  // factor in a current-version session was therefore challenged at sign-in.
+  const blockedMemberships = record.user.memberships.filter(m => m.organization.requireMfa && !record.user.mfa?.enabledAt);
+  return { ...record.user, blockedMemberships, memberships: record.user.memberships.filter(m => !m.organization.requireMfa || !!record.user.mfa?.enabledAt) };
 }
 export async function requireUser() {
   const user = await session(); if (!user) throw new AppError(401, "Please sign in."); return user;
+}
+export async function requireWorkspace(id: string) {
+  const user = await requireUser();
+  if (user.blockedMemberships.some(m => m.organizationId === id))
+    throw new AppError(403, "This workspace requires MFA. Set up an authenticator in Account security, then sign in again.");
+  if (!user.memberships.some(m => m.organizationId === id)) throw new AppError(404, "Workspace not found.");
+  return user;
 }
 // Never return the raw session cookie to a service or the browser.
 export async function requireSessionId() {

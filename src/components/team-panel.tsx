@@ -1,7 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
+import { WorkspaceSecurity } from "./workspace-security";
 type Team = {
   role: string;
+  requireMfa: boolean;
   members: {
     userId: string;
     role: string;
@@ -68,6 +70,7 @@ export function TeamPanel({ organizationId }: { organizationId: string }) {
         {error}
       </p>
       <p role="status">{message}</p>
+      {team && <WorkspaceSecurity organizationId={organizationId} required={team.requireMfa} canManage={team.role === "OWNER"} onSaved={() => setRefresh(n => n + 1)} />}
       <section className="panel">
         <h2>Workspace team</h2>
         <p>
