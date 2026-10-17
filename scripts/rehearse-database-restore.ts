@@ -1,0 +1,152 @@
+import { spawn } from "node:child_process";
+import { randomBytes, randomUUID } from "node:crypto";
+import { PrismaClient } from "@prisma/client";
+import { resolve } from "node:path";
+import { localRecoveryConfig, recoveryNames, recoveryIdentifier, recoveryUrl, assertLocalContainer, isolatedEnvironment, MAX_ARCHIVE_BYTES, archiveDigest, verifyArchive } from "./recovery/safety";
+import { recoverySnapshot, assertSnapshot } from "./recovery/snapshot";
+import { sealSecret, openSecret } from "../src/lib/secrets";
+import { reserveCreditsInTransaction, finishReservationInTransaction } from "../src/lib/billing/wallet";
+
+// This runner only makes its own synthetic databases. It cannot accept an external
+// backup, overwrite an existing DB, start an app/worker, or enable paid execution.
+let phase = "configuration";
+function check(ok: unknown, message: string): asserts ok { if (!ok) throw Error(message); }
+async function mustReject(action: () => unknown | Promise<unknown>) {
+  let rejected = false; try { await action(); } catch { rejected = true; }
+  check(rejected, "An expected recovery guard did not reject.");
+}
+function run(binary: string, args: string[], env: NodeJS.ProcessEnv, input?: Buffer, maxBytes = 1024 * 1024) {
+  return new Promise<Buffer>((resolveOutput, reject) => {
+    const child = spawn(binary, args, { env, stdio: ["pipe", "pipe", "pipe"] });
+    const chunks: Buffer[] = []; let bytes = 0, failed = false;
+    const fail = () => { if (!failed) { failed = true; child.kill("SIGKILL"); reject(Error("Bounded recovery subprocess failed.")); } };
+    const timeout = setTimeout(fail, 60000);
+    child.on("error", fail);
+    child.stdout.on("data", (b: Buffer) => { bytes += b.length; if (bytes > maxBytes) fail(); else chunks.push(b); });
+    // Drain stderr without printing potential connection strings or row data.
+    child.stderr.on("data", (b: Buffer) => { bytes += b.length; if (bytes > maxBytes) fail(); });
+    child.stdin.on("error", fail);
+    child.on("close", code => { clearTimeout(timeout); if (failed) return; if (code !== 0) reject(Error("Recovery subprocess returned a failure.")); else resolveOutput(Buffer.concat(chunks)); });
+    child.stdin.end(input);
+  });
+}
+async function main() {
+  const config = localRecoveryConfig(process.env.REHEARSAL_DATABASE_URL, process.env.REHEARSAL_DOCKER_CONTAINER);
+  const env = isolatedEnvironment(), names = recoveryNames();
+  phase = "local Docker verification";
+  const endpoint = (await run("docker", ["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], env)).toString();
+  const ports = JSON.parse((await run("docker", ["inspect", "--format", '{{json (index .NetworkSettings.Ports "5432/tcp")}}', config.container], env)).toString());
+  assertLocalContainer(endpoint, ports, config.url.port);
+  const admin = new PrismaClient({ datasourceUrl: config.url.toString(), log: [] });
+  const source = new PrismaClient({ datasourceUrl: recoveryUrl(config.url, names.source), log: [] });
+  const target = new PrismaClient({ datasourceUrl: recoveryUrl(config.url, names.target), log: [] });
+  const created = new Set<string>(), started = Date.now(), oldKeys = process.env.SECRET_ENCRYPTION_KEYS_JSON, oldActive = process.env.SECRET_ENCRYPTION_ACTIVE_KEY;
+  const key = randomBytes(32).toString("base64"), nextKey = randomBytes(32).toString("base64");
+  const pgEnv = isolatedEnvironment({ PGPASSWORD: decodeURIComponent(config.url.password) });
+  const pg = (tool: string, database: string, args: string[], input?: Buffer, maxBytes?: number) => {
+    recoveryIdentifier(database);
+    return run("docker", ["exec", "-i", "-e", "PGPASSWORD", config.container, tool, "--host=127.0.0.1", "--port=5432", `--username=${decodeURIComponent(config.url.username)}`, `--dbname=${database}`, ...args], pgEnv, input, maxBytes);
+  };
+  let report: Record<string, unknown> | undefined;
+  try {
+    phase = "fresh database creation";
+    for (const name of [names.source, names.target]) {
+      // No IF NOT EXISTS: collision must stop rather than reuse anybody's data.
+      await admin.$executeRawUnsafe(`CREATE DATABASE ${recoveryIdentifier(name)}`); created.add(name);
+    }
+    phase = "migration replay";
+    await run(process.execPath, [resolve("node_modules/prisma/build/index.js"), "migrate", "deploy"], isolatedEnvironment({ DATABASE_URL: recoveryUrl(config.url, names.source) }));
+    process.env.SECRET_ENCRYPTION_KEYS_JSON = JSON.stringify({ rehearsal: key }); process.env.SECRET_ENCRYPTION_ACTIVE_KEY = "rehearsal";
+    phase = "synthetic fixture creation";
+    const user = await source.user.create({ data: { email: `restore-${randomUUID()}@example.test`, name: "Restore fixture", passwordHash: "not-a-login-credential", emailVerifiedAt: new Date() } });
+    const a = await source.organization.create({ data: { name: "Synthetic tenant A", memberships: { create: { userId: user.id, role: "OWNER" } }, wallet: { create: { available: 1000, revisionAvailable: 100 } } } });
+    const b = await source.organization.create({ data: { name: "Synthetic tenant B", wallet: { create: { available: 17 } } } });
+    const business = await source.business.create({ data: { organizationId: a.id, name: "Restore business", version: 3, confirmedAt: new Date(), offering: "Synthetic restoration fixture" } });
+    await source.business.create({ data: { organizationId: b.id, name: "Other tenant" } });
+    phase = "credit fixtures";
+    await source.creditEntry.create({ data: { organizationId: a.id, key: "restore-initial-grant", kind: "GRANT", amount: 1000 } });
+    const settled = await source.$transaction(tx => reserveCreditsInTransaction(tx, a.id, "already-settled", 100));
+    await source.$transaction(tx => finishReservationInTransaction(tx, a.id, settled.id, 60));
+    const held = await source.$transaction(tx => reserveCreditsInTransaction(tx, a.id, "uncertain-copy", 40));
+    await source.$transaction(tx => reserveCreditsInTransaction(tx, a.id, "revision-hold", 20, true));
+    await source.wallet.update({ where: { organizationId: a.id }, data: { debt: 5, revisionDebt: 2 } });
+    await source.job.create({ data: { organizationId: a.id, businessId: business.id, key: "restore-uncertain-job", kind: "COPY", status: "NEEDS_RECONCILIATION", submittedAt: new Date(), payload: { fixture: true }, reservationId: held.id, providerTaskId: "synthetic-provider-task" } });
+    phase = "billing fixtures";
+    const payment = await source.billingPayment.create({ data: { id: "synthetic-payment", organizationId: a.id, subscriptionId: "synthetic-subscription", periodStart: new Date("2026-01-01T00:00:00Z"), amountMinor: 80000, currency: "USD", generalCredits: 1000, revisionCredits: 100 } });
+    await source.billingEvent.create({ data: { id: "synthetic-event", payload: { fixture: true }, digest: "fixture-only", status: "PROCESSED" } });
+    await source.billingRefundOperation.create({ data: { id: "synthetic-refund", paymentId: payment.id, organizationId: a.id, amountMinor: 1000, operatorId: "rehearsal", evidence: "synthetic receipt", status: "NEEDS_RECONCILIATION" } });
+    phase = "encrypted connection fixtures";
+    const connectionId = randomUUID(), context = `social:${a.id}:${business.id}:${connectionId}`, plaintext = "synthetic-not-a-provider-token";
+    await source.socialConnection.create({ data: { id: connectionId, organizationId: a.id, businessId: business.id, provider: "Instagram", status: "DISCONNECTED", externalAccountId: "synthetic", label: "Synthetic disconnected fixture", encryptedToken: sealSecret(plaintext, context), permissions: [] } });
+    phase = "brand and identity fixtures";
+    await source.knowledgeSource.create({ data: { businessId: business.id, organizationId: a.id, kind: "TEXT", title: "Fixture evidence", body: "Only synthetic facts.", sha256: archiveDigest(Buffer.from("Only synthetic facts.")), status: "APPROVED", createdBy: user.id } });
+    await source.brandAsset.create({ data: { organizationId: a.id, businessId: business.id, objectKey: "synthetic/not-an-object", label: "Metadata only, no bucket object", purpose: "logo", sha256: "a".repeat(64), bytes: 3, width: 1, height: 1, uploadedBy: user.id, rightsConfirmedAt: new Date(), status: "APPROVED", approvedForGeneration: true } });
+    await source.session.create({ data: { id: "synthetic-session-hash", userId: user.id, expiresAt: new Date(Date.now() + 60000) } });
+    await source.emailOutbox.create({ data: { id: "synthetic-email", userId: user.id, kind: "VERIFY_EMAIL", encryptedPayload: sealSecret("synthetic message", `email:synthetic-email:${user.id}`), expiresAt: new Date(Date.now() + 60000) } });
+    phase = "backup checkpoint";
+    const before = await recoverySnapshot(source), dumpStarted = Date.now();
+    const archive = await pg("pg_dump", names.source, ["--format=custom", "--no-owner", "--no-privileges"], undefined, MAX_ARCHIVE_BYTES);
+    const digest = archiveDigest(archive), backupMs = Date.now() - dumpStarted;
+    verifyArchive(archive, digest);
+    const corrupt = Buffer.from(archive); corrupt[corrupt.length - 1] ^= 1;
+    await mustReject(() => verifyArchive(corrupt, digest));
+    // Prove a point-in-time snapshot, not a fresh copy of the subsequently changed source.
+    await source.business.update({ where: { id: business.id }, data: { name: "Changed after the backup" } });
+    await mustReject(async () => assertSnapshot(before, await recoverySnapshot(source)));
+    phase = "isolated archive restore";
+    const restoreStarted = Date.now();
+    await pg("pg_restore", names.target, ["--exit-on-error", "--single-transaction", "--no-owner", "--no-privileges"], archive);
+    const restoreMs = Date.now() - restoreStarted;
+    phase = "schema and row verification";
+    assertSnapshot(before, await recoverySnapshot(target));
+    check((await target.business.findUniqueOrThrow({ where: { id: business.id } })).name === "Restore business", "Backup checkpoint not preserved.");
+    check(await target.business.count({ where: { id: business.id, organizationId: b.id } }) === 0, "Tenant-scoped read failed.");
+    await mustReject(() => target.knowledgeSource.create({ data: { businessId: business.id, organizationId: b.id, title: "Must reject", kind: "TEXT", createdBy: user.id } }));
+    await mustReject(() => target.creditEntry.create({ data: { organizationId: a.id, key: "restore-initial-grant", kind: "GRANT", amount: 1000 } }));
+    await mustReject(() => target.billingPayment.create({ data: { ...payment, id: "duplicate-period" } }));
+    phase = "key continuity verification";
+    const encrypted = (await target.socialConnection.findUniqueOrThrow({ where: { id: connectionId } })).encryptedToken;
+    process.env.SECRET_ENCRYPTION_KEYS_JSON = JSON.stringify({ rehearsal: key, rotated: nextKey }); process.env.SECRET_ENCRYPTION_ACTIVE_KEY = "rotated";
+    check(openSecret(encrypted, context) === plaintext, "Retained key did not decrypt restored data.");
+    await mustReject(() => openSecret(encrypted, `social:${b.id}:${business.id}:${connectionId}`));
+    process.env.SECRET_ENCRYPTION_KEYS_JSON = JSON.stringify({ rotated: nextKey });
+    await mustReject(() => openSecret(encrypted, context));
+    process.env.SECRET_ENCRYPTION_KEYS_JSON = JSON.stringify({ rehearsal: key, rotated: nextKey });
+    phase = "accounting and uncertain-state verification";
+    const wallet = await target.wallet.findUniqueOrThrow({ where: { organizationId: a.id } });
+    check(wallet.available === 900 && wallet.held === 60 && wallet.revisionAvailable === 80 && wallet.debt === 5 && wallet.revisionDebt === 2, "Restored wallet differs.");
+    check((await target.job.findUniqueOrThrow({ where: { key: "restore-uncertain-job" } })).status === "NEEDS_RECONCILIATION", "Uncertain job was silently reset.");
+    check((await target.billingRefundOperation.findUniqueOrThrow({ where: { id: "synthetic-refund" } })).status === "NEEDS_RECONCILIATION", "Uncertain refund was silently reset.");
+    await target.$transaction(tx => finishReservationInTransaction(tx, a.id, settled.id, 60));
+    check(JSON.stringify(await target.wallet.findUniqueOrThrow({ where: { organizationId: a.id } })) === JSON.stringify(wallet), "Restored settlement replay changed balance.");
+    await mustReject(() => target.$transaction(tx => finishReservationInTransaction(tx, a.id, settled.id, 61)));
+    await mustReject(() => target.$transaction(tx => finishReservationInTransaction(tx, b.id, held.id, 0)));
+    // Synthetic resolution only: exercise restored ledger behavior, never run a worker.
+    await target.$transaction(tx => finishReservationInTransaction(tx, a.id, held.id, 10));
+    await target.$transaction(tx => finishReservationInTransaction(tx, a.id, held.id, 10));
+    const resolved = await target.wallet.findUniqueOrThrow({ where: { organizationId: a.id } });
+    check(resolved.available === 925 && resolved.held === 20 && resolved.debt === 0 && resolved.revisionDebt === 2, "Debt-aware settlement was not preserved.");
+    check((await target.wallet.findUniqueOrThrow({ where: { organizationId: b.id } })).available === 17, "Other tenant wallet changed.");
+    check(await target.emailOutbox.count({ where: { status: "QUEUED", providerId: null, attempts: 0 } }) === 1, "Email outbox changed without delivery authorization.");
+    await mustReject(async () => assertSnapshot(before, await recoverySnapshot(target)));
+    report = { status: "passed", scope: "synthetic-local-database-only", archiveBytes: archive.length, archiveSha256: digest,
+      tablesVerified: before.tables.length, rowsVerified: before.tables.reduce((n, t) => n + t.count, 0),
+      migrationsVerified: before.tables.find(t => t.name === "_prisma_migrations")?.count,
+      schemaHash: before.schemaHash, backupMs, restoreMs, elapsedMs: Date.now() - started,
+      checks: ["schema-and-all-row-fingerprints", "post-backup-change-excluded", "corrupt-archive-rejected", "tenant-foreign-keys", "ledger-and-payment-uniqueness", "settlement-replay", "refund-debt", "uncertain-job-and-refund-preservation", "retained-key-decryption", "missing-key-and-cross-tenant-decryption-denial", "unchanged-email-outbox"],
+      productionRecoveryVerified: false, objectStorageVerified: false, workersStarted: 0, providerCalls: 0 };
+  } finally {
+    if (oldKeys === undefined) delete process.env.SECRET_ENCRYPTION_KEYS_JSON; else process.env.SECRET_ENCRYPTION_KEYS_JSON = oldKeys;
+    if (oldActive === undefined) delete process.env.SECRET_ENCRYPTION_ACTIVE_KEY; else process.env.SECRET_ENCRYPTION_ACTIVE_KEY = oldActive;
+    await Promise.all([source.$disconnect(), target.$disconnect()]);
+    const cleanupFailures: string[] = [];
+    for (const name of created) {
+      try { await admin.$executeRawUnsafe(`DROP DATABASE ${recoveryIdentifier(name)}`); }
+      catch { cleanupFailures.push(name); }
+    }
+    await admin.$disconnect();
+    if (cleanupFailures.length) { console.error(`Disposable rehearsal databases need manual cleanup: ${cleanupFailures.join(", ")}`); throw Error("Rehearsal cleanup incomplete."); }
+  }
+  console.info(JSON.stringify({ ...report, temporaryDatabasesRemoved: created.size }, null, 2));
+}
+void main().catch(() => { console.error(`Restore rehearsal failed during ${phase}. No app or worker was started. Connection details and row data are not printed.`); process.exitCode = 1; });

@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:restore": "tsx scripts/rehearse-database-restore.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy"
   },
