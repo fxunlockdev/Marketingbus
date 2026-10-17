@@ -20,7 +20,14 @@ Browser verification initially exposed two test-harness issues, now corrected: n
 
 ## Delivery
 
-Source push, CI and deployment pending. The preceding deployed runtime remains `studio-v18-shot-jobs` until successful deployment evidence is recorded here.
+Source commit `4e217d7fdf890dffb32818d8b6ae8baaf43fee8e` is pushed to `main`. [GitHub CI run 39010515376](https://github.com/fxunlockdev/Marketingbus/actions/runs/39010515376) passes all 473 tests in 39 suites, 27 browser journeys, build/type checking and dependency audit. One private-storage journey remains skipped. CI reports existing action-runtime and upcoming Ubuntu-runner migration notices; neither is a failed check.
+
+Both exact Railway deployments reported SUCCESS:
+
+- Web: `b1b710b1-95c6-4831-b581-5a50d931a2b6`.
+- Worker: `1c147423-f4ed-4167-ba09-ee796271eeff`.
+
+Both migration logs report all 31 migrations with no pending migration. Runtime logs show the web server ready and worker started. Hosted `/api/health` returns 200 with `status: ok`; signed-out `/studio` redirects to `/login` with 307; unauthenticated video access returns 401. These checks verify deployment and access boundaries, not authenticated hosted rendering or real bucket/provider acceptance. No production fixture, paid supplier call, email, payment or social post was created.
 
 ## Remaining boundaries
 

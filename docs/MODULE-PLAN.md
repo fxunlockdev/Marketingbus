@@ -52,7 +52,7 @@ Added and deployed: quarter-second source trimming, fit/fill framing and keyboar
 
 Added and deployed: approved-scene generated-shot quotes and explicit authorization; single-submit asynchronous supplier jobs; unique provider-job binding; bounded polling; private MP4 quarantine; normalization-gated credit settlement; source approval/provenance checks; shared supplier/CPU/storage admission; status and cancellation controls; privileged uncertain-expense reconciliation. Production has no registered generated-video adapter. See [generated-shot operations](GENERATED-SHOTS.md).
 
-Added locally: portrait, square, feed and landscape export layouts; format-specific footage previews; caption reflow/overflow validation; exact output dimension checks; format-bound shot reviews and legacy-document preservation. Every layout stays within the existing frame-pixel ceiling and shares the same CPU/storage limits. See [video-format evidence](RELEASE-2026-10-17-VIDEO-FORMATS.md).
+Added and deployed: portrait, square, feed and landscape export layouts; format-specific footage previews; caption reflow/overflow validation; exact output dimension checks; format-bound shot reviews and legacy-document preservation. Every layout stays within the existing frame-pixel ceiling and shares the same CPU/storage limits. See [video-format evidence](RELEASE-2026-10-17-VIDEO-FORMATS.md).
 
 Remaining internal work: actual Higgsfield transport and expense verification; reference-led shot revisions; licensed audio/voiceover; semantic continuity/fidelity evaluation and platform-specific validation/transfer. The current customer-deliverable path is silent app-owned motion rendering, not a Higgsfield or Hyperframes runtime integration. Production binary/container packaging and real bucket acceptance remain. Higgsfield account/model/rate verification and paid acceptance are external gates, not substitutes for the unfinished transport.
 
@@ -83,6 +83,10 @@ Implemented locally: invitation-aware registration, in-page existing-account sig
 Required internal work and verification: organization MFA policy; recovery and key-rotation procedures; billing/provider reconciliation operations; alerts and dead-letter visibility; backup and restore rehearsal with data assertions; realistic load/chaos tests; manual keyboard/screen-reader review; independent security review. Prove hosted business onboarding through approval/export without fabricating provider outcomes.
 
 ## Current release boundary
+
+Release `4e217d7` is deployed successfully on web and worker with all 31 migrations applied and runtime `studio-v19-video-formats`. Local and GitHub CI run `39010515376` pass 473 unit/database tests across 39 suites, 27 browser journeys, build/type checking and audit. One private-storage browser journey remains skipped. Hosted health returns 200, studio redirects signed-out users, and unauthenticated video reads return 401. Four finite export formats are implemented, not certified social publishing profiles. Supplier transport/audio, platform adapters, mixed-media automation and enterprise assurance remain unfinished. See [video-format release evidence](RELEASE-2026-10-17-VIDEO-FORMATS.md).
+
+### Previous generated-shot release
 
 Release `e99d29a` is deployed successfully on web and worker with all 31 migrations applied and runtime `studio-v18-shot-jobs`. Local and GitHub CI run `39007817819` pass 451 unit/database tests across 39 suites, 26 browser journeys, build/type checking and audit. One private-storage browser journey remains skipped. Hosted health returns 200, studio redirects signed-out users, and unauthenticated generated-shot/clip reads return 401. This extends the video workflow but does not enable a supplier transport or finish the seven-module scope. See [generated-shot release evidence](RELEASE-2026-10-17-GENERATED-SHOTS.md).
 
