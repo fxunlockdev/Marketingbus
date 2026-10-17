@@ -1,0 +1,201 @@
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { db } from "../src/lib/db";
+import { manageVideo, storyboardContext } from "../src/lib/video/service";
+import { manageShotGeneration, listShotGenerations } from "../src/lib/video/generation-service";
+import { runOneShotGeneration, recoverShotGenerations } from "../src/lib/video/generation-worker";
+import { reconcileShotGeneration } from "../src/lib/video/generation-reconcile";
+import { runOneClip, reviewClip, readClip, listClips, recoverClipLeases, recoverClipStorage } from "../src/lib/video/clips";
+import { configuredShotAdapters, selectShotRoute, shotConfigurationHash, type ShotAdapter } from "../src/lib/video/generation-contracts";
+import { storyboardDocument } from "../src/lib/video/document";
+import { WORKER_RUNTIME, workerConfigurationHash } from "../src/lib/production/readiness";
+import { authorizeSupplier } from "../src/lib/production/budget";
+import type { AssetStore } from "../src/lib/assets/storage";
+const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
+if (process.env.TEST_DATABASE_URL && (process.env.DATABASE_URL !== process.env.TEST_DATABASE_URL || !["localhost", "127.0.0.1"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Local test DB required");
+suite("generated-shot authorization, asynchronous receipts and delivery", () => {
+  const orgs: string[] = [], users: string[] = [], extras: string[] = [], workerId = `shot-fixture-${crypto.randomUUID()}`, objects = new Map<string, Buffer>();
+  const rate = { provider: "fixture", accountId: "test-account", adapterVersion: "v1", model: "test-video", durationMs: 5000, ceilingMicros: 100000, verifiedUntil: "2099-01-01T00:00:00Z" };
+  const source = Buffer.from("000000186674797069736f6d0000020069736f6d6d703432", "hex"), processed = { bytes: Buffer.from("test-only silent output"), durationMs: 5000 };
+  const store: AssetStore = { put: async (key, bytes, _mime, immutable) => { if (immutable && objects.has(key)) throw Error("immutable"); objects.set(key, Buffer.from(bytes)); }, get: async key => { const b = objects.get(key); if (!b) throw Error("missing"); return b; }, remove: async key => { objects.delete(key); } };
+  async function worker() { await db.workerHeartbeat.upsert({ where: { id: workerId }, create: { id: workerId, runtimeVersion: WORKER_RUNTIME, configurationHash: workerConfigurationHash(), executionEnabled: true, motionReady: true }, update: { runtimeVersion: WORKER_RUNTIME, configurationHash: workerConfigurationHash(), executionEnabled: true, motionReady: true, lastSeenAt: new Date() } }); }
+  beforeEach(async () => {
+    vi.stubEnv("PAID_EXECUTION_ENABLED", "true"); vi.stubEnv("MOTION_RENDERING_ENABLED", "true"); vi.stubEnv("MOTION_RENDER_DAILY_LIMIT", "100");
+    vi.stubEnv("DAILY_SUPPLIER_BUDGET_MICROS", "50000000"); vi.stubEnv("TOTAL_SUPPLIER_BUDGET_MICROS", "1000000000");
+    vi.stubEnv("VIDEO_RATE_CARD_JSON", JSON.stringify([rate])); await worker();
+  });
+  afterEach(async () => {
+    const jobs = await db.videoGeneration.findMany({ where: { organizationId: { in: orgs } } }), clips = await db.videoClip.findMany({ where: { organizationId: { in: orgs } } });
+    await db.motionAuthorization.deleteMany({ where: { key: { in: clips.map(c => c.id) } } });
+    await db.supplierAuthorization.deleteMany({ where: { key: { in: [...jobs.map(j => j.id), ...extras] } } });
+    await db.videoClip.deleteMany({ where: { organizationId: { in: orgs } } }); await db.videoGeneration.deleteMany({ where: { organizationId: { in: orgs } } });
+    await db.videoStoryboard.deleteMany({ where: { organizationId: { in: orgs } } }); await db.organization.deleteMany({ where: { id: { in: orgs } } }); await db.user.deleteMany({ where: { id: { in: users } } });
+    orgs.length = users.length = extras.length = 0; objects.clear(); vi.unstubAllEnvs();
+  });
+  afterAll(async () => { await db.workerHeartbeat.deleteMany({ where: { id: workerId } }); await db.$disconnect(); });
+  async function setup() {
+    const user = await db.user.create({ data: { email: `shot-${crypto.randomUUID()}@example.test`, name: "Shot fixture", passwordHash: "no-login" } }); users.push(user.id);
+    const org = await db.organization.create({ data: { name: "SHOT FIXTURE", memberships: { create: { userId: user.id, role: "OWNER" } }, wallet: { create: { available: 100, revisionAvailable: 20 } } } }); orgs.push(org.id);
+    const business = await db.business.create({ data: { organizationId: org.id, name: "Architecture studio", offering: "Design consultations", confirmedAt: new Date() } });
+    const plan = await db.productionPlan.create({ data: { organizationId: org.id, businessId: business.id, brandVersion: 1, title: "Local plan", creditCeiling: 0, items: { create: { title: "Considered spaces", channel: "YouTube", format: "motion", brief: {}, revisions: { create: { version: 1, status: "APPROVED", content: {} } } } } }, include: { items: { include: { revisions: true } } } });
+    const scope = { businessId: business.id, organizationId: org.id, actorId: user.id };
+    const boardId = (await manageVideo(scope, { action: "create", itemId: plan.items[0].id }, () => store)).storyboardId!;
+    const doc = storyboardDocument.parse((await db.videoStoryboard.findUniqueOrThrow({ where: { id: boardId } })).document);
+    for (const shot of doc.shots) await manageVideo(scope, { action: "review-shot", storyboardId: boardId, shotId: shot.id, approved: true }, () => store);
+    await manageVideo(scope, { action: "approve-storyboard", storyboardId: boardId }, () => store);
+    const submit = vi.fn(async (input: Parameters<ShotAdapter["submit"]>[0]) => ({ requestId: input.requestId, providerJobId: `job-${input.requestId}`, accountId: rate.accountId }));
+    const poll = vi.fn(async (input: Parameters<ShotAdapter["poll"]>[0]): Promise<unknown> => ({ requestId: input.requestId, providerJobId: input.providerJobId, accountId: rate.accountId, model: rate.model, status: "succeeded", costMicros: 60000, bytes: source }));
+    const adapters: ShotAdapter[] = [{ id: rate.provider, version: rate.adapterVersion, accountId: rate.accountId, submit, poll }];
+    return { scope, boardId, shotId: doc.shots[0].id, revisionId: plan.items[0].revisions[0].id, adapters, submit, poll };
+  }
+  type Fixture = Awaited<ReturnType<typeof setup>>;
+  const row = (id: string) => db.videoGeneration.findUniqueOrThrow({ where: { id }, include: { output: true } });
+  const wallet = (f: Fixture) => db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } });
+  async function quote(f: Fixture) { return (await manageShotGeneration(f.scope, { action: "quote", storyboardId: f.boardId, shotId: f.shotId }, f.adapters, () => store)).generationId!; }
+  async function accept(f: Fixture, existing?: string) { const id = existing || await quote(f); await manageShotGeneration(f.scope, { action: "accept", generationId: id, rightsConfirmed: true }, f.adapters, () => store); return id; }
+  async function due(id: string) { await db.videoGeneration.update({ where: { id }, data: { nextPollAt: new Date(0) } }); }
+  async function ingested(f: Fixture) { const id = await accept(f); await runOneShotGeneration(f.adapters, () => store); await due(id); await runOneShotGeneration(f.adapters, () => store); return id; }
+  it("quotes freely, holds once, submits once, settles only normalized footage and requires human review", async () => {
+    const f = await setup(), id = await quote(f); expect(await wallet(f)).toMatchObject({ available: 100, held: 0 });
+    await Promise.all([accept(f, id), accept(f, id)]); expect(await wallet(f)).toMatchObject({ available: 90, held: 10, revisionAvailable: 20 });
+    await Promise.all([runOneShotGeneration(f.adapters, () => store), runOneShotGeneration(f.adapters, () => store)]); expect(f.submit).toHaveBeenCalledTimes(1);
+    await due(id); await Promise.all([runOneShotGeneration(f.adapters, () => store), runOneShotGeneration(f.adapters, () => store)]); expect(f.poll).toHaveBeenCalledTimes(1);
+    const q = await row(id); expect(q).toMatchObject({ status: "INGESTING", output: { status: "QUEUED" } }); expect((await wallet(f)).held).toBe(10);
+    await expect(readClip(f.scope, q.output!.id, store)).rejects.toThrow("processed");
+    await runOneClip(async () => processed, () => store); expect(await row(id)).toMatchObject({ status: "READY", supplierCostMicros: 60000, output: { status: "READY", approvedBy: null } });
+    expect(await wallet(f)).toMatchObject({ available: 94, held: 0, revisionAvailable: 20 });
+    const clip = (await row(id)).output!; await reviewClip(f.scope, clip.id, { action: "approve", watched: true });
+    const document = storyboardDocument.parse((await db.videoStoryboard.findUniqueOrThrow({ where: { id: f.boardId } })).document); document.shots[0].clip = { id: clip.id, sha256: clip.sha256 };
+    const next = (await manageVideo(f.scope, { action: "save", storyboardId: f.boardId, document }, () => store)).storyboardId!;
+    expect((await storyboardContext(f.scope, next)).clips).toHaveLength(1); expect(await readClip(f.scope, clip.id, store)).toEqual(processed.bytes);
+    await db.creativeRevision.update({ where: { id: f.revisionId }, data: { status: "REJECTED" } });
+    await expect(readClip(f.scope, clip.id, store)).rejects.toThrow("source brand or approved copy");
+    expect((await listClips(f.scope)).find(c => c.id === clip.id)?.usable).toBe(false);
+  });
+  it("keeps production adapter registration empty and refuses unverified prices", async () => {
+    const f = await setup(); expect(configuredShotAdapters()).toEqual([]);
+    await expect(manageShotGeneration(f.scope, { action: "quote", storyboardId: f.boardId, shotId: f.shotId }, undefined, () => store)).rejects.toThrow("verified provider");
+    expect((await wallet(f)).held).toBe(0);
+    vi.stubEnv("VIDEO_RATE_CARD_JSON", JSON.stringify([{ ...rate, verifiedUntil: "2000-01-01T00:00:00Z" }])); expect(() => selectShotRoute(5000, f.adapters)).toThrow("verified provider");
+  });
+  it.each(["viewer", "tenant", "unapproved", "expiry", "configuration", "worker", "credits", "cpu", "storage"])("refuses %s authorization without partial reservations", async reason => {
+    const f = await setup(), id = await quote(f); let scope = f.scope;
+    if (reason === "viewer") await db.membership.update({ where: { organizationId_userId: { organizationId: scope.organizationId, userId: scope.actorId } }, data: { role: "VIEWER" } });
+    if (reason === "tenant") scope = (await setup()).scope;
+    if (reason === "unapproved") await db.videoStoryboard.update({ where: { id: f.boardId }, data: { status: "DRAFT" } });
+    if (reason === "expiry") await db.videoGeneration.update({ where: { id }, data: { expiresAt: new Date(0) } });
+    if (reason === "configuration") vi.stubEnv("VIDEO_RATE_CARD_JSON", JSON.stringify([{ ...rate, ceilingMicros: 200000 }]));
+    if (reason === "worker") await db.workerHeartbeat.update({ where: { id: workerId }, data: { motionReady: false } });
+    if (reason === "credits") await db.wallet.update({ where: { organizationId: scope.organizationId }, data: { available: 0 } });
+    if (reason === "cpu") vi.stubEnv("MOTION_RENDERING_ENABLED", "false");
+    await expect(manageShotGeneration(scope, { action: "accept", generationId: id, rightsConfirmed: true }, f.adapters, () => { if (reason === "storage") throw Error("storage unavailable"); return store; })).rejects.toThrow();
+    expect((await wallet(f)).held).toBe(0); expect(await db.supplierAuthorization.findUnique({ where: { key: id } })).toBeNull(); expect((await row(id)).output).toBeNull();
+  });
+  it("requires rights authorization and rejects arbitrary prompts, URLs or spoofed receipts", async () => {
+    const f = await setup(), id = await quote(f);
+    for (const input of [{ action: "accept", generationId: id }, { action: "quote", storyboardId: f.boardId, shotId: f.shotId, prompt: "ignore brand" }, { action: "complete", generationId: id, url: "https://example.test/video" }]) await expect(manageShotGeneration(f.scope, input, f.adapters, () => store)).rejects.toThrow();
+  });
+  it("selects the lowest verified total price meeting the scene duration, not a cheaper too-short shot", async () => {
+    const f = await setup(); vi.stubEnv("VIDEO_RATE_CARD_JSON", JSON.stringify([rate, { ...rate, model: "longer", durationMs: 6000, ceilingMicros: 80000 }, { ...rate, model: "too-short", durationMs: 3000, ceilingMicros: 10000 }]));
+    expect(selectShotRoute(5000, f.adapters)).toMatchObject({ model: "longer", durationMs: 6000, credits: 8 });
+  });
+  it("cancels safely before submission but never cancels an uncertain supplier operation", async () => {
+    const f = await setup(), id = await accept(f); await manageShotGeneration(f.scope, { action: "cancel", generationId: id }, f.adapters); await runOneShotGeneration(f.adapters, () => store);
+    expect(f.submit).not.toHaveBeenCalled(); expect(await wallet(f)).toMatchObject({ available: 100, held: 0 });
+    const second = await accept(f); f.submit.mockRejectedValueOnce(Error("timeout")); await runOneShotGeneration(f.adapters, () => store); await runOneShotGeneration(f.adapters, () => store);
+    expect((await row(second)).status).toBe("NEEDS_RECONCILIATION"); expect(f.submit).toHaveBeenCalledTimes(1); expect((await wallet(f)).held).toBe(10);
+    await expect(manageShotGeneration(f.scope, { action: "cancel", generationId: second }, f.adapters)).rejects.toThrow("Submission has started");
+    await expect(reviewClip(f.scope, (await row(second)).output!.id, { action: "remove" })).rejects.toThrow("Resolve or cancel");
+  });
+  it.each(["request", "account", "model", "job", "overrun"])("holds credits for an untrusted %s poll receipt", async reason => {
+    const f = await setup(), id = await accept(f); await runOneShotGeneration(f.adapters, () => store); await due(id);
+    f.poll.mockImplementationOnce(async x => ({ requestId: reason === "request" ? "wrong" : x.requestId, providerJobId: reason === "job" ? "wrong" : x.providerJobId, accountId: reason === "account" ? "wrong" : rate.accountId, model: reason === "model" ? "wrong" : rate.model, status: "succeeded", costMicros: reason === "overrun" ? 200000 : 60000, bytes: source }));
+    await runOneShotGeneration(f.adapters, () => store); expect((await row(id)).status).toBe("NEEDS_RECONCILIATION"); expect((await wallet(f)).held).toBe(10); expect(objects.size).toBe(0);
+  });
+  it.each(["failed", "invalid-media", "stale-brand", "demoted"])("records known expense and refunds unusable %s output", async reason => {
+    const f = await setup(), id = await accept(f); await runOneShotGeneration(f.adapters, () => store); await due(id);
+    if (reason === "stale-brand") await db.business.update({ where: { id: f.scope.businessId }, data: { version: { increment: 1 } } });
+    if (reason === "demoted") await db.membership.update({ where: { organizationId_userId: { organizationId: f.scope.organizationId, userId: f.scope.actorId } }, data: { role: "VIEWER" } });
+    if (["failed", "invalid-media"].includes(reason)) f.poll.mockImplementationOnce(async x => ({ requestId: x.requestId, providerJobId: x.providerJobId, accountId: rate.accountId, model: rate.model, costMicros: 60000, ...(reason === "failed" ? { status: "failed" } : { status: "succeeded", bytes: Buffer.from("not MP4") }) }));
+    await runOneShotGeneration(f.adapters, () => store); expect(await row(id)).toMatchObject({ status: "FAILED", supplierCostMicros: 60000 }); expect(await wallet(f)).toMatchObject({ available: 100, held: 0 });
+  });
+  it("backs off pending polls and stops at the persisted ceiling without resubmission", async () => {
+    const f = await setup(), id = await accept(f); await runOneShotGeneration(f.adapters, () => store); await due(id);
+    f.poll.mockImplementation(async x => ({ requestId: x.requestId, providerJobId: x.providerJobId, accountId: rate.accountId, model: rate.model, status: "pending" }));
+    await runOneShotGeneration(f.adapters, () => store); expect((await row(id)).nextPollAt!.getTime()).toBeGreaterThan(Date.now()); await runOneShotGeneration(f.adapters, () => store); expect(f.poll).toHaveBeenCalledTimes(1);
+    await db.videoGeneration.update({ where: { id }, data: { pollCount: 19, nextPollAt: new Date(0) } }); await runOneShotGeneration(f.adapters, () => store);
+    expect((await row(id)).status).toBe("NEEDS_RECONCILIATION"); expect(f.submit).toHaveBeenCalledTimes(1);
+  });
+  it.each(["decoder", "duration", "context", "storage", "lease"])("releases credits when normalization fails at %s", async reason => {
+    const f = await setup(), id = await ingested(f), clip = (await row(id)).output!;
+    const processor = vi.fn(async () => { if (reason === "decoder") throw Error("bad bytes"); if (reason === "context") await db.videoStoryboard.update({ where: { id: f.boardId }, data: { status: "DRAFT" } }); return { ...processed, durationMs: reason === "duration" ? 4000 : 5000 }; });
+    if (reason === "lease") {
+      await db.videoClip.update({ where: { id: clip.id }, data: { status: "RUNNING", leaseUntil: new Date(0) } }); await recoverClipLeases();
+    } else await runOneClip(processor, () => reason === "storage" ? { ...store, put: async (...args) => { await store.put(...args); throw Error("lost acknowledgement"); } } : store);
+    expect(await row(id)).toMatchObject({ status: "FAILED", supplierCostMicros: 60000 }); expect(await wallet(f)).toMatchObject({ available: 100, held: 0 });
+    await expect(recoverClipStorage(f.scope, clip.id, store)).rejects.toThrow("not deliverable");
+  });
+  it("reconciles uncertain expense once, including an overrun in future supplier capacity", async () => {
+    const f = await setup(), id = await accept(f); f.submit.mockRejectedValueOnce(Error("timeout")); await runOneShotGeneration(f.adapters, () => store);
+    const input = { generationId: id, supplierCostMicros: 150000, operatorId: "test-operator", evidence: "Verified final supplier invoice test evidence" };
+    await reconcileShotGeneration(input); await reconcileShotGeneration(input);
+    await expect(reconcileShotGeneration({ ...input, supplierCostMicros: 140000 })).rejects.toThrow("replay changed");
+    expect(await wallet(f)).toMatchObject({ available: 100, held: 0 }); expect((await db.supplierAuthorization.findUniqueOrThrow({ where: { key: id } })).ceilingMicros).toBe(150000);
+  });
+  it("keeps older unresolved video expense in the shared daily allowance", async () => {
+    const f = await setup(), id = await accept(f); const yesterday = new Date(Date.now() - 2 * 86400000);
+    await db.supplierAuthorization.update({ where: { key: id }, data: { createdAt: yesterday } }); await db.videoGeneration.update({ where: { id }, data: { acceptedAt: yesterday, status: "NEEDS_RECONCILIATION" } });
+    vi.stubEnv("DAILY_SUPPLIER_BUDGET_MICROS", "100000"); const key = crypto.randomUUID(); extras.push(key);
+    await expect(db.$transaction(tx => authorizeSupplier(tx, key, 1))).rejects.toThrow("supplier-spend limit");
+  });
+  it("recovers only pre-submit work and fences late submission responses", async () => {
+    const f = await setup(), id = await accept(f); await db.videoGeneration.update({ where: { id }, data: { status: "RUNNING", leaseUntil: new Date(0) } }); await recoverShotGenerations(); expect((await row(id)).status).toBe("QUEUED");
+    f.submit.mockImplementationOnce(async input => {
+      await db.videoGeneration.update({ where: { id }, data: { leaseUntil: new Date(0) } }); await recoverShotGenerations();
+      return { requestId: input.requestId, providerJobId: `late-${id}`, accountId: rate.accountId };
+    });
+    await runOneShotGeneration(f.adapters, () => store); expect((await row(id)).status).toBe("NEEDS_RECONCILIATION"); expect((await row(id)).providerJobId).toBeNull(); expect((await wallet(f)).held).toBe(10);
+  });
+  it("counts an older job settled today in today's shared supplier allowance", async () => {
+    const f = await setup(), id = await ingested(f), yesterday = new Date(Date.now() - 2 * 86400000);
+    await db.supplierAuthorization.update({ where: { key: id }, data: { createdAt: yesterday } });
+    await db.videoGeneration.update({ where: { id }, data: { acceptedAt: yesterday, submittedAt: yesterday } });
+    await runOneClip(async () => processed, () => store); expect((await row(id)).settledAt).not.toBeNull();
+    vi.stubEnv("DAILY_SUPPLIER_BUDGET_MICROS", "100000"); const key = crypto.randomUUID(); extras.push(key);
+    await expect(db.$transaction(tx => authorizeSupplier(tx, key, 1))).rejects.toThrow("supplier-spend limit");
+  });
+  it("returns only scoped customer status, without private prompt, receipts or supplier pricing", async () => {
+    const f = await setup(), id = await quote(f), other = await setup();
+    const result = await listShotGenerations(f.scope); expect(result.jobs.map(j => j.id)).toContain(id);
+    const text = JSON.stringify(result); for (const secret of ["prompt", "configurationHash", "supplierCeilingMicros", "providerJobId", "receipt"]) expect(text).not.toContain(secret);
+    expect((await listShotGenerations(other.scope)).jobs).toEqual([]); expect(shotConfigurationHash()).toHaveLength(64);
+  });
+  it("holds a second job rather than binding two authorizations to one supplier job", async () => {
+    const f = await setup(), first = await accept(f); await runOneShotGeneration(f.adapters, () => store);
+    const g = await setup(), second = await accept(g); g.submit.mockImplementationOnce(async x => ({ requestId: x.requestId, providerJobId: (await row(first)).providerJobId!, accountId: rate.accountId }));
+    await runOneShotGeneration(g.adapters, () => store); expect((await row(second)).status).toBe("NEEDS_RECONCILIATION"); expect((await row(first)).status).toBe("POLLING"); expect((await wallet(g)).held).toBe(10);
+  });
+  it.each(["raw-storage", "raw-integrity", "oversized"])("quarantines %s failures and does not retry a paid generation", async reason => {
+    const f = await setup(), id = await accept(f); await runOneShotGeneration(f.adapters, () => store); await due(id);
+    if (reason === "oversized") f.poll.mockImplementationOnce(async x => ({ requestId: x.requestId, providerJobId: x.providerJobId, accountId: rate.accountId, model: rate.model, status: "succeeded", costMicros: 60000, bytes: Buffer.alloc(21 * 1024 * 1024) }));
+    const failingStore = { ...store, put: async (...args: Parameters<AssetStore["put"]>) => { await store.put(...args); if (reason === "raw-storage") throw Error("acknowledgement lost"); }, get: async (key: string) => reason === "raw-integrity" ? Buffer.from("tampered") : store.get(key) };
+    await runOneShotGeneration(f.adapters, () => failingStore); await runOneShotGeneration(f.adapters, () => store);
+    expect(await row(id)).toMatchObject({ status: "FAILED", supplierCostMicros: 60000, output: { status: "FAILED" } }); expect((await wallet(f)).held).toBe(0); expect(f.submit).toHaveBeenCalledTimes(1);
+  });
+  it("recovers interrupted read-only polling without a second submission", async () => {
+    const f = await setup(), id = await accept(f); await runOneShotGeneration(f.adapters, () => store);
+    await db.videoGeneration.update({ where: { id }, data: { leaseUntil: new Date(0), pollCount: 1 } }); await recoverShotGenerations();
+    expect(await row(id)).toMatchObject({ status: "POLLING", leaseUntil: null }); await due(id); await runOneShotGeneration(f.adapters, () => store);
+    expect((await row(id)).status).toBe("INGESTING"); expect(f.submit).toHaveBeenCalledTimes(1);
+  });
+  it.each(["queue", "normalization"])("expires abandoned %s work without stranding customer credits", async stage => {
+    const f = await setup(), id = stage === "queue" ? await accept(f) : await ingested(f);
+    await db.videoGeneration.update({ where: { id }, data: { acceptedAt: new Date(Date.now() - 7200000) } }); await recoverShotGenerations();
+    expect((await row(id)).status).toBe("FAILED"); expect(await wallet(f)).toMatchObject({ available: 100, held: 0 });
+  });
+  it("revokes generated footage after the source storyboard approval is withdrawn", async () => {
+    const f = await setup(), id = await ingested(f); await runOneClip(async () => processed, () => store);
+    const clip = (await row(id)).output!; await reviewClip(f.scope, clip.id, { action: "approve", watched: true });
+    await manageVideo(f.scope, { action: "review-shot", storyboardId: f.boardId, shotId: f.shotId, approved: false }, () => store);
+    expect((await listClips(f.scope)).find(c => c.id === clip.id)?.usable).toBe(false); await expect(readClip(f.scope, clip.id, store)).rejects.toThrow("storyboard changed");
+  });
+});

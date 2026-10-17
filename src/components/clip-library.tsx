@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-export type StudioClip = { id: string; label: string; status: string; sha256: string; durationMs: number; purgeAfter: string; usable: boolean; processorVersion: string };
+export type StudioClip = { id: string; label: string; status: string; sha256: string; durationMs: number; purgeAfter: string; usable: boolean; processorVersion: string; generationId?: string | null };
 export function ClipLibrary({ businessId, clips, canEdit, onChange }: { businessId: string; clips: StudioClip[]; canEdit: boolean; onChange: () => Promise<void> }) {
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [message, setMessage] = useState(""), [label, setLabel] = useState(""), [rights, setRights] = useState(false), [preview, setPreview] = useState<{ id: string; url: string } | null>(null), [watched, setWatched] = useState(false), [removeId, setRemoveId] = useState("");
   const file = useRef<HTMLInputElement>(null), endpoint = `/api/businesses/${businessId}/clips`;
@@ -50,7 +50,7 @@ export function ClipLibrary({ businessId, clips, canEdit, onChange }: { business
           <label className="checkbox-label"><input type="checkbox" checked={watched} onChange={e => setWatched(e.target.checked)} /> I watched this entire clip and reviewed rights, accuracy and brand fidelity.</label></>}
         <div className="tag-row"><button className="button" disabled={busy || !canEdit || preview?.id !== c.id || !watched} onClick={() => act(c.id, "approve")}>Approve {c.label}</button><button className="button" disabled={busy || !canEdit} onClick={() => act(c.id, "reject")}>Reject {c.label}</button></div>
       </>}
-      {c.status === "FAILED" && <><p>Processing or storage was not verified. Nothing can be used. Check for already-processed output without another upload or processing attempt.</p><button className="button" disabled={busy || !canEdit} onClick={() => act(c.id, "recover")}>Check stored clip {c.label}</button></>}
+      {c.status === "FAILED" && (c.generationId ? <p>Generated footage was not deliverable. Check the generation job for credit status. Failed paid output cannot be recovered as free footage; private files await cleanup.</p> : <><p>Processing or storage was not verified. Nothing can be used. Check for already-processed output without another upload or processing attempt.</p><button className="button" disabled={busy || !canEdit} onClick={() => act(c.id, "recover")}>Check stored clip {c.label}</button></>)}
       {["QUEUED", "READY", "APPROVED", "REJECTED", "FAILED"].includes(c.status) && (removeId === c.id ? <><p>Remove this footage and revoke dependent video delivery?</p><button className="button" disabled={busy || !canEdit} onClick={() => act(c.id, "remove")}>Confirm removal of {c.label}</button><button className="button" onClick={() => setRemoveId("")}>Keep {c.label}</button></> : <button className="button" disabled={busy || !canEdit} onClick={() => setRemoveId(c.id)}>Remove {c.label}</button>)}
     </article>)}
   </section>;

@@ -120,6 +120,7 @@ model Business {
   storyboards       VideoStoryboard[]
   motionRenders     MotionRender[]
   videoClips        VideoClip[]
+  videoGenerations  VideoGeneration[]
   socialConnections SocialConnection[]
   socialFlows SocialOAuthFlow[]
   publications SocialPublication[]
@@ -530,9 +531,52 @@ model VideoClip {
   errorCode String?
   purgeAfter DateTime
   createdAt DateTime @default(now())
+  generationId String? @unique
+  generation VideoGeneration? @relation(fields: [generationId, businessId, organizationId], references: [id, businessId, organizationId], onDelete: Restrict)
   business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  @@unique([generationId, businessId, organizationId])
   @@index([businessId, organizationId, createdAt])
   @@index([status, leaseUntil])
+}
+
+model VideoGeneration {
+  id String @id @default(cuid())
+  businessId String
+  organizationId String
+  actorId String
+  storyboardId String
+  itemId String
+  copyRevisionId String?
+  brandVersion Int
+  shotId String
+  shotLabel String
+  documentHash String
+  prompt String
+  route Json
+  configurationHash String
+  durationMs Int
+  status String @default("OFFERED")
+  credits Int
+  supplierCeilingMicros Int
+  supplierCostMicros Int?
+  reservationId String? @unique
+  providerJobId String?
+  providerJobKey String? @unique
+  settledAt DateTime?
+  receipt Json?
+  pollCount Int @default(0)
+  nextPollAt DateTime?
+  leaseUntil DateTime?
+  expiresAt DateTime
+  acceptedAt DateTime?
+  submittedAt DateTime?
+  errorCode String?
+  createdAt DateTime @default(now())
+  business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  output VideoClip?
+  @@unique([id, businessId, organizationId])
+  @@index([businessId, organizationId, createdAt])
+  @@index([status, nextPollAt, leaseUntil])
 }
 
 model MotionRender {

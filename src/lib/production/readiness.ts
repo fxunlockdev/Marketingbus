@@ -6,14 +6,16 @@ import { assertExecutionEnabled, configurationHash, configuredModels, keyFor } f
 import { imageConfigurationHash, imageRates } from "../images/contracts";
 import { motionConfigurationHash } from "../video/limits";
 import { motionRendererAvailable } from "../video/render";
+import { shotConfigurationHash, shotRates, configuredShotAdapters } from "../video/generation-contracts";
 
-export const WORKER_RUNTIME = "studio-v17-shot-editing";
+export const WORKER_RUNTIME = "studio-v18-shot-jobs";
 export const HEARTBEAT_TTL_MS = 120_000;
 export function workerConfigurationHash() {
   return createHash("sha256").update(JSON.stringify({
     rates: configurationHash(), daily: process.env.DAILY_SUPPLIER_BUDGET_MICROS,
     images: imageConfigurationHash(),
     motion: motionConfigurationHash(),
+    video: shotConfigurationHash(),
     billing: { enabled: process.env.BILLING_EXECUTION_ENABLED, account: process.env.STRIPE_ACCOUNT_ID, mode: process.env.STRIPE_MODE, offers: process.env.BILLING_OFFERS_JSON },
     total: process.env.TOTAL_SUPPLIER_BUDGET_MICROS,
     providers: { openai: !!keyFor("openai"), anthropic: !!keyFor("anthropic") },
@@ -24,6 +26,7 @@ export async function heartbeat(id: string) {
   try {
     assertExecutionEnabled();
     executionEnabled = configuredModels().some(m => !!keyFor(m.provider) && new Date(m.verifiedUntil).getTime() > Date.now()) || (!!process.env.GEMINI_API_KEY && imageRates().some(m => new Date(m.verifiedUntil).getTime() > Date.now()));
+    executionEnabled ||= shotRates().some(r => new Date(r.verifiedUntil).getTime() > Date.now() && configuredShotAdapters().some(a => a.id === r.provider && a.accountId === r.accountId && a.version === r.adapterVersion));
   } catch { /* A paused worker is still operationally healthy. */ }
   const data = { runtimeVersion: WORKER_RUNTIME, configurationHash: workerConfigurationHash(), executionEnabled, motionReady: await motionRendererAvailable(), lastSeenAt: new Date() };
   await db.workerHeartbeat.upsert({ where: { id }, create: { id, ...data }, update: data });

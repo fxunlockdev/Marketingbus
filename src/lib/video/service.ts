@@ -14,6 +14,7 @@ import { storyboardDocument, shotApprovals, totalDuration, clipRangeFits, type S
 import { MAX_VIDEO_BYTES, MOTION_RENDERER_VERSION, motionDailyLimit, motionHash } from "./limits";
 import { eligibleMotionAssets, type MotionAssetClient } from "./assets";
 import { eligibleClips, listClips } from "./clips";
+import type { ShotContextClient } from "./generation-context";
 const inputSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("create"), itemId: z.string().min(1) }).strict(),
   z.object({ action: z.literal("save"), storyboardId: z.string().min(1), document: storyboardDocument }).strict(),
@@ -24,7 +25,7 @@ const inputSchema = z.discriminatedUnion("action", [
 export const videoStore = () => assetStore(MAX_VIDEO_BYTES);
 export const videoScope = (row: { businessId: string; organizationId: string; createdBy: string }): Scope => ({ businessId: row.businessId, organizationId: row.organizationId, actorId: row.createdBy });
 export function shotHash(document: StoryboardDocument, shot: VideoShot) { return motionHash({ background: document.background, logo: document.logo, shot }); }
-export async function storyboardContext(scope: Scope, id: string, client: Pick<Prisma.TransactionClient, "business" | "productionItem" | "videoStoryboard" | "videoClip"> & MotionAssetClient = db, validateAssets = true) {
+export async function storyboardContext(scope: Scope, id: string, client: Pick<Prisma.TransactionClient, "business" | "productionItem" | "videoStoryboard" | "videoClip"> & MotionAssetClient & ShotContextClient = db, validateAssets = true) {
   const row = await client.videoStoryboard.findFirst({ where: { id, businessId: scope.businessId, organizationId: scope.organizationId } });
   if (!row) throw new AppError(404, "Storyboard not found.");
   const business = await client.business.findFirstOrThrow({ where: { id: scope.businessId, organizationId: scope.organizationId } });

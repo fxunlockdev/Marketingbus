@@ -1,4 +1,5 @@
 import { runOneJob, recoverExpiredLeases } from "../src/lib/production/worker";
+import { runOneShotGeneration, recoverShotGenerations } from "../src/lib/video/generation-worker";
 import { processOnePayment } from "../src/lib/billing/payments";
 import { db } from "../src/lib/db";
 import { createDuePlan, runOneWeeklyDraft } from "../src/lib/workflows/planning";
@@ -50,6 +51,7 @@ async function main() {
       await recoverImageLeases();
       await recoverMotionLeases();
       await recoverClipLeases();
+      await recoverShotGenerations();
       await recoverSocialLeases();
       const enabled = await heartbeat(instance);
       lastHealthyAt = Date.now();
@@ -76,6 +78,7 @@ async function main() {
       }
       if (!stopping && enabled) await runOneBrandAnalysis();
       if (!stopping && enabled) await runOneImage();
+      if (!stopping) await runOneShotGeneration();
       if (!stopping && process.env.MOTION_RENDERING_ENABLED === "true") {
         try { if (!await runOneClip()) await runOneMotion(); } catch { console.error("Motion rendering check failed; other workflows remain available."); }
       }

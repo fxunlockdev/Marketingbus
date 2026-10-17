@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { ClipLibrary, type StudioClip } from "./clip-library";
 import { ClipShotEditor } from "./clip-shot-editor";
+import { GeneratedShotJobs } from "./generated-shot-jobs";
 import { MOTION_RENDERER_VERSION } from "@/lib/video/version";
 import { storyboardDocument, subtitleVtt, totalDuration, shotTimeline, type StoryboardDocument } from "@/lib/video/document";
 type Board = { id: string; itemId: string; version: number; status: string; document: StoryboardDocument; shotApprovals: { shotId: string }[] };
@@ -52,6 +53,7 @@ export function VideoStudio({ businessId, items }: { businessId: string; items: 
       {history.length > 1 && <><label htmlFor="video-version">Storyboard history</label><select id="video-version" value={board?.id} onChange={e => setBoardId(e.target.value)}>{history.map(b => <option key={b.id} value={b.id}>Version {b.version} · {b.status.toLowerCase()}</option>)}</select></>}
     </section>
     {board && document && <>
+      <GeneratedShotJobs key={businessId} businessId={businessId} board={board} dirty={dirty} onRefresh={() => refresh()} />
       <section className="panel"><h2>Storyboard version {board.version} · {board.status.toLowerCase()}</h2><p>{totalDuration(document) / 1000} seconds · {document.shots.length} shots. Saving a change creates a new version; unchanged shot approvals are retained. Final storyboard and rendered-video approvals are separate.</p>
         <h3>Draft reel timeline</h3><ol aria-label="Draft reel timeline">{shotTimeline(document).map(s => <li key={s.id}>{(s.startMs / 1000).toFixed(2)}–{(s.endMs / 1000).toFixed(2)}s · {s.label}{s.sourceStartMs !== null ? ` · footage ${(s.sourceStartMs / 1000).toFixed(2)}–${(s.sourceEndMs! / 1000).toFixed(2)}s` : " · motion card"}</li>)}</ol>
         <form onSubmit={e => { e.preventDefault(); const parsed = storyboardDocument.safeParse(document); if (!parsed.success) { setError(parsed.error.issues[0].message); return; } void act({ action: "save", storyboardId: board.id, document: parsed.data }); }}>

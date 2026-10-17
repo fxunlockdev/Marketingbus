@@ -11,20 +11,26 @@ import { assetStore, type AssetStore } from "../assets/storage";
 import { WORKER_RUNTIME, HEARTBEAT_TTL_MS, workerConfigurationHash } from "../production/readiness";
 import { MAX_VIDEO_BYTES, motionDailyLimit } from "./limits";
 import { assertClipSignature, CLIP_PROCESSOR_VERSION, READABLE_CLIP_VERSIONS, normalizeClip, type ClipNormalizer } from "./clip-normalizer";
+import { assertGeneratedClip, finishGeneratedClip, failGeneratedClip, type ShotContextClient } from "./generation-context";
+import { activeShots } from "./generation-contracts";
 export const clipStore = () => assetStore(MAX_VIDEO_BYTES);
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const scopeOf = (r: { businessId: string; organizationId: string; createdBy: string }): Scope => ({ businessId: r.businessId, organizationId: r.organizationId, actorId: r.createdBy });
 const activeStatuses = ["UPLOADING", "QUEUED", "RUNNING", "STORING"];
-export const clipFields = { id: true, label: true, status: true, sha256: true, durationMs: true, brandVersion: true, processorVersion: true, createdAt: true, purgeAfter: true, errorCode: true } as const;
-export async function eligibleClips(client: Pick<Prisma.TransactionClient, "videoClip">, scope: Scope, brandVersion: number, ids?: string[]) {
-  return client.videoClip.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId, brandVersion, status: "APPROVED", approvedBy: { not: null }, processorVersion: { in: READABLE_CLIP_VERSIONS }, purgeAfter: { gt: new Date() }, ...(ids ? { id: { in: ids } } : {}) }, take: 100 });
+export const clipFields = { id: true, label: true, status: true, sha256: true, durationMs: true, brandVersion: true, processorVersion: true, generationId: true, createdAt: true, purgeAfter: true, errorCode: true } as const;
+export async function eligibleClips(client: Pick<Prisma.TransactionClient, "videoClip"> & ShotContextClient, scope: Scope, brandVersion: number, ids?: string[]) {
+  const rows = await client.videoClip.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId, brandVersion, status: "APPROVED", approvedBy: { not: null }, processorVersion: { in: READABLE_CLIP_VERSIONS }, purgeAfter: { gt: new Date() }, ...(ids ? { id: { in: ids } } : {}) }, take: 100 });
+  const eligible = [];
+  for (const row of rows) { try { await assertGeneratedClip(client, row); eligible.push(row); } catch (e) { if (!(e instanceof AppError)) throw e; } }
+  return eligible;
 }
 export async function listClips(scope: Scope) {
   if (!await db.membership.findUnique({ where: { organizationId_userId: { organizationId: scope.organizationId, userId: scope.actorId } } })) throw new AppError(404, "Workspace not found.");
   const business = await db.business.findFirst({ where: { id: scope.businessId, organizationId: scope.organizationId } });
   if (!business) throw new AppError(404, "Business not found.");
   const rows = await db.videoClip.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId }, select: { ...clipFields, approvedBy: true }, orderBy: { createdAt: "desc" }, take: 50 });
-  return rows.map(({ approvedBy, ...row }) => ({ ...row, usable: !!business.confirmedAt && business.version === row.brandVersion && row.status === "APPROVED" && !!approvedBy && READABLE_CLIP_VERSIONS.includes(row.processorVersion) && row.purgeAfter > new Date() }));
+  const usable = new Set((await eligibleClips(db, scope, business.version)).map(c => c.id));
+  return rows.map(({ approvedBy: _approvedBy, ...row }) => ({ ...row, usable: !!business.confirmedAt && usable.has(row.id) }));
 }
 export async function uploadClip(scope: Scope, raw: unknown, input: Buffer, store: AssetStore = clipStore()) {
   const fields = z.object({ label: z.string().trim().min(1).max(80), rightsConfirmed: z.literal(true) }).strict().parse(raw);
@@ -65,6 +71,7 @@ async function clipContext(scope: Scope, id: string, client: Prisma.TransactionC
   const business = await client.business.findFirst({ where: { id: scope.businessId, organizationId: scope.organizationId } });
   if (!row || !business) throw new AppError(404, "Clip not found.");
   if (!business.confirmedAt || business.version !== row.brandVersion || !READABLE_CLIP_VERSIONS.includes(row.processorVersion) || row.purgeAfter <= new Date()) throw new AppError(409, "Clip brand or retention changed. Upload and review a current clip.");
+  await assertGeneratedClip(client, row);
   return { row, business };
 }
 export async function readClip(scope: Scope, id: string, store: AssetStore = clipStore()) {
@@ -85,6 +92,7 @@ export async function reviewClip(scope: Scope, id: string, raw: unknown) {
     if (input.action === "remove") {
       if (["ARCHIVED", "DELETING", "DELETED"].includes(row.status)) return { ok: true };
       if (["UPLOADING", "RUNNING", "STORING"].includes(row.status)) throw new AppError(409, "Wait for active clip processing to settle.");
+      if (row.generationId && await tx.videoGeneration.count({ where: { id: row.generationId, status: { in: activeShots } } })) throw new AppError(409, "Resolve or cancel the generated-shot job before removing its reserved footage.");
       await tx.videoClip.update({ where: { id }, data: { status: "ARCHIVED", approvedBy: null, purgeAfter: new Date(Date.now() + 7 * 86400000) } });
     } else {
       const { business } = await clipContext(scope, id, tx);
@@ -133,16 +141,26 @@ export async function runOneClip(processor: ClipNormalizer = normalizeClip, stor
     await store.put(claimed.objectKey, output.bytes, "video/mp4", true);
     const stored = await store.get(claimed.objectKey); if (stored.length !== output.bytes.length || hash(stored) !== hash(output.bytes)) throw Error("Normalized storage integrity failed.");
     await db.$transaction(async tx => {
-      await fresh(tx, "STORING"); await tx.videoClip.update({ where: { id: claimed.id }, data: { status: "READY", leaseUntil: null } });
+      const current = await fresh(tx, "STORING"); await finishGeneratedClip(tx, current, output.durationMs);
+      await tx.videoClip.update({ where: { id: claimed.id }, data: { status: "READY", leaseUntil: null } });
       await tx.auditEvent.create({ data: { ...scope, action: "CLIP_READY", detail: "Silent H.264 clip normalized and storage verified. Human review required; not authorized for use yet." } });
     });
   } catch {
-    await db.videoClip.updateMany({ where: { id: claimed.id, status: { in: ["RUNNING", "STORING"] }, leaseUntil: claimed.leaseUntil }, data: { status: "FAILED", leaseUntil: null, errorCode: "PROCESSING_UNVERIFIED", purgeAfter: new Date(Date.now() + 7 * 86400000) } });
+    await db.$transaction(async tx => {
+      await lockBusiness(tx, scope);
+      const changed = await tx.videoClip.updateMany({ where: { id: claimed.id, status: { in: ["RUNNING", "STORING"] }, leaseUntil: claimed.leaseUntil }, data: { status: "FAILED", leaseUntil: null, errorCode: "PROCESSING_UNVERIFIED", purgeAfter: new Date(Date.now() + 7 * 86400000) } });
+      if (changed.count) await failGeneratedClip(tx, claimed.generationId, "NORMALIZATION_UNVERIFIED");
+    });
   }
   return true;
 }
 export async function recoverClipLeases() {
-  return db.videoClip.updateMany({ where: { status: { in: activeStatuses.filter(s => s !== "QUEUED") }, leaseUntil: { lt: new Date() } }, data: { status: "FAILED", leaseUntil: null, errorCode: "LEASE_EXPIRED", purgeAfter: new Date(Date.now() + 7 * 86400000) } });
+  const rows = await db.videoClip.findMany({ where: { status: { in: activeStatuses.filter(s => s !== "QUEUED") }, leaseUntil: { lt: new Date() } }, take: 25 });
+  for (const row of rows) await db.$transaction(async tx => {
+    await lockBusiness(tx, scopeOf(row));
+    const changed = await tx.videoClip.updateMany({ where: { id: row.id, status: row.status, leaseUntil: row.leaseUntil }, data: { status: "FAILED", leaseUntil: null, errorCode: "LEASE_EXPIRED", purgeAfter: new Date(Date.now() + 7 * 86400000) } });
+    if (changed.count) await failGeneratedClip(tx, row.generationId, "NORMALIZATION_LEASE_EXPIRED");
+  });
 }
 export async function recoverClipStorage(scope: Scope, id: string, store: AssetStore = clipStore()) {
   const before = await db.$transaction(async tx => { await lockBusiness(tx, scope); await assertBrandEditor(tx, scope); const { row } = await clipContext(scope, id, tx); if (row.status !== "FAILED" || !row.sha256 || !row.bytes) throw new AppError(409, "No processed output is available for recovery."); return row; });
