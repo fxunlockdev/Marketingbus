@@ -4,6 +4,8 @@ This is a working pilot, not a finished enterprise product. Distinguish implemen
 
 ## Feature acceptance and remaining work
 
+18 October operator-tooling update (local; not deployed): added a scoped, read-only queue inventory covering 13 queue/operation tables. It separates failed/blocked states, uncertain outcomes, expired leases and overdue work, with bounded pagination and no credentials/content in the projection. Global payment events and identity email cannot be inferred into tenant reports. It never calls workers/providers or settles credits. An operator dashboard, alert routing and real financial reconciliation remain unfinished. Eighteen dedicated checks pass, covering actual PostgreSQL read-only enforcement, isolation, pagination, unchanged jobs/wallet/payment records, secret exclusion and CLI exit codes. The preceding full run passed 505 tests across 41 suites; the final CLI test and guard refinements passed separately. Production build, final type checking and dependency audit pass; CI remains to be recorded. No provider call or production-data inspection was performed.
+
 | Requested area | Implemented and locally testable | Internal work still needed | External acceptance needed |
 |---|---|---|---|
 | Workspaces and brand | Business-scoped workspaces, roles, interview, version/confirmation, three presets, explicit preference memory | Workspace lifecycle/export/deletion policy; more flexible reusable template library | Hosted multi-user acceptance |

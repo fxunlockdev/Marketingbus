@@ -50,6 +50,22 @@ The calendar is a month-filtered internal agenda, not a drag-and-drop calendar o
 
 ## Verification
 
+### Read-only operator queue inventory
+
+With authorized server/database access, run `npm run ops:queues -- --organization ORGANIZATION_ID`, optionally adding `--business BUSINESS_ID`. Use `--all` only for an explicitly cross-tenant operator review. A missing organization or mismatched business fails instead of returning a misleading empty report. This is a privileged local/server command, not a customer route or a new staff authentication boundary. Prefer a database role limited to SELECT. Never expose the command through an unauthenticated endpoint or customer-supplied shell arguments.
+
+The report covers jobs (including copy and website intake), brand analysis, image generation, generated video, clip processing, motion rendering, static export storage, social publishing, weekly cycles, checkout, refunds, payment events and identity email. Each record is classified as uncertain, failed/blocked, expired lease or overdue. An active lookup on an uncertain record is labelled; its presence is not permission to interrupt the lookup. Terminal failed records stay visible until an operator handles them through the corresponding module's documented procedure; this tool has no acknowledgement or mutation action.
+
+`--overdue-minutes 15` is the default advisory threshold, not a service-level promise. Future schedules/backoff, fresh work and healthy active leases are not overdue. Disabled integrations can legitimately have overdue work. Item age is explicitly time since creation, not time since failure. This is not a comprehensive queue-health or retention report: successful records, expired email, asset cleanup, OAuth flows and metric-refresh failures are outside this initial inventory.
+
+Organization reports omit identity email and payment-event inbox rows because those tables lack authoritative tenant columns. Business reports also omit organization-wide checkout/refund operations. The JSON `excludedQueues` makes this visible; an empty scoped report does not establish that global operations are healthy. Never infer ownership from a payment payload or an email user's current memberships.
+
+Use `--limit 50` (maximum 100) and pass `--cursor` from `nextCursor` to continue. Pages use creation time, queue and ID as a stable key; the time cutoff and scope are bound to the cursor. Statuses remain live between pages, so this is not a historical snapshot. `hasMore` must be checked; a page is not the total backlog. The read-only PostgreSQL transaction enforces a three-second statement timeout and a five-second transaction timeout. No unrestricted row count is performed. A timeout is a failed report, never an empty healthy result.
+
+Only operational IDs, known statuses, reason codes, creation timestamps, active-lease flags and fixed guidance are returned. Prompts, payloads, email addresses, provider receipts, errors, tokens, object keys and payment amounts are not selected. Raw database exceptions are not printed. Treat IDs/cursors as internal operational data, even without content.
+
+Normal success exits 0. Add `--check` for an external monitoring runner: exit 2 means the returned page contains attention items; exit 1 means inspection failed. Monitoring checks reject continuation cursors, so a later empty page cannot report a healthy backlog. No scheduler, notification destination or external alert delivery is configured by this command. It never starts a worker, releases holds, retries a submission, sends email, publishes, charges or refunds. Use existing module recovery tools only after separately verifying provider/storage evidence and obtaining the required authority.
+
 Run local-only database tests with matching `DATABASE_URL` and `TEST_DATABASE_URL`. Browser tests require the app running at `http://127.0.0.1:3000` and the same explicit local test DB for seeded creative review. Fixture credentials and supplier rates are synthetic; all model calls in the automated suite use injected in-memory responses.
 
 ## 14 October 2026 live verification
