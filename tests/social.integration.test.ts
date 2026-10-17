@@ -21,6 +21,8 @@ import {
 import type { SocialAdapter } from "../src/lib/social/contracts";
 import { payloadHash } from "../src/lib/social/integrity";
 import { resumePublicationLookup } from "../src/lib/social/recovery";
+import { seedLearningEvidence } from "./fixtures/learning";
+import { productionMemories, validLearningEvidence } from "../src/lib/social/learning-evidence";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (
   process.env.TEST_DATABASE_URL &&
@@ -40,6 +42,7 @@ const creative = {
 };
 suite("social publishing and analytics isolation", () => {
   const orgs: string[] = [];
+  const users: string[] = [];
   afterEach(async () => { await db.socialPublication.deleteMany({ where: { organizationId: { in: orgs } } }); });
   beforeAll(() => {
     vi.stubEnv(
@@ -53,6 +56,7 @@ suite("social publishing and analytics isolation", () => {
       where: { organizationId: { in: orgs } },
     });
     await db.organization.deleteMany({ where: { id: { in: orgs } } });
+    await db.user.deleteMany({ where: { id: { in: users } } });
     vi.unstubAllEnvs();
     await db.$disconnect();
   });
@@ -61,6 +65,7 @@ suite("social publishing and analytics isolation", () => {
       data: { name: "SOCIAL TEST ONLY" },
     });
     orgs.push(org.id);
+    const user = await db.user.create({ data: { name: "Learning fixture", email: `${crypto.randomUUID()}@example.test`, passwordHash: "not-a-real-hash", memberships: { create: { organizationId: org.id, role: "OWNER" } } } }); users.push(user.id);
     const business = await db.business.create({
       data: {
         organizationId: org.id,
@@ -71,7 +76,7 @@ suite("social publishing and analytics isolation", () => {
     const scope = {
       businessId: business.id,
       organizationId: org.id,
-      actorId: "test",
+      actorId: user.id,
     };
     const plan = await db.productionPlan.create({
       data: {
@@ -327,10 +332,8 @@ suite("social publishing and analytics isolation", () => {
   });
   it("requires current-brand human promotion, deduplicates concurrent decisions and precisely reverts memory", async () => {
     const ctx = await setup(), other = await setup();
-    const proposal = await db.learningProposal.create({ data: {
-      businessId: ctx.scope.businessId, organizationId: ctx.scope.organizationId,
-      brandVersion: 1, hypothesis: "Fixture experiment; not a causal finding", evidence: { kind: "TEST_ONLY" },
-    } });
+    await seedLearningEvidence(db, { ...ctx.scope, connectionId: ctx.connection.id, planId: ctx.item.planId });
+    const proposal = await manageLearning(ctx.scope, { action: "evaluate" }) as { id: string };
     await expect(manageLearning(other.scope, { action: "promote", proposalId: proposal.id })).rejects.toThrow("not found");
     const result = await Promise.allSettled([0, 1].map(() => manageLearning(ctx.scope, { action: "promote", proposalId: proposal.id })));
     expect(result.filter(r => r.status === "fulfilled")).toHaveLength(1);
@@ -343,6 +346,43 @@ suite("social publishing and analytics isolation", () => {
     const stale = await db.learningProposal.create({ data: { businessId: ctx.scope.businessId, organizationId: ctx.scope.organizationId, brandVersion: 1, hypothesis: "Stale fixture", evidence: {} } });
     await db.business.update({ where: { id: ctx.scope.businessId }, data: { version: 2 } });
     await expect(manageLearning(ctx.scope, { action: "promote", proposalId: stale.id })).rejects.toThrow("current-brand");
+  });
+  it.each(["removed snapshot", "changed count", "changed definition", "tampered payload", "old brand", "disconnected account", "changed hypothesis"])("blocks promotion after %s", async reason => {
+    const ctx = await setup(), fixture = await seedLearningEvidence(db, { ...ctx.scope, connectionId: ctx.connection.id, planId: ctx.item.planId });
+    const proposal = await manageLearning(ctx.scope, { action: "evaluate" }) as { id: string };
+    if (reason === "removed snapshot") await db.metricSnapshot.delete({ where: { id: fixture[0].metric.id } });
+    if (reason === "changed count") await db.metricSnapshot.update({ where: { id: fixture[0].metric.id }, data: { engagements: 51 } });
+    if (reason === "changed definition") await db.metricSnapshot.update({ where: { id: fixture[0].metric.id }, data: { definitionVersion: "different" } });
+    if (reason === "tampered payload") await db.socialPublication.update({ where: { id: fixture[0].post.id }, data: { payloadHash: "changed" } });
+    if (reason === "old brand") await db.socialPublication.update({ where: { id: fixture[0].post.id }, data: { brandVersion: 2 } });
+    if (reason === "disconnected account") await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { status: "DISCONNECTED" } });
+    if (reason === "changed hypothesis") await db.learningProposal.update({ where: { id: proposal.id }, data: { hypothesis: "Spend without review" } });
+    await expect(manageLearning(ctx.scope, { action: "promote", proposalId: proposal.id })).rejects.toThrow("evidence");
+    expect(await db.memory.count({ where: { businessId: ctx.scope.businessId } })).toBe(0);
+    expect(await db.reservation.count({ where: { organizationId: ctx.scope.organizationId } })).toBe(0);
+  });
+  it("excludes invalid promoted or legacy experiments from production, preserving explicit preferences", async () => {
+    const ctx = await setup(), fixture = await seedLearningEvidence(db, { ...ctx.scope, connectionId: ctx.connection.id, planId: ctx.item.planId });
+    const result = await manageLearning(ctx.scope, { action: "evaluate" }) as { id: string };
+    await manageLearning(ctx.scope, { action: "promote", proposalId: result.id });
+    const proposal = await db.learningProposal.findUniqueOrThrow({ where: { id: result.id } });
+    await db.memory.createMany({ data: [{ ...ctx.scope, actorId: undefined, kind: "PREFERENCE", text: "Explicit preference" }, { ...ctx.scope, actorId: undefined, kind: "APPROVED_EXPERIMENT", text: "Legacy unsupported experiment" }].map(({ actorId: _actor, ...m }) => m) });
+    const read = () => db.$transaction(tx => productionMemories(tx, ctx.scope, 1));
+    expect((await read()).map(m => m.text)).toEqual(expect.arrayContaining(["Explicit preference", proposal.hypothesis]));
+    expect((await read()).some(m => m.text.startsWith("Legacy"))).toBe(false);
+    expect(await db.$transaction(tx => validLearningEvidence(tx, ctx.scope, 1, proposal.evidence, proposal.hypothesis, new Date(Date.now() + 8 * 86400000)))).toBe(false);
+    expect((await db.$transaction(tx => productionMemories(tx, ctx.scope, 1, new Date(Date.now() + 31 * 86400000)))).map(m => m.text)).toEqual(["Explicit preference"]);
+    await db.metricSnapshot.delete({ where: { id: fixture[0].metric.id } });
+    expect((await read()).map(m => m.text)).toEqual(["Explicit preference"]);
+  });
+  it("rechecks current role, rejects legacy evidence and allows fresh evaluation", async () => {
+    const ctx = await setup(); await seedLearningEvidence(db, { ...ctx.scope, connectionId: ctx.connection.id, planId: ctx.item.planId });
+    const legacy = await db.learningProposal.create({ data: { businessId: ctx.scope.businessId, organizationId: ctx.scope.organizationId, brandVersion: 1, hypothesis: "Legacy", evidence: {} } });
+    await expect(manageLearning(ctx.scope, { action: "promote", proposalId: legacy.id })).rejects.toThrow("evidence");
+    const results = await Promise.all([0, 1].map(() => manageLearning(ctx.scope, { action: "evaluate" }))) as { id: string }[];
+    expect(results[0].id).toBe(results[1].id);
+    await db.membership.updateMany({ where: { organizationId: ctx.scope.organizationId }, data: { role: "VIEWER" } });
+    await expect(manageLearning(ctx.scope, { action: "promote", proposalId: results[0].id })).rejects.toThrow("role");
   });
   it("disconnect cancels pending work and erases token ciphertext", async () => {
     const ctx = await setup(),

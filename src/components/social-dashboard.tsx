@@ -347,9 +347,12 @@ export function SocialDashboard({
           <section className="panel">
             <h2>Evidence-based experiments</h2>
             <p>
-              Suggest a test only when comparable formats have enough mature
-              observations. Promotion saves an explicitly approved experiment,
-              not a proven fact. It can be reverted.
+              Compare current-brand posts on the same account using measurements
+              taken 72–96 hours after publication, not lifetime totals. Each format
+              needs at least five posts and 1,000 impressions. Approval rechecks
+              the saved evidence within seven days and saves a reversible experiment,
+              not a proven fact. Experiments stop informing new work after 30 days
+              or when their evidence becomes invalid.
             </p>
             <button
               className="button"

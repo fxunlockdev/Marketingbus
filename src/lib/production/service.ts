@@ -13,6 +13,7 @@ import { authorizeSupplier } from "./budget";
 import { assertWorkerReady } from "./readiness";
 import { creativeSchema, creativeJsonSchema, validateCreative } from "./content";
 import { approvedFactText, evaluateCreative } from "./quality";
+import { productionMemories, preferenceFingerprint } from "../social/learning-evidence";
 
 export type Scope = { businessId: string; organizationId: string; actorId: string };
 export const productionAction = z.discriminatedUnion("action", [
@@ -28,6 +29,7 @@ export const requestSchema = z.object({
   channel: z.string(), proof: z.string(), brandName: z.string(), color: z.string(), preset: z.string(),
   previous: creativeSchema.nullable(), feedback: z.string(), skillVersion: z.string(),
   approvedFacts: z.string().max(10000).default(""),
+  preferenceFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   sourceHashes: z.array(z.object({ file: z.string(), sha256: z.string() })),
 }).strict();
 export async function lockBusiness(tx: Prisma.TransactionClient, scope: Scope) {
@@ -63,7 +65,7 @@ export async function actOnProduction(scope: Scope, raw: unknown, internal?: { w
       await assertIdle(tx, item.id, scope.organizationId);
       const previous = item.revisions[0];
       if (input.mode === "initial" ? !!previous : previous?.status !== "CHANGES_REQUESTED") throw new AppError(409, "For an existing creative, request changes before quoting a revision.");
-      const memories = await tx.memory.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId }, orderBy: { id: "asc" }, take: 100 });
+      const memories = await productionMemories(tx, scope, business.version);
       return { business, item, previous, memories };
     });
     const { business, item, previous, memories } = context;
@@ -81,11 +83,11 @@ export async function actOnProduction(scope: Scope, raw: unknown, internal?: { w
     const hash = configurationHash();
     const route = selectRoute(input.mode, Buffer.byteLength(system + prompt + JSON.stringify(creativeJsonSchema), "utf8"));
     const request = requestSchema.parse({ system, input: prompt, route, channel: item.channel, proof: brand.proof, brandName: brand.name, color: brand.color, preset: brand.designPreset,
-      previous: prior, feedback: previous?.feedback || "", approvedFacts: approvedFactText(brand), skillVersion: harness.skillVersion, sourceHashes: harness.sourceHashes });
+      previous: prior, feedback: previous?.feedback || "", approvedFacts: approvedFactText(brand), preferenceFingerprint: preferenceFingerprint(memories), skillVersion: harness.skillVersion, sourceHashes: harness.sourceHashes });
     return db.$transaction(async tx => {
       const fresh = await lockBusiness(tx, scope);
       const latest = await currentItem(tx, scope, item.id);
-      const latestMemories = await tx.memory.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId }, orderBy: { id: "asc" }, take: 100 });
+      const latestMemories = await productionMemories(tx, scope, fresh.version);
       if (JSON.stringify(latestMemories) !== JSON.stringify(memories)) throw new AppError(409, "Brand preferences changed. Request a fresh quote.");
       if (!fresh.confirmedAt || fresh.version !== business.version || (latest.revisions[0]?.version || 0) !== (previous?.version || 0) || (latest.revisions[0]?.feedback || "") !== (previous?.feedback || "")) throw new AppError(409, "The brand or creative changed. Request a fresh quote.");
       await assertIdle(tx, item.id, scope.organizationId);
@@ -107,6 +109,7 @@ export async function actOnProduction(scope: Scope, raw: unknown, internal?: { w
       if (quote.status !== "OFFERED" || quote.expiresAt.getTime() < Date.now() || quote.configurationHash !== configurationHash()) throw new AppError(409, "This quote expired or changed. Request a fresh quote.");
       const item = await currentItem(tx, scope, quote.itemId);
       if (!business.confirmedAt || quote.brandVersion !== business.version || item.plan.status !== "PROPOSED" || (item.revisions[0]?.version || 0) !== quote.baseVersion) throw new AppError(409, "The brand or creative changed. Request a fresh quote.");
+      if (requestSchema.parse(quote.request).preferenceFingerprint !== preferenceFingerprint(await productionMemories(tx, scope, business.version))) throw new AppError(409, "Brand preferences or experiment evidence changed. Request a fresh quote.");
       if (quote.baseVersion && item.revisions[0]?.status !== "CHANGES_REQUESTED") throw new AppError(409, "This revision is no longer awaiting changes.");
       await assertIdle(tx, item.id, scope.organizationId);
       await authorizeSupplier(tx, quote.id, quote.supplierCeilingMicros);

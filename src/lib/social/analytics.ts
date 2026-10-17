@@ -3,6 +3,8 @@ import { db } from "../db";
 import { AppError } from "../http";
 import { lockBusiness, type Scope } from "../production/service";
 import type { MetricReading } from "./contracts";
+import { experimentCandidate, learningRows, validLearningEvidence } from "./learning-evidence";
+export { experimentCandidate } from "./learning-evidence";
 
 type Row = {
   id: string;
@@ -58,63 +60,6 @@ export function summarizePerformance(rows: Row[]) {
     // Reach is deliberately not presented as distinct people across posts.
     note: "Totals cover observed posts only. Reach is summed post reach, not unique audience. Engagement is not a conversion or causal result.",
   }));
-}
-export function experimentCandidate(rows: Row[], now = new Date()) {
-  const eligible = rows.filter(
-    (r) =>
-      r.reading &&
-      r.reading.impressions != null &&
-      r.reading.engagements != null &&
-      r.reading.impressions >= 100 &&
-      r.publishedAt.getTime() <= now.getTime() - 72 * 3600000 &&
-      r.reading.observedAt.getTime() >=
-        r.publishedAt.getTime() + 72 * 3600000 &&
-      r.reading.observedAt <= now
-  );
-  const cohorts = new Map<string, Row[]>();
-  for (const row of eligible) {
-    const key = `${row.connectionId}:${row.reading!.definitionVersion}:${
-      row.format
-    }`;
-    cohorts.set(key, [...(cohorts.get(key) ?? []), row]);
-  }
-  const comparisons = [...cohorts.values()].filter(
-    (g) =>
-      g.length >= 5 &&
-      g.reduce((n, r) => n + r.reading!.impressions!, 0) >= 1000
-  );
-  for (const a of comparisons)
-    for (const b of comparisons) {
-      if (
-        a === b ||
-        a[0].connectionId !== b[0].connectionId ||
-        a[0].reading!.definitionVersion !== b[0].reading!.definitionVersion ||
-        a[0].format === b[0].format
-      )
-        continue;
-      const rate = (g: Row[]) =>
-        g.reduce((n, r) => n + r.reading!.engagements!, 0) /
-        g.reduce((n, r) => n + r.reading!.impressions!, 0);
-      if (rate(a) > rate(b) * 1.1 && rate(a) > rate(b) + 0.001)
-        return {
-          hypothesis: `Test more ${a[0].format} against ${b[0].format} on ${a[0].provider}. Observed engagement per impression was higher; this is an experiment hypothesis, not a proven preference or causal finding.`,
-          evidence: {
-            kind: "OBSERVATIONAL_V1",
-            connectionId: a[0].connectionId,
-            definitionVersion: a[0].reading!.definitionVersion,
-            cohorts: [a, b].map((g) => ({
-              format: g[0].format,
-              posts: g.map((r) => r.id),
-              observations: g.map((r) => r.reading!.observedAt.toISOString()),
-              impressions: g.reduce((n, r) => n + r.reading!.impressions!, 0),
-              engagements: g.reduce((n, r) => n + r.reading!.engagements!, 0),
-            })),
-            warning:
-              "Non-randomized data; audience, topic, age and timing may confound the comparison. Human confirmation required.",
-          },
-        };
-    }
-  return null;
 }
 async function performanceRows(scope: Scope) {
   const posts = await db.socialPublication.findMany({
@@ -211,17 +156,17 @@ export async function manageLearning(scope: Scope, raw: unknown) {
         .strict(),
     ])
     .parse(raw);
-  const candidate =
-    input.action === "evaluate"
-      ? experimentCandidate(await performanceRows(scope))
-      : null;
   return db.$transaction(async (tx) => {
     const business = await lockBusiness(tx, scope);
+    const member = await tx.membership.findFirst({ where: { organizationId: scope.organizationId, userId: scope.actorId, role: { in: ["OWNER", "ADMIN", "EDITOR"] } } });
+    if (!member) throw new AppError(403, "Your current workspace role cannot manage experiments.");
     if (input.action === "evaluate") {
+      if (!business.confirmedAt) throw new AppError(409, "Confirm the current brand before evaluating experiments.");
+      const now = new Date(), candidate = experimentCandidate(await learningRows(tx, scope, business.version, now), now);
       if (!candidate)
         throw new AppError(
           409,
-          "Insufficient comparable evidence. Each format needs at least five mature posts and 1,000 observed impressions on the same account and metric definition."
+          "Insufficient comparable evidence. Each format needs five current-brand posts and 1,000 impressions on the same account and metric definition, observed at 72–96 hours. Lifetime totals are not comparable evidence."
         );
       const duplicate = await tx.learningProposal.findFirst({
         where: {
@@ -231,7 +176,8 @@ export async function manageLearning(scope: Scope, raw: unknown) {
           status: { in: ["PROPOSED", "PROMOTED"] },
         },
       });
-      if (duplicate) return { ok: true, id: duplicate.id };
+      if (duplicate && await validLearningEvidence(tx, scope, business.version, duplicate.evidence, duplicate.hypothesis)) return { ok: true, id: duplicate.id };
+      if (duplicate?.status === "PROPOSED") await tx.learningProposal.update({ where: { id: duplicate.id }, data: { status: "EXPIRED" } });
       if (
         (await tx.learningProposal.count({
           where: { businessId: scope.businessId, status: "PROPOSED" },
@@ -266,6 +212,8 @@ export async function manageLearning(scope: Scope, raw: unknown) {
           409,
           "Only a current-brand proposal can be promoted."
         );
+      if (!await validLearningEvidence(tx, scope, business.version, proposal.evidence, proposal.hypothesis)) throw new AppError(409, "Experiment evidence is missing, changed or expired. Evaluate current evidence again; legacy proposals cannot be promoted.");
+      if (await tx.learningProposal.count({ where: { businessId: scope.businessId, status: "PROMOTED" } }) >= 20) throw new AppError(409, "Revert an existing experiment before approving another.");
       if (
         (await tx.memory.count({ where: { businessId: scope.businessId } })) >=
         100

@@ -17,10 +17,11 @@ const reading = {
 };
 const row = {
   id: "one",
+  snapshotId: "metric-one",
   connectionId: "account",
   provider: "Facebook",
   format: "static",
-  publishedAt: new Date("2026-10-10T12:00:00Z"),
+  publishedAt: new Date("2026-10-12T04:00:00Z"),
   reading,
 };
 describe("honest performance reporting", () => {
@@ -51,10 +52,11 @@ describe("honest performance reporting", () => {
     ).toBeNull();
   });
   it("requires comparable accounts, mature measurements, and enough posts", () => {
-    const a = Array.from({ length: 5 }, (_, i) => ({ ...row, id: `a-${i}` }));
+    const a = Array.from({ length: 5 }, (_, i) => ({ ...row, id: `a-${i}`, snapshotId: `metric-a-${i}` }));
     const b = a.map((r) => ({
       ...r,
       id: `b-${r.id}`,
+      snapshotId: `metric-b-${r.id}`,
       format: "video",
       reading: { ...reading, engagements: 15 },
     }));

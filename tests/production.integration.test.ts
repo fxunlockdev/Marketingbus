@@ -94,6 +94,30 @@ suite("production authorization, review and worker integration", () => {
     await runOneJob(fixtureReasoner);
     return ctx;
   }
+  it("rejects a quote after a preference change without reserving credits", async () => {
+    const { scope, itemId } = await setup(); const q = await quote(scope, itemId);
+    await db.memory.create({ data: { businessId: scope.businessId, organizationId: scope.organizationId, kind: "PREFERENCE", text: "Use a calmer tone" } });
+    await expect(actOnProduction(scope, { action: "accept", quoteId: q.id })).rejects.toThrow("preferences");
+    expect(await db.reservation.count({ where: { organizationId: scope.organizationId } })).toBe(0);
+  });
+  it("does not submit accepted work after preferences change; releases the reservation", async () => {
+    const { scope, itemId } = await setup(); const q = await quote(scope, itemId);
+    await actOnProduction(scope, { action: "accept", quoteId: q.id });
+    await db.memory.create({ data: { businessId: scope.businessId, organizationId: scope.organizationId, kind: "PREFERENCE", text: "Use a calmer tone" } });
+    const call = vi.fn(fixtureReasoner); await runOneJob(call); expect(call).not.toHaveBeenCalled();
+    expect(await db.wallet.findUnique({ where: { organizationId: scope.organizationId } })).toMatchObject({ held: 0, available: 500 });
+  });
+  it("withholds stale-preference output after submission without charging the customer", async () => {
+    const { scope, itemId } = await setup(); const q = await quote(scope, itemId);
+    await actOnProduction(scope, { action: "accept", quoteId: q.id });
+    await runOneJob(async () => {
+      await db.memory.create({ data: { businessId: scope.businessId, organizationId: scope.organizationId, kind: "PREFERENCE", text: "Use a calmer tone" } });
+      return fixtureReasoner();
+    });
+    expect(await db.creativeRevision.count({ where: { itemId } })).toBe(0);
+    expect(await db.wallet.findUnique({ where: { organizationId: scope.organizationId } })).toMatchObject({ held: 0, available: 500 });
+    expect(await db.job.findFirst({ where: { organizationId: scope.organizationId } })).toMatchObject({ status: "FAILED", result: { creditsConsumed: 0 } });
+  });
   it("quotes without spending, then accepts once under concurrent clicks and settles unused credits", async () => {
     const { scope, itemId } = await setup(); const q = await quote(scope, itemId);
     expect((await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } })).held).toBe(0);
