@@ -4,7 +4,9 @@ export const videoShot = z.object({
   id: z.string().regex(/^[a-zA-Z0-9_-]{1,60}$/), label: z.string().trim().min(1).max(80),
   caption: z.string().trim().min(1).max(120), durationMs: z.number().int().min(1000).max(8000).multipleOf(250),
   motion: z.enum(["hold", "fade"]), asset: assetRef.nullable(),
-}).strict().refine(s => s.caption.length / (s.durationMs / 1000) <= 24, "Allow more reading time or shorten the caption (at most 24 characters per second).");
+  clip: assetRef.nullable().optional(),
+}).strict().refine(s => !(s.clip && s.asset), "Choose an image or a clip for each scene, not both.")
+  .refine(s => s.caption.length / (s.durationMs / 1000) <= 24, "Allow more reading time or shorten the caption (at most 24 characters per second).");
 export const storyboardDocument = z.object({
   title: z.string().trim().min(1).max(100), background: z.string().regex(/^#[a-fA-F0-9]{6}$/),
   logo: assetRef.nullable(), shots: z.array(videoShot).min(1).max(6),

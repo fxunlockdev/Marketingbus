@@ -29,7 +29,7 @@ export async function motionRendererAvailable() {
   } catch { return false; }
 }
 export async function renderShotFrame(document: StoryboardDocument, index: number, assets: Map<string, Uint8Array>) {
-  const shot = document.shots[index], parts = [`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="${document.background}"/>`];
+  const shot = document.shots[index], parts = [`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">`, shot.clip ? `<path fill="${document.background}" fill-rule="evenodd" d="M0 0H720V1280H0Z M56 240H664V860H56Z"/>` : `<rect width="100%" height="100%" fill="${document.background}"/>`];
   async function image(id: string, x: number, y: number, w: number, h: number) {
     const data = assets.get(id); if (!data) throw Error("Approved scene asset missing.");
     const png = await sharp(data, { limitInputPixels: 16000000, failOn: "warning" }).resize(w, h, { fit: "contain", background: "#00000000" }).png().toBuffer();
@@ -61,7 +61,14 @@ export const renderMotion: MotionRenderer = async (raw, assets) => {
       const png = `scene-${index}.png`, clip = `clip-${index}.mp4`, seconds = shot.durationMs / 1000;
       await writeFile(join(directory, png), await renderShotFrame(document, index, assets), { flag: "wx", mode: 0o600 });
       const filter = shot.motion === "fade" ? `fade=t=in:st=0:d=0.25,fade=t=out:st=${seconds - 0.25}:d=0.25` : "null";
-      await run(tools.ffmpeg, ["-nostdin", "-hide_banner", "-loglevel", "error", "-max_alloc", "67108864", "-filter_threads", "1", "-threads", "1", "-protocol_whitelist", "file", "-loop", "1", "-framerate", String(fps), "-i", png, "-vf", filter, "-frames:v", String(shot.durationMs * fps / 1000), "-an", "-c:v", "libx264", "-threads", "1", "-preset", "veryfast", "-crf", "24", "-maxrate", "3M", "-bufsize", "6M", "-pix_fmt", "yuv420p", "-map_metadata", "-1", "-fs", String(MAX_VIDEO_BYTES), "-movflags", "+faststart", "-f", "mp4", clip]);
+      let inputs = ["-protocol_whitelist", "file", "-loop", "1", "-framerate", String(fps), "-i", png], filters = ["-vf", filter];
+      if (shot.clip) {
+        const data = assets.get(shot.clip.id); if (!data) throw Error("Approved scene clip missing.");
+        const source = `source-${index}.mp4`; await writeFile(join(directory, source), data, { flag: "wx", mode: 0o600 });
+        inputs = [...inputs, "-threads", "1", "-protocol_whitelist", "file", "-f", "mov", "-enable_drefs", "0", "-use_absolute_path", "0", "-i", source];
+        filters = ["-filter_complex", `[1:v:0]scale=608:620:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=720:1280:(ow-iw)/2:240:color=${document.background},setsar=1,fps=24[footage];[footage][0:v:0]overlay=shortest=1,${filter}[scene]`, "-map", "[scene]"];
+      }
+      await run(tools.ffmpeg, ["-nostdin", "-hide_banner", "-loglevel", "error", "-max_alloc", "67108864", "-filter_threads", "1", "-filter_complex_threads", "1", "-threads", "1", ...inputs, ...filters, "-frames:v", String(shot.durationMs * fps / 1000), "-an", "-c:v", "libx264", "-threads", "1", "-preset", "veryfast", "-crf", "24", "-maxrate", "3M", "-bufsize", "6M", "-pix_fmt", "yuv420p", "-map_metadata", "-1", "-fs", String(MAX_VIDEO_BYTES), "-movflags", "+faststart", "-f", "mp4", clip]);
       clips.push(clip);
     }
     await writeFile(join(directory, "clips.txt"), clips.map(name => `file '${name}'`).join("\n"), { flag: "wx", mode: 0o600 });

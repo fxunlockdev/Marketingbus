@@ -13,7 +13,7 @@ export async function runOneMotion(renderer: MotionRenderer = renderMotion, stor
   const claimed = await db.$transaction(async tx => {
     // One active render across all worker replicas. Expired jobs require recovery first.
     await tx.$queryRaw`SELECT pg_advisory_xact_lock(71403219)::text`;
-    if (await tx.motionRender.count({ where: { status: { in: ["RUNNING", "STORING"] } } })) return null;
+    if (await tx.motionRender.count({ where: { status: { in: ["RUNNING", "STORING"] } } }) || await tx.videoClip.count({ where: { status: { in: ["RUNNING", "STORING"] } } })) return null;
     const jobs = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "MotionRender" WHERE status='QUEUED' ORDER BY "createdAt" FOR UPDATE SKIP LOCKED LIMIT 1`;
     if (!jobs[0]) return null;
     return tx.motionRender.update({ where: { id: jobs[0].id }, data: { status: "RUNNING", leaseUntil: new Date(Date.now() + 180000) } });
@@ -31,6 +31,9 @@ export async function runOneMotion(renderer: MotionRenderer = renderMotion, stor
     const store = storage(), { context } = await fresh("RUNNING"), assets = new Map<string, Uint8Array>();
     for (const asset of context.assets) {
       const bytes = await store.get(asset.objectKey); if (hash(bytes) !== asset.sha256) throw Error("Motion input integrity failed."); assets.set(asset.id, bytes);
+    }
+    for (const clip of context.clips) {
+      const bytes = await store.get(clip.objectKey); if (bytes.length !== clip.bytes || hash(bytes) !== clip.sha256) throw Error("Clip integrity failed."); assets.set(clip.id, bytes);
     }
     await fresh("RUNNING"); motionDailyLimit();
     const output = await renderer(context.document, assets);

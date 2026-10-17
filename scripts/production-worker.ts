@@ -13,6 +13,7 @@ import { runOneBrandAnalysis, recoverBrandAnalysisLeases } from "../src/lib/know
 import { runOneImage, recoverImageLeases } from "../src/lib/images/worker";
 import { runOneMotion, recoverMotionLeases, purgeMotion } from "../src/lib/video/worker";
 import { videoStore } from "../src/lib/video/service";
+import { runOneClip, recoverClipLeases, purgeClips } from "../src/lib/video/clips";
 import { runOneEmail } from "../src/lib/identity/worker";
 import { expireIdentityArtifacts } from "../src/lib/identity/service";
 import { configuredSocialAdapters } from "../src/lib/social/contracts";
@@ -48,6 +49,7 @@ async function main() {
       await recoverBrandAnalysisLeases();
       await recoverImageLeases();
       await recoverMotionLeases();
+      await recoverClipLeases();
       await recoverSocialLeases();
       const enabled = await heartbeat(instance);
       lastHealthyAt = Date.now();
@@ -65,6 +67,7 @@ async function main() {
             void purgeExpiredAssets(store).catch(() => console.error("Asset retention check failed; retry remains queued."));
             void purgeCompositionExports(store).catch(() => console.error("Export retention check failed; private tombstones retained for retry."));
             void purgeMotion(videoStore()).catch(() => console.error("Motion retention check failed; private tombstones retained for retry."));
+            void purgeClips(videoStore()).catch(() => console.error("Clip retention check failed; private tombstones retained for retry."));
           } catch { console.error("Private storage configuration is incomplete; other job types remain available."); }
         }
       }
@@ -74,7 +77,7 @@ async function main() {
       if (!stopping && enabled) await runOneBrandAnalysis();
       if (!stopping && enabled) await runOneImage();
       if (!stopping && process.env.MOTION_RENDERING_ENABLED === "true") {
-        try { await runOneMotion(); } catch { console.error("Motion rendering check failed; other workflows remain available."); }
+        try { if (!await runOneClip()) await runOneMotion(); } catch { console.error("Motion rendering check failed; other workflows remain available."); }
       }
       if (!stopping && enabled && await runOneJob()) continue;
       if (!stopping && process.env.SOCIAL_EXECUTION_ENABLED === "true") {

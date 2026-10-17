@@ -1,6 +1,6 @@
 # Motion reel operations
 
-The video module turns a reviewed storyboard into a silent, captioned MP4 using approved original brand images or approved generated artwork. Reusing existing artwork makes no new model call and spends no AI credits. It does not generate footage, clone voices, add music or call Higgsfield. Customer Connections remains for publishing destinations only.
+The video module turns a reviewed storyboard into a silent, captioned MP4 using approved original brand images, approved generated artwork or reviewed uploaded clips. Reusing media makes no new model call and spends no AI credits. It does not generate footage, clone voices, add music or call Higgsfield. Customer Connections remains for publishing destinations only.
 
 ## Customer workflow
 
@@ -11,7 +11,21 @@ The video module turns a reviewed storyboard into a silent, captioned MP4 using 
 5. Refresh status, preview the saved video, and review continuity, captions and brand fidelity. Final approval enables MP4, VTT captions and storyboard JSON downloads. Rejection does not spend money or regenerate automatically.
 6. For a revision, change the relevant shot and save a new version. Previous output becomes unavailable for delivery. Remove unused settled output from its version history.
 
-Fact checks are lexical guards, not semantic truth verification. Human review is not an automated continuity or agency-quality score. Uploaded/generated video clips are not supported yet.
+Fact checks are lexical guards, not semantic truth verification. Human review is not an automated continuity or agency-quality score. Uploaded clips are supported; supplier-generated clips still need a job, pricing and provenance integration.
+
+## Reviewed uploaded footage
+
+The private footage library accepts licensed H.264 MP4 clips of 1–8 seconds and at most 20 MB. Inputs must be upright, 8-bit YUV 4:2:0, no larger than 1920 pixels on either edge or 2,073,600 pixels overall, at 1–60 fps. One optional AAC audio track is accepted but removed; subtitles, extra video tracks, rotated media and unsupported codecs are rejected. Export unsupported source files into this format first. Silence does not establish music or likeness rights: the uploader must confirm permission and the reviewer must check visible people, products and claims.
+
+Upload reserves a private original and normalized output pair before writing. Raw originals have no preview or download route. The worker verifies the original hash, probes and fully re-encodes it to silent 720 × 1280 H.264 at 24 fps, removes metadata and chapters, checks output duration/streams and verifies immutable storage. Only then can workspace members preview the normalized clip. An authorized reviewer must explicitly approve it; the independent-review policy applies. A changed brand or expired retention makes the clip unavailable.
+
+Each scene selects an image or footage, never both. Footage starts at its beginning and must be at least as long as the scene; it is letterboxed within the existing image area, with the original logo and measured caption layout preserved. It can be mixed with motion cards. Timeline trimming, reframing, licensed audio and more export layouts remain separate work. Every changed scene, complete storyboard and finished render still needs review. Rejection or removal invalidates dependent storyboard and finished-video approvals; reapproving a clip does not silently restore them.
+
+Input parsing uses a fixed MP4 demuxer, disabled external data references, local-file-only protocols, a secret-free child environment, one decoder thread and bounded process output. Normalization has a 60-second total deadline and 30-second process deadlines. These controls do not replace patched binaries, OS/container CPU/memory/disk limits or decoder isolation. Production enabling requires that packaging and private storage acceptance.
+
+Uploads are limited to two concurrent requests per web process, six per user per hour, six per business per UTC day, and five retained clip pairs per business (up to 200 MB reserved). Clip processing shares the existing operator daily motion limit and the single active CPU lease across replicas; it does not add an independent spend allowance. Failed/ambiguous uploads still consume admission and retained-pair capacity until cleanup. Processing failures are not automatically retried. “Check stored clip” only verifies already-normalized output by hash and returns it to human review.
+
+Original and normalized files expire after 30 days. Removal blocks use immediately and schedules both files for deletion after seven days. Failed or interrupted processing schedules cleanup after seven days. Failed deletion retains a private tombstone and both-file quota until both deletions are acknowledged. Downloaded copies and backups are separate obligations.
 
 ## Approved artwork reuse
 
@@ -21,7 +35,7 @@ These checks run on storyboard save/review, before and after encoding, before st
 
 ## Operator configuration
 
-Apply migrations through `20261015210000_motion_storyboards` and deploy matching web/worker runtime `studio-v10-motion-artwork`. Artwork reuse requires no new migration. Video rendering stays disabled unless all of these requirements are met:
+Apply migrations through `20261017060000_video_clips` and deploy matching web/worker runtime `studio-v16-reviewed-clips`. Clip-capable renderer `motion-cards-v3-clips` requires a new render and review for delivery of older storyboard output; old bytes are retained until normal cleanup. Video rendering and clip processing stay disabled unless all of these requirements are met:
 
 - `MOTION_RENDERING_ENABLED=true` and an integer `MOTION_RENDER_DAILY_LIMIT` from 1 to 100, explicitly chosen by the operator. Start low and measure costs before increasing it.
 - Absolute `FFMPEG_PATH` and `FFPROBE_PATH` pointing to operator-installed binaries, with `libx264` available. No runtime binary downloads occur. Keep matching configuration on web and worker because it participates in the readiness fingerprint.
@@ -34,7 +48,7 @@ Production packaging must install the binaries and fonts and enforce container m
 
 The renderer uses app-owned templates, never customer HTML, JavaScript, shell commands, FFmpeg filters or remote media URLs. Original image hashes and permissions are checked again before rendering and delivery. Child processes receive a minimal environment without application secrets. Media protocols are restricted to local files.
 
-Output is one H.264 stream at 720 × 1280 and 24 fps, without audio. Stream metadata, resolution, frame rate and duration are validated before storage. Encoding has a 90-second deadline and 30-second child-process deadlines. Files must be smaller than 20 MB. Character-based caption fitting and reading-time guards are conservative heuristics; multilingual typography and professional visual evaluation remain work to do.
+Output is one H.264 stream at 720 × 1280 and 24 fps, without audio. Stream metadata, resolution, frame rate and duration are validated before storage. Encoding has a 90-second deadline and 30-second child-process deadlines. Files must be smaller than 20 MB. Captions use measured bundled Figtree outlines, overflow rejection and a conservative reading-time guard; multilingual typography and professional visual evaluation remain work to do.
 
 A database lock permits one active render/storage job across worker replicas; the renderer also permits one encode per process. Active jobs cannot be cancelled through the customer API, avoiding premature release of that slot. Queued jobs can be cancelled. A 180-second job lease bounds recovery after a crash.
 
@@ -54,4 +68,4 @@ Local tests exercise actual encoding and probing, single-worker admission, tenan
 
 The supplied Hyperframes contract informed finite timeline and asset-reference constraints. Its runtime is not installed. The current implementation is an app-owned FFmpeg renderer. OpenMontage code was not copied.
 
-Still required for the full video product: verified Higgsfield model/rate transports; per-shot generation quotes, supplier authorization and uncertain-outcome reconciliation; quarantined uploaded/generated clips; licensed music/voiceover and audio captions; automated continuity/fidelity evaluation; mixed-media assembly, provider revisions and platform-specific export/transfer. Finish these before describing video as complete with only credentials remaining.
+Still required for the full video product: verified Higgsfield model/rate transports; per-shot generation quotes, supplier authorization and uncertain-outcome reconciliation; supplier clip retrieval/provenance; licensed music/voiceover and audio captions; automated continuity/fidelity evaluation; timeline trimming/reframing, provider revisions and platform-specific export/transfer. Finish these before describing video as complete with only credentials remaining.

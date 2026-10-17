@@ -45,6 +45,7 @@ export async function manageApprovals(scope: Scope, raw: unknown) {
       await tx.brandAsset.updateMany({ where: { businessId: scope.businessId, purpose: "generated" }, data: { approvedForGeneration: false } });
       await tx.videoStoryboard.updateMany({ where: { businessId: scope.businessId, status: { not: "SUPERSEDED" } }, data: { status: "DRAFT", approvedBy: null, shotApprovals: [] } });
       await tx.motionRender.updateMany({ where: { businessId: scope.businessId, status: "APPROVED" }, data: { status: "READY", approvedBy: null } });
+      await tx.videoClip.updateMany({ where: { businessId: scope.businessId, status: "APPROVED" }, data: { status: "READY", approvedBy: null } });
       await tx.calendarEntry.deleteMany({ where: { item: { plan: { businessId: scope.businessId } } } });
     } else if (input.action === "comment") {
       const item = await currentItem(tx, scope, input.itemId), revision = item.revisions[0];

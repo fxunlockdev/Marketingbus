@@ -8,6 +8,8 @@ import { storyboardDocument, totalDuration, type StoryboardDocument } from "../s
 import { WORKER_RUNTIME, workerConfigurationHash } from "../src/lib/production/readiness";
 import { uploadAsset, changeAsset } from "../src/lib/assets/service";
 import type { AssetStore } from "../src/lib/assets/storage";
+import { uploadClip, runOneClip, reviewClip, readClip, recoverClipStorage, recoverClipLeases, purgeClips, listClips } from "../src/lib/video/clips";
+import { manageApprovals } from "../src/lib/workflows/approvals";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (process.env.TEST_DATABASE_URL && (process.env.DATABASE_URL !== process.env.TEST_DATABASE_URL || !["localhost", "127.0.0.1"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Local test DB required");
 suite("storyboard and motion lifecycle", () => {
@@ -20,7 +22,9 @@ suite("storyboard and motion lifecycle", () => {
   });
   afterAll(async () => {
     const renders = await db.motionRender.findMany({ where: { organizationId: { in: orgs } } });
-    await db.motionAuthorization.deleteMany({ where: { key: { in: renders.map(r => r.id) } } });
+    const clips = await db.videoClip.findMany({ where: { organizationId: { in: orgs } } });
+    await db.motionAuthorization.deleteMany({ where: { key: { in: [...renders, ...clips].map(r => r.id) } } });
+    await db.videoClip.deleteMany({ where: { organizationId: { in: orgs } } });
     await db.motionRender.deleteMany({ where: { organizationId: { in: orgs } } }); await db.videoStoryboard.deleteMany({ where: { organizationId: { in: orgs } } });
     await db.brandAsset.deleteMany({ where: { organizationId: { in: orgs } } }); await db.imageGeneration.deleteMany({ where: { organizationId: { in: orgs } } }); await db.organization.deleteMany({ where: { id: { in: orgs } } }); await db.user.deleteMany({ where: { id: { in: users } } });
     await db.workerHeartbeat.deleteMany({ where: { id: workerId } }); vi.unstubAllEnvs(); await db.$disconnect();
@@ -57,6 +61,121 @@ suite("storyboard and motion lifecycle", () => {
     const document = storyboardDocument.parse((await board(f.id)).document); document.shots[0].asset = { id: asset.id, sha256: asset.sha256 };
     return (await manageVideo(f.scope, { action: "save", storyboardId: f.id, document }, () => store)).storyboardId!;
   }
+  const source = Buffer.from("000000186674797069736f6d0000020069736f6d6d703432", "hex");
+  const processed = { bytes: Buffer.from("fixture-only-normalized-output"), durationMs: 6000 };
+  async function upload(f: Awaited<ReturnType<typeof setup>>) { return (await uploadClip(f.scope, { label: "Studio footage", rightsConfirmed: true }, source, store)).clipId; }
+  async function readyClip(f: Awaited<ReturnType<typeof setup>>) {
+    const id = await upload(f); await runOneClip(async () => processed, () => store); return db.videoClip.findUniqueOrThrow({ where: { id } });
+  }
+  async function useClip(f: Awaited<ReturnType<typeof setup>>, clip: { id: string; sha256: string }) {
+    const document = storyboardDocument.parse((await board(f.id)).document); document.shots[0].clip = { id: clip.id, sha256: clip.sha256 };
+    return (await manageVideo(f.scope, { action: "save", storyboardId: f.id, document }, () => store)).storyboardId!;
+  }
+  it("quarantines raw clips, reviews normalized bytes, renders mixed scenes and revokes dependent approvals", async () => {
+    const f = await setup(), id = await upload(f);
+    await expect(readClip(f.scope, id, store)).rejects.toThrow("processed");
+    const process = vi.fn(async () => processed); await runOneClip(process, () => store); await runOneClip(process, () => store); expect(process).toHaveBeenCalledOnce();
+    const clip = await db.videoClip.findUniqueOrThrow({ where: { id } }); expect(clip.status).toBe("READY");
+    expect(await readClip(f.scope, id, store)).toEqual(processed.bytes);
+    await expect(useClip(f, clip)).rejects.toThrow("unavailable");
+    await expect(reviewClip(f.scope, id, { action: "approve" })).rejects.toThrow("Watch");
+    await reviewClip(f.scope, id, { action: "approve", watched: true });
+    const storyboardId = await useClip(f, clip), renderId = await queue(f, storyboardId); await runOneMotion(f.renderer, () => store);
+    expect(f.renderer.mock.calls[0][1]?.get(id)).toEqual(processed.bytes);
+    await manageVideo(f.scope, { action: "approve-render", renderId, continuityReviewed: true }, () => store);
+    expect((await readMotion(f.scope, renderId, true, store)).bytes.length).toBeGreaterThan(0);
+    await reviewClip(f.scope, id, { action: "reject" });
+    expect((await board(storyboardId)).shotApprovals).toEqual([]); expect((await row(renderId)).status).toBe("READY");
+    await expect(readMotion(f.scope, renderId, true, store)).rejects.toThrow();
+    await reviewClip(f.scope, id, { action: "approve", watched: true });
+    await expect(readMotion(f.scope, renderId, true, store)).rejects.toThrow();
+    expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(0);
+    expect(JSON.stringify(await listClips(f.scope))).not.toContain(clip.sourceKey);
+  });
+  it("requires rights, worker readiness and current editor authority before accepting originals", async () => {
+    const f = await setup();
+    await expect(uploadClip(f.scope, { label: "No rights", rightsConfirmed: false }, source, store)).rejects.toThrow();
+    await db.workerHeartbeat.update({ where: { id: workerId }, data: { motionReady: false } });
+    await expect(upload(f)).rejects.toThrow("worker");
+    expect(await db.videoClip.count({ where: { businessId: f.scope.businessId } })).toBe(0);
+    await db.membership.update({ where: { organizationId_userId: { organizationId: f.scope.organizationId, userId: f.scope.actorId } }, data: { role: "VIEWER" } });
+    await expect(upload(f)).rejects.toThrow();
+  });
+  it("isolates clip preview/review and storyboard selection across businesses", async () => {
+    const a = await setup(), b = await setup(), clip = await readyClip(a); await reviewClip(a.scope, clip.id, { action: "approve", watched: true });
+    await expect(readClip(b.scope, clip.id, store)).rejects.toThrow("not found");
+    await expect(reviewClip(b.scope, clip.id, { action: "remove" })).rejects.toThrow("not found");
+    await expect(useClip(b, clip)).rejects.toThrow("unavailable"); expect(await listClips(b.scope)).toHaveLength(0);
+  });
+  it("enforces independent clip review and invalidates previous approvals on policy change", async () => {
+    const f = await setup(), clip = await readyClip(f); await reviewClip(f.scope, clip.id, { action: "approve", watched: true });
+    const second = await setup(); await db.membership.create({ data: { organizationId: f.scope.organizationId, userId: second.scope.actorId, role: "ADMIN" } });
+    await manageApprovals(f.scope, { action: "policy", independent: true });
+    expect((await db.videoClip.findUniqueOrThrow({ where: { id: clip.id } })).status).toBe("READY");
+    await expect(reviewClip(f.scope, clip.id, { action: "approve", watched: true })).rejects.toThrow();
+  });
+  it.each(["brand", "role", "source"])("blocks stale %s before clip decoding", async reason => {
+    const f = await setup(), id = await upload(f), clip = await db.videoClip.findUniqueOrThrow({ where: { id } });
+    if (reason === "brand") await db.business.update({ where: { id: f.scope.businessId }, data: { version: { increment: 1 } } });
+    if (reason === "role") await db.membership.update({ where: { organizationId_userId: { organizationId: f.scope.organizationId, userId: f.scope.actorId } }, data: { role: "VIEWER" } });
+    if (reason === "source") objects.set(clip.sourceKey, Buffer.from("tampered"));
+    const process = vi.fn(async () => processed); await runOneClip(process, () => store);
+    expect(process).not.toHaveBeenCalled(); expect((await db.videoClip.findUniqueOrThrow({ where: { id } })).status).toBe("FAILED");
+  });
+  it("rejects context changes during decoding before normalized storage", async () => {
+    const f = await setup(), id = await upload(f), put = vi.fn(store.put);
+    await runOneClip(async () => { await db.business.update({ where: { id: f.scope.businessId }, data: { confirmedAt: null } }); return processed; }, () => ({ ...store, put }));
+    expect(put).not.toHaveBeenCalled(); expect((await db.videoClip.findUniqueOrThrow({ where: { id } })).status).toBe("FAILED");
+  });
+  it("holds ambiguous stored clips privately and recovers by read-back without reprocessing", async () => {
+    const f = await setup(), id = await upload(f), process = vi.fn(async () => processed);
+    await runOneClip(process, () => ({ ...store, put: async (...args) => { await store.put(...args); throw Error("lost acknowledgement"); } }));
+    await expect(readClip(f.scope, id, store)).rejects.toThrow("processed");
+    await recoverClipStorage(f.scope, id, store); expect(process).toHaveBeenCalledOnce();
+    expect((await db.videoClip.findUniqueOrThrow({ where: { id } })).status).toBe("READY");
+    await expect(recoverClipStorage(f.scope, id, store)).rejects.toThrow("No processed");
+  });
+  it("does not retry unknown uploads and retains quota until both objects are deleted", async () => {
+    const f = await setup();
+    await expect(uploadClip(f.scope, { label: "Ambiguous", rightsConfirmed: true }, source, { ...store, put: async (...args) => { await store.put(...args); throw Error("uncertain"); } })).rejects.toThrow("private");
+    const clip = await db.videoClip.findFirstOrThrow({ where: { businessId: f.scope.businessId } });
+    await expect(recoverClipStorage(f.scope, clip.id, store)).rejects.toThrow("No processed");
+    expect(await runOneClip(async () => processed, () => store)).toBe(false);
+    await reviewClip(f.scope, clip.id, { action: "remove" });
+    const expiry = (await db.videoClip.findUniqueOrThrow({ where: { id: clip.id } })).purgeAfter;
+    await reviewClip(f.scope, clip.id, { action: "remove" }); expect((await db.videoClip.findUniqueOrThrow({ where: { id: clip.id } })).purgeAfter).toEqual(expiry);
+    await db.videoClip.update({ where: { id: clip.id }, data: { purgeAfter: new Date(0) } });
+    const now = new Date();
+    await purgeClips({ ...store, remove: async key => { if (key === clip.objectKey) throw Error("temporary"); await store.remove(key); } }, now);
+    expect((await db.videoClip.findUniqueOrThrow({ where: { id: clip.id } })).status).toBe("DELETING");
+    await db.videoClip.update({ where: { id: clip.id }, data: { leaseUntil: new Date(0) } });
+    await purgeClips(store, now); expect((await db.videoClip.findUniqueOrThrow({ where: { id: clip.id } })).status).toBe("DELETED");
+    expect(objects.has(clip.sourceKey)).toBe(false);
+  });
+  it("rejects clips shorter than the shot and detects stored-byte tampering", async () => {
+    const f = await setup(), clip = await readyClip(f); await reviewClip(f.scope, clip.id, { action: "approve", watched: true });
+    await db.videoClip.update({ where: { id: clip.id }, data: { durationMs: 1000 } }); await expect(useClip(f, clip)).rejects.toThrow("shorter");
+    await db.videoClip.update({ where: { id: clip.id }, data: { durationMs: 6000 } });
+    const storyboardId = await useClip(f, clip), id = await queue(f, storyboardId); objects.set(clip.objectKey, Buffer.from("changed"));
+    await expect(readClip(f.scope, clip.id, store)).rejects.toThrow("integrity");
+    await runOneMotion(f.renderer, () => store); expect(f.renderer).not.toHaveBeenCalled(); expect((await row(id)).status).toBe("FAILED");
+  });
+  it("prevents concurrent clip/render CPU leases and never retries expired decoder work", async () => {
+    const f = await setup(), id = await upload(f);
+    await db.videoClip.update({ where: { id }, data: { status: "RUNNING", leaseUntil: new Date(Date.now() + 100000) } });
+    const renderId = await queue(f); await runOneMotion(f.renderer, () => store); expect(f.renderer).not.toHaveBeenCalled();
+    expect(await runOneClip(async () => processed, () => store)).toBe(false);
+    await db.videoClip.update({ where: { id }, data: { leaseUntil: new Date(0) } }); await recoverClipLeases();
+    expect((await db.videoClip.findUniqueOrThrow({ where: { id } })).status).toBe("FAILED");
+    await runOneMotion(f.renderer, () => store); expect((await row(renderId)).status).toBe("READY");
+  });
+  it("bounds retained clip storage and shares the non-replenishing daily CPU allowance", async () => {
+    const f = await setup(); for (let i = 0; i < 5; i++) { const id = await upload(f); await reviewClip(f.scope, id, { action: "remove" }); }
+    await expect(upload(f)).rejects.toThrow("Five private");
+    const other = await setup(); vi.stubEnv("MOTION_RENDER_DAILY_LIMIT", "1");
+    await db.workerHeartbeat.update({ where: { id: workerId }, data: { configurationHash: workerConfigurationHash() } });
+    await expect(upload(other)).rejects.toThrow("daily video processing");
+  });
   it("blocks legacy renderer approval and download while retaining bytes and allowing a reviewed replacement", async () => {
     const f = await setup(), id = await queue(f); await runOneMotion(f.renderer, () => store);
     await manageVideo(f.scope, { action: "approve-render", renderId: id, continuityReviewed: true }, () => store);

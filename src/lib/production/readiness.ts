@@ -7,7 +7,7 @@ import { imageConfigurationHash, imageRates } from "../images/contracts";
 import { motionConfigurationHash } from "../video/limits";
 import { motionRendererAvailable } from "../video/render";
 
-export const WORKER_RUNTIME = "studio-v15-evidence-memory";
+export const WORKER_RUNTIME = "studio-v16-reviewed-clips";
 export const HEARTBEAT_TTL_MS = 120_000;
 export function workerConfigurationHash() {
   return createHash("sha256").update(JSON.stringify({

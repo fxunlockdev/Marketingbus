@@ -119,6 +119,7 @@ model Business {
   imageGenerations  ImageGeneration[]
   storyboards       VideoStoryboard[]
   motionRenders     MotionRender[]
+  videoClips        VideoClip[]
   socialConnections SocialConnection[]
   socialFlows SocialOAuthFlow[]
   publications SocialPublication[]
@@ -505,6 +506,33 @@ model VideoStoryboard {
   @@unique([itemId, version])
   @@unique([id, businessId, organizationId])
   @@index([businessId, organizationId, createdAt])
+}
+
+model VideoClip {
+  id String @id @default(cuid())
+  businessId String
+  organizationId String
+  brandVersion Int
+  label String
+  createdBy String
+  rightsConfirmedAt DateTime
+  status String @default("UPLOADING")
+  sourceKey String @unique
+  sourceHash String
+  sourceBytes Int
+  objectKey String @unique
+  sha256 String @default("")
+  bytes Int @default(0)
+  durationMs Int @default(0)
+  processorVersion String
+  approvedBy String?
+  leaseUntil DateTime?
+  errorCode String?
+  purgeAfter DateTime
+  createdAt DateTime @default(now())
+  business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Restrict)
+  @@index([businessId, organizationId, createdAt])
+  @@index([status, leaseUntil])
 }
 
 model MotionRender {
