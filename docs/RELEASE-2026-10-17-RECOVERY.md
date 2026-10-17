@@ -20,7 +20,9 @@ The actual local PostgreSQL 17.11 rehearsal passes: 52 table fingerprints, 57 sy
 
 ## Delivery
 
-Source delivery and CI verification pending. This is test/operator tooling; no application deployment is needed for these changes.
+Source commit `c76fcbe3b87661cdaa7ea28843c2addac66c7421` is pushed to `main`. [GitHub CI run 39012627932](https://github.com/fxunlockdev/Marketingbus/actions/runs/39012627932) passes 488 tests in 40 suites, the real isolated PostgreSQL restore, production build/type checking, 27 browser journeys and dependency audit. One private-storage journey remains skipped. Linux CI independently verifies the same 52 tables, 57 rows and 31 migrations, and reports both temporary databases removed. Its restore step took 279 ms on the synthetic fixture.
+
+This is test/operator tooling; no application deployment is needed. The live application remains on the preceding verified release. Existing CI action-runtime and upcoming Ubuntu-runner migration notices remain non-failing warnings.
 
 ## Remaining acceptance
 
