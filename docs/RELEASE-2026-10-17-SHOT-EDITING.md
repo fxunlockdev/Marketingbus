@@ -16,7 +16,9 @@ Actual encoder tests inspect output pixels to verify source-time selection, left
 
 All 25 local browser journeys pass; one private-storage journey remains skipped. The footage journey verifies invalid-range feedback, keyboard crop control, preview seeking/playback bounds, exact timeline labels, review retention, removal/repair, role/access denial, automated accessibility and mobile width. The editor screenshot was inspected. Browser video bytes use a test-only transport; production bucket acceptance remains separate.
 
-All 409 local unit/database tests across 38 suites pass, along with the production build, type checking and dependency audit. The audit reports zero known vulnerabilities, not comprehensive security certification. CI and deployment acceptance remain pending for this source revision.
+All 409 local unit/database tests across 38 suites pass, along with the production build, type checking and dependency audit. The audit reports zero known vulnerabilities, not comprehensive security certification. GitHub CI run [39004187425](https://github.com/fxunlockdev/Marketingbus/actions/runs/39004187425) passes the same 409 tests, 25 browser journeys, build and audit for source `85dd5da33d7bd46d6785ead98b4c17c80fe2236c`.
+
+Web deployment `a2e9ed2d-d8f6-44b8-937e-ab191679991e` and worker deployment `eb1a8d01-d30d-4504-a83a-32815cec7336` both reported SUCCESS. Migration logs confirm all 28 migrations applied. Hosted `/api/health` returns 200 with no-store; `/studio` redirects signed-out users to login; unauthenticated clip-library and clip-media reads return 401 with no-store. These smoke checks do not establish authenticated hosted rendering or storage acceptance.
 
 ## Remaining release gates
 
