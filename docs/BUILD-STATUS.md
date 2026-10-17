@@ -1,6 +1,6 @@
-# Acceptance ledger — 16 October 2026
+# Acceptance ledger — 17 October 2026
 
-This is a working pilot, not a finished enterprise product. Distinguish implemented source, local fixture verification, deployment and actual external-service acceptance. Web and worker now run release `d5cb615` with verified Stripe billing, guarded operator refund/recovery procedures and the preceding module foundations. All 27 migrations are applied. Both deployments reported success, public health returned 200 and GitHub CI run `38941026255` passed. See [current release evidence](RELEASE-2026-10-16-STRIPE.md) and the [seven-module completion plan](MODULE-PLAN.md). No paid supplier calls, real emails, payments or social posts were made in this implementation pass.
+This is a working pilot, not a finished enterprise product. Distinguish implemented source, local fixture verification, deployment and actual external-service acceptance. Web and worker now run release `c1f8ab8` with evidence-bound experiment promotion, guarded production memory and the preceding module foundations. All 27 migrations are applied. Both deployments reported success, public health returned 200 and GitHub CI run `38999965782` passed. See [current release evidence](RELEASE-2026-10-17-LEARNING.md) and the [seven-module completion plan](MODULE-PLAN.md). No paid supplier calls, real emails, payments or social posts were made in this implementation pass.
 
 ## Feature acceptance and remaining work
 
@@ -40,6 +40,8 @@ This is a working pilot, not a finished enterprise product. Distinguish implemen
 The requested “only integrations left” milestone has not been reached. This ledger intentionally lists internal work separately from credentials/third-party approvals so it cannot be hidden behind an integration blocker.
 
 ## Latest local verification
+
+The deployed learning-evidence update passes 360 tests across 37 unit/database suites and 24 browser journeys, production build/type checking and dependency audit, locally and in GitHub CI run `38999965782`. One private-storage journey remains skipped. Exact local metric snapshots exercise age-matched cohorts, role/scope controls, changed or deleted evidence, legacy proposals, concurrent promotion, expiry/revert and production preference changes before and after submission. The browser verifies review, approval, revert, refusal after changed metrics, no credit spend, automated accessibility and mobile width. Both services reported SUCCESS; hosted health and signed-out access checks pass. This is guarded observational learning, not live metric ingestion or proof of improved creative outcomes. See [learning release evidence](RELEASE-2026-10-17-LEARNING.md).
 
 The deployed Stripe adapter update passes 336 tests across 36 unit/database suites and 23 browser journeys, production build/type checking and dependency audit, locally and in GitHub CI run `38941026255`. One private-storage journey remains skipped. Tests use actual signature cryptography with injected Stripe HTTP responses, not real charges. They cover account/mode/version/price binding, altered and stale events, monthly line periods, cancellation ordering, partial refund accounting, single-submit refund recovery, immutable reconciliation evidence, tenant access and unchanged zero credits after forged return parameters. Both services reported SUCCESS; hosted health and signed-out access checks pass. See [Stripe release evidence](RELEASE-2026-10-16-STRIPE.md).
 

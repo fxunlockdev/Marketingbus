@@ -12,7 +12,16 @@ All observations are local fixtures; provider responses are injected. No paid ge
 
 ## Deployment
 
-Pending. Runtime `studio-v15-evidence-memory` requires web and worker to deploy together. No new migration; the existing 27 remain. Legacy unaccepted quotes need replacement, and queued work without a current preference fingerprint stops before supplier submission with customer credits released. Stored historical records and delivered outputs are retained.
+Source `c1f8ab869206f020a89849ddafa2ed2d221ac7e6` is pushed to GitHub and deployed on both services at runtime `studio-v15-evidence-memory`.
+
+| Service | Deployment | Observed result |
+|---|---|---|
+| Web | `039afa85-e72a-45fe-b745-0ec54d23b7d9` | SUCCESS |
+| Worker | `140be525-2ee3-458b-a3b1-98d997d983c6` | SUCCESS |
+
+Both startup logs report 27 migrations with none pending. Hosted health returns 200 with no-store, signed-out studio redirects to login, and unauthenticated social/analytics reads return 401. [GitHub CI run 38999965782](https://github.com/fxunlockdev/Marketingbus/actions/runs/38999965782) passed tests, production build, browser acceptance and dependency audit for this source commit.
+
+No new migration or infrastructure was created. Legacy unaccepted quotes need replacement, and queued work without a current preference fingerprint stops before supplier submission with customer credits released. Stored historical records and delivered outputs are retained.
 
 ## Remaining work
 
