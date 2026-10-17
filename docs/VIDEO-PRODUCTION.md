@@ -5,13 +5,30 @@ The video module turns a reviewed storyboard into a silent, captioned MP4 using 
 ## Customer workflow
 
 1. Confirm the brand, create a content plan and approve any copy already attached to the planned item.
-2. Open Video studio and create a storyboard. Edit its title, background, original logo, captions, images, timing and hold/fade transitions. Add, remove or reorder up to six shots within 30 seconds.
+2. Open Video studio and create a storyboard. Edit its title, output format, background, original logo, captions, images, timing and hold/fade transitions. Add, remove or reorder up to six shots within 30 seconds.
 3. Save a version. Unchanged shots retain their exact-content reviews; changed shots require review again. Approve every shot, then the complete storyboard. An independent reviewer is required when the business approval policy demands one.
 4. Queue a render. The application reserves private storage and checks the operator's daily CPU allowance and a fresh matching worker heartbeat. This path uses no paid AI and charges no AI credits; infrastructure still costs money.
 5. Refresh status, preview the saved video, and review continuity, captions and brand fidelity. Final approval enables MP4, VTT captions and storyboard JSON downloads. Rejection does not spend money or regenerate automatically.
 6. For a revision, change the relevant shot and save a new version. Previous output becomes unavailable for delivery. Remove unused settled output from its version history.
 
-Fact checks are lexical guards, not semantic truth verification. Human review is not an automated continuity or agency-quality score. Uploaded clips are supported; supplier-generated clips still need a job, pricing and provenance integration.
+Fact checks are lexical guards, not semantic truth verification. Human review is not an automated continuity or agency-quality score. The generated-shot job lifecycle is implemented separately; the real supplier transport and live acceptance remain unfinished. See [generated-shot operations](GENERATED-SHOTS.md).
+
+## Export formats
+
+The finite layouts provide four output shapes. The format is part of the saved storyboard, scene review and immutable render authorization. There is no free-form dimension or filter input.
+
+| Format | Dimensions | Layout |
+|---|---|---|
+| Portrait 9:16 | 720 × 1280 | Logo above media, captions below |
+| Square 1:1 | 720 × 720 | Shorter media window, captions below |
+| Feed 4:5 | 720 × 900 | Logo above media, captions below |
+| Landscape 16:9 | 1280 × 720 | Logo above media, captions alongside |
+
+Changing format creates a new version and invalidates every scene review. Captions reflow within measured boxes; unsupported characters and overflow are rejected before saving or approving the new version. A previously overflowing draft can be repaired. No caption is silently clipped, shortened or rewritten. Fit preserves the complete media frame; Fill uses the existing crop controls within the selected layout's media window. The draft footage preview updates its window ratio, but final encoded review remains required.
+
+New storyboards explicitly use portrait. Older documents without a format keep their original portrait meaning and JSON/hash representation. Changing only an internal title retains scene reviews; changing layout does not. Stored bytes are never resized in place. The current renderer requires new output and final review for old renderer versions, with prior bytes retained for normal cleanup. A single storyboard version has one format; making another shape does not create free parallel approved variants or bypass render/storage admission.
+
+These shapes are downloadable media formats, not validated platform profiles. Platform-specific duration, bitrate, media-transfer and publishing acceptance remain separate. Current output is bounded pilot-resolution video, not 1080p or 4K delivery.
 
 ## Reviewed uploaded footage
 
@@ -37,7 +54,7 @@ These checks run on storyboard save/review, before and after encoding, before st
 
 ## Operator configuration
 
-Apply migrations through `20261017060000_video_clips` and deploy matching web/worker runtime `studio-v17-shot-editing`. Renderer `motion-cards-v4-framing` requires a new render and review for delivery of older storyboard output; old bytes are retained until normal cleanup. New clips use `silent-clip-v2-native-aspect`; reviewed v1 clips remain usable. No new migration is needed for shot editing. Video rendering and clip processing stay disabled unless all of these requirements are met:
+Apply all 31 migrations through `20261017102000_shot_settlement_date` and deploy matching web/worker runtime `studio-v19-video-formats`. Renderer `motion-cards-v5-formats` requires a new render and review for delivery of older storyboard output; old bytes are retained until normal cleanup. New clips use `silent-clip-v2-native-aspect`; reviewed v1 clips remain usable. No new migration is needed for export formats. Video rendering and clip processing stay disabled unless all of these requirements are met:
 
 - `MOTION_RENDERING_ENABLED=true` and an integer `MOTION_RENDER_DAILY_LIMIT` from 1 to 100, explicitly chosen by the operator. Start low and measure costs before increasing it.
 - Absolute `FFMPEG_PATH` and `FFPROBE_PATH` pointing to operator-installed binaries, with `libx264` available. No runtime binary downloads occur. Keep matching configuration on web and worker because it participates in the readiness fingerprint.
@@ -50,7 +67,7 @@ Production packaging must install the binaries and fonts and enforce container m
 
 The renderer uses app-owned templates, never customer HTML, JavaScript, shell commands, FFmpeg filters or remote media URLs. Original image hashes and permissions are checked again before rendering and delivery. Child processes receive a minimal environment without application secrets. Media protocols are restricted to local files.
 
-Output is one H.264 stream at 720 × 1280 and 24 fps, without audio. Stream metadata, resolution, frame rate and duration are validated before storage. Encoding has a 90-second deadline and 30-second child-process deadlines. Files must be smaller than 20 MB. Captions use measured bundled Figtree outlines, overflow rejection and a conservative reading-time guard; multilingual typography and professional visual evaluation remain work to do.
+Output is one H.264 stream at the selected finite layout's dimensions and 24 fps, without audio. Every format stays within the original 921,600-pixel frame ceiling. Stream metadata, exact authorized resolution, frame rate and finite duration are validated before storage. Encoding has a 90-second deadline and 30-second child-process deadlines. Files must be smaller than 20 MB. Captions use measured bundled Figtree outlines, overflow rejection and a conservative reading-time guard; multilingual typography and professional visual evaluation remain work to do.
 
 A database lock permits one active render/storage job across worker replicas; the renderer also permits one encode per process. Active jobs cannot be cancelled through the customer API, avoiding premature release of that slot. Queued jobs can be cancelled. A 180-second job lease bounds recovery after a crash.
 
@@ -70,4 +87,4 @@ Local tests exercise actual encoding and probing, single-worker admission, tenan
 
 The supplied Hyperframes contract informed finite timeline and asset-reference constraints. Its runtime is not installed. The current implementation is an app-owned FFmpeg renderer. OpenMontage code was not copied.
 
-Still required for the full video product: verified Higgsfield model/rate transports; per-shot generation quotes, supplier authorization and uncertain-outcome reconciliation; supplier clip retrieval/provenance; licensed music/voiceover and audio captions; automated continuity/fidelity evaluation; provider revisions and platform-specific export/transfer. The bounded storyboard timeline is not a multitrack editor. Finish these before describing video as complete with only credentials remaining.
+Still required for the full video product: verified Higgsfield model/rate/expense transports and real output retrieval; licensed music/voiceover and audio captions; automated continuity/fidelity evaluation; reference-led provider revisions and platform-specific validation/transfer. Per-shot quotes, supplier authorization, receipt/provenance checks and uncertain-outcome reconciliation are implemented but use injected transports in local tests. The bounded storyboard timeline is not a multitrack editor. Finish these before describing video as complete with only credentials remaining.

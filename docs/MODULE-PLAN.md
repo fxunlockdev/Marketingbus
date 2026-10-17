@@ -52,7 +52,9 @@ Added and deployed: quarter-second source trimming, fit/fill framing and keyboar
 
 Added and deployed: approved-scene generated-shot quotes and explicit authorization; single-submit asynchronous supplier jobs; unique provider-job binding; bounded polling; private MP4 quarantine; normalization-gated credit settlement; source approval/provenance checks; shared supplier/CPU/storage admission; status and cancellation controls; privileged uncertain-expense reconciliation. Production has no registered generated-video adapter. See [generated-shot operations](GENERATED-SHOTS.md).
 
-Remaining internal work: actual Higgsfield transport and expense verification; reference-led shot revisions; licensed audio/voiceover; semantic continuity/fidelity evaluation and platform exports. The current customer-deliverable path is silent app-owned motion rendering, not a Higgsfield or Hyperframes runtime integration. Production binary/container packaging and real bucket acceptance remain. Higgsfield account/model/rate verification and paid acceptance are external gates, not substitutes for the unfinished transport.
+Added locally: portrait, square, feed and landscape export layouts; format-specific footage previews; caption reflow/overflow validation; exact output dimension checks; format-bound shot reviews and legacy-document preservation. Every layout stays within the existing frame-pixel ceiling and shares the same CPU/storage limits. See [video-format evidence](RELEASE-2026-10-17-VIDEO-FORMATS.md).
+
+Remaining internal work: actual Higgsfield transport and expense verification; reference-led shot revisions; licensed audio/voiceover; semantic continuity/fidelity evaluation and platform-specific validation/transfer. The current customer-deliverable path is silent app-owned motion rendering, not a Higgsfield or Hyperframes runtime integration. Production binary/container packaging and real bucket acceptance remain. Higgsfield account/model/rate verification and paid acceptance are external gates, not substitutes for the unfinished transport.
 
 ## Module 5 Social publishing and analytics
 

@@ -1,1 +1,1 @@
-export const MOTION_RENDERER_VERSION = "motion-cards-v4-framing";
+export const MOTION_RENDERER_VERSION = "motion-cards-v5-formats";

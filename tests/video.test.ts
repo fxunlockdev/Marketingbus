@@ -2,9 +2,30 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { storyboardDocument, subtitleVtt, totalDuration, shotTimeline, clipRangeFits, DEFAULT_CLIP_EDIT } from "../src/lib/video/document";
 import { motionDailyLimit } from "../src/lib/video/limits";
 import { shotHash } from "../src/lib/video/service";
+import { VIDEO_FORMATS, VIDEO_LAYOUTS, videoLayout } from "../src/lib/video/layout";
 const document = { title: "Reel", background: "#c67139", logo: null, shots: [{ id: "a", label: "Opening", caption: "Considered design", durationMs: 2000, motion: "fade" as const, asset: null }] };
 afterEach(() => vi.unstubAllEnvs());
 describe("finite storyboard contracts", () => {
+  it("preserves omitted portrait format and binds changed layouts to every scene review", () => {
+    const d = storyboardDocument.parse(document), original = shotHash(d, d.shots[0]);
+    expect(d).not.toHaveProperty("format"); expect(videoLayout(d)).toBe(VIDEO_LAYOUTS.portrait);
+    expect(shotHash({ ...d, format: "portrait" }, d.shots[0])).toBe(original);
+    for (const format of VIDEO_FORMATS.filter(f => f !== "portrait")) expect(shotHash({ ...d, format }, d.shots[0])).not.toBe(original);
+    for (const format of ["custom", "__proto__", "1920x1080", { width: 9999 }, null]) expect(storyboardDocument.safeParse({ ...document, format }).success).toBe(false);
+    expect(storyboardDocument.safeParse({ ...document, width: 9000 }).success).toBe(false);
+  });
+  it.each(VIDEO_FORMATS)("keeps the %s layout bounded, even-sized and separated", format => {
+    const l = VIDEO_LAYOUTS[format]; expect(l.width * l.height).toBeLessThanOrEqual(720 * 1280);
+    for (const r of [l.logo, l.media, l.panel, l.text]) {
+      expect(r.x).toBeGreaterThanOrEqual(0); expect(r.y).toBeGreaterThanOrEqual(0);
+      expect(r.x + r.width).toBeLessThanOrEqual(l.width); expect(r.y + r.height).toBeLessThanOrEqual(l.height);
+    }
+    for (const n of [l.width, l.height, l.media.width, l.media.height, l.media.x, l.media.y]) expect(n % 2).toBe(0);
+    expect(l.logo.y + l.logo.height).toBeLessThanOrEqual(l.media.y);
+    expect(l.media.y + l.media.height <= l.panel.y || l.media.x + l.media.width <= l.panel.x).toBe(true);
+    expect(l.text.x).toBeGreaterThan(l.panel.x); expect(l.text.y).toBeGreaterThan(l.panel.y);
+    expect(l.text.x + l.text.width).toBeLessThan(l.panel.x + l.panel.width); expect(l.text.y + l.text.height).toBeLessThan(l.panel.y + l.panel.height);
+  });
   it("validates duration, shot count, uniqueness and reading pace", () => {
     expect(totalDuration(storyboardDocument.parse(document))).toBe(2000);
     expect(storyboardDocument.safeParse({ ...document, shots: [document.shots[0], document.shots[0]] }).success).toBe(false);

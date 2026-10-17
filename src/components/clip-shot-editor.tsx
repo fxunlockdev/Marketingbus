@@ -2,13 +2,15 @@
 import { useEffect, useRef, useState } from "react";
 import { DEFAULT_CLIP_EDIT, clipRangeFits, type VideoShot } from "@/lib/video/document";
 import type { StudioClip } from "./clip-library";
+import { videoLayout, type VideoFormat } from "@/lib/video/layout";
 
-export function ClipShotEditor({ businessId, shot, clip, background, onChange }: { businessId: string; shot: VideoShot; clip?: StudioClip; background: string; onChange: (edit: NonNullable<VideoShot["clipEdit"]>) => void }) {
+export function ClipShotEditor({ businessId, shot, clip, background, format, onChange }: { businessId: string; shot: VideoShot; clip?: StudioClip; background: string; format?: VideoFormat; onChange: (edit: NonNullable<VideoShot["clipEdit"]>) => void }) {
+  const media = videoLayout({ format }).media;
   const edit = shot.clipEdit ?? DEFAULT_CLIP_EDIT, valid = !!clip?.usable && clipRangeFits(shot, clip.durationMs);
   const end = (edit.startMs + shot.durationMs) / 1000, start = edit.startMs / 1000;
   const [url, setUrl] = useState(""), [loading, setLoading] = useState(false), [error, setError] = useState("");
   const video = useRef<HTMLVideoElement>(null), request = useRef<AbortController | null>(null);
-  const previewKey = JSON.stringify({ businessId, clip: shot.clip, edit, duration: shot.durationMs, usable: clip?.usable });
+  const previewKey = JSON.stringify({ businessId, clip: shot.clip, edit, format, duration: shot.durationMs, usable: clip?.usable });
   useEffect(() => { request.current?.abort(); setUrl(""); setError(""); setLoading(false); return () => request.current?.abort(); }, [previewKey]);
   useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
   const update = (change: Partial<typeof edit>) => onChange({ ...edit, ...change });
@@ -38,7 +40,7 @@ export function ClipShotEditor({ businessId, shot, clip, background, onChange }:
     <p role="alert" className="form-error">{error}</p>
     {url && <>
       <p>Draft footage preview only—not a saved render or approval. Browser cropping is an approximation; inspect the final encoded reel before approving it. Audio is absent.</p>
-      <div style={{ width: "100%", maxWidth: 304, aspectRatio: "608 / 620", background }}>
+      <div style={{ width: "100%", maxWidth: 304, aspectRatio: `${media.width} / ${media.height}`, background }}>
         <video ref={video} controls playsInline preload="metadata" src={url} aria-label={`Draft footage for ${shot.label}`} style={{ width: "100%", height: "100%", objectFit: edit.fit, objectPosition: edit.fit === "cover" ? `${edit.x}% ${edit.y}%` : "50% 50%" }}
           onLoadedMetadata={e => { e.currentTarget.currentTime = start; }}
           onPlay={e => { if (e.currentTarget.currentTime < start || e.currentTarget.currentTime >= end) e.currentTarget.currentTime = start; }}

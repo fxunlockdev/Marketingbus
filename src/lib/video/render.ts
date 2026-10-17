@@ -7,8 +7,9 @@ import sharp from "sharp";
 import { storyboardDocument, totalDuration, DEFAULT_CLIP_EDIT, type StoryboardDocument } from "./document";
 import { MAX_VIDEO_BYTES, motionDailyLimit } from "./limits";
 import { outlinedText, typographyManifest } from "../typography";
+import { videoLayout } from "./layout";
 const exec = promisify(execFile);
-const width = 720, height = 1280, fps = 24;
+const fps = 24;
 export type MotionResult = { bytes: Buffer; durationMs: number; width: number; height: number };
 export type MotionRenderer = (document: StoryboardDocument, assets: Map<string, Uint8Array>) => Promise<MotionResult>;
 function binaries() {
@@ -29,17 +30,18 @@ export async function motionRendererAvailable() {
   } catch { return false; }
 }
 export async function renderShotFrame(document: StoryboardDocument, index: number, assets: Map<string, Uint8Array>) {
-  const shot = document.shots[index], parts = [`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">`, shot.clip ? `<path fill="${document.background}" fill-rule="evenodd" d="M0 0H720V1280H0Z M56 240H664V860H56Z"/>` : `<rect width="100%" height="100%" fill="${document.background}"/>`];
+  const { width, height, logo, media, panel, text } = videoLayout(document);
+  const shot = document.shots[index], parts = [`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">`, shot.clip ? `<path fill="${document.background}" fill-rule="evenodd" d="M0 0H${width}V${height}H0Z M${media.x} ${media.y}H${media.x + media.width}V${media.y + media.height}H${media.x}Z"/>` : `<rect width="100%" height="100%" fill="${document.background}"/>`];
   async function image(id: string, x: number, y: number, w: number, h: number) {
     const data = assets.get(id); if (!data) throw Error("Approved scene asset missing.");
     const png = await sharp(data, { limitInputPixels: 16000000, failOn: "warning" }).resize(w, h, { fit: "contain", background: "#00000000" }).png().toBuffer();
     parts.push(`<image x="${x}" y="${y}" width="${w}" height="${h}" href="data:image/png;base64,${png.toString("base64")}"/>`);
   }
-  if (document.logo) await image(document.logo.id, 56, 70, 230, 130);
-  if (shot.asset) await image(shot.asset.id, 56, 240, 608, 620);
+  if (document.logo) await image(document.logo.id, logo.x, logo.y, logo.width, logo.height);
+  if (shot.asset) await image(shot.asset.id, media.x, media.y, media.width, media.height);
   // Fixed dark caption panel gives predictable contrast regardless of brand colour.
-  parts.push('<rect x="36" y="906" width="648" height="310" rx="20" fill="#18212b"/>');
-  parts.push(outlinedText(shot.caption, { x: 62, y: 922, width: 596, height: 264, fontSize: 36, lineHeight: 44, maxLines: 6, weight: 600, color: "#ffffff" }).svg);
+  parts.push(`<rect x="${panel.x}" y="${panel.y}" width="${panel.width}" height="${panel.height}" rx="20" fill="#18212b"/>`);
+  parts.push(outlinedText(shot.caption, { ...text, weight: 600, color: "#ffffff" }).svg);
   parts.push("</svg>");
   return sharp(Buffer.from(parts.join("")), { limitInputPixels: width * height }).png().toBuffer();
 }
@@ -51,6 +53,7 @@ export const renderMotion: MotionRenderer = async (raw, assets) => {
   let directory: string | undefined;
   try {
     const document = storyboardDocument.parse(raw), tools = binaries(), deadline = Date.now() + 90000;
+    const { width, height, media } = videoLayout(document);
     directory = await mkdtemp(join(tmpdir(), "marketingbus-motion-"));
     const run = async (binary: string, args: string[]) => {
       if (Date.now() >= deadline) throw Error("Motion render exceeded its time limit.");
@@ -68,9 +71,9 @@ export const renderMotion: MotionRenderer = async (raw, assets) => {
         const source = `source-${index}.mp4`; await writeFile(join(directory, source), data, { flag: "wx", mode: 0o600 });
         inputs = [...inputs, "-threads", "1", "-protocol_whitelist", "file", "-f", "mov", "-enable_drefs", "0", "-use_absolute_path", "0", "-i", source];
         const framing = edit.fit === "cover"
-          ? `scale=608:620:force_original_aspect_ratio=increase:force_divisible_by=2,crop=608:620:(iw-608)*${edit.x}/100:(ih-620)*${edit.y}/100`
-          : `scale=608:620:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=608:620:(ow-iw)/2:(oh-ih)/2:color=${document.background}`;
-        filters = ["-filter_complex", `[1:v:0]trim=start=${edit.startMs / 1000}:duration=${seconds},setpts=PTS-STARTPTS,${framing},pad=720:1280:56:240:color=${document.background},setsar=1,fps=24[footage];[footage][0:v:0]overlay=shortest=1,${filter}[scene]`, "-map", "[scene]"];
+          ? `scale=${media.width}:${media.height}:force_original_aspect_ratio=increase:force_divisible_by=2,crop=${media.width}:${media.height}:(iw-${media.width})*${edit.x}/100:(ih-${media.height})*${edit.y}/100`
+          : `scale=${media.width}:${media.height}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${media.width}:${media.height}:(ow-iw)/2:(oh-ih)/2:color=${document.background}`;
+        filters = ["-filter_complex", `[1:v:0]trim=start=${edit.startMs / 1000}:duration=${seconds},setpts=PTS-STARTPTS,${framing},pad=${width}:${height}:${media.x}:${media.y}:color=${document.background},setsar=1,fps=24[footage];[footage][0:v:0]overlay=shortest=1,${filter}[scene]`, "-map", "[scene]"];
       }
       await run(tools.ffmpeg, ["-nostdin", "-hide_banner", "-loglevel", "error", "-max_alloc", "67108864", "-filter_threads", "1", "-filter_complex_threads", "1", "-threads", "1", ...inputs, ...filters, "-frames:v", String(shot.durationMs * fps / 1000), "-an", "-c:v", "libx264", "-threads", "1", "-preset", "veryfast", "-crf", "24", "-maxrate", "3M", "-bufsize", "6M", "-pix_fmt", "yuv420p", "-map_metadata", "-1", "-fs", String(MAX_VIDEO_BYTES), "-movflags", "+faststart", "-f", "mp4", clip]);
       clips.push(clip);

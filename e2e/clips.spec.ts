@@ -53,6 +53,7 @@ test("reviewed footage plays, joins a storyboard, and removal invalidates depend
     await expect.poll(() => draft.evaluate((v: HTMLVideoElement) => v.currentTime)).toBe(1);
     await page.getByRole("button", { name: "Play selected range · Introduction", exact: true }).click();
     await expect.poll(() => draft.evaluate((v: HTMLVideoElement) => v.paused)).toBe(false);
+    await expect.poll(() => draft.evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThan(1.1);
     await draft.evaluate((v: HTMLVideoElement) => { v.currentTime = 5.2; });
     await expect.poll(() => draft.evaluate((v: HTMLVideoElement) => v.currentTime)).toBe(5);
     await expect.poll(() => draft.evaluate((v: HTMLVideoElement) => v.paused)).toBe(true);

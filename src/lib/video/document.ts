@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { VIDEO_FORMATS } from "./layout";
 export const assetRef = z.object({ id: z.string().min(1).max(100), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 export const clipEdit = z.object({
   startMs: z.number().int().min(0).max(7000).multipleOf(250),
@@ -19,6 +20,8 @@ export const videoShot = z.object({
   .refine(s => s.caption.length / (s.durationMs / 1000) <= 24, "Allow more reading time or shorten the caption (at most 24 characters per second).");
 export const storyboardDocument = z.object({
   title: z.string().trim().min(1).max(100), background: z.string().regex(/^#[a-fA-F0-9]{6}$/),
+  // Optional preserves legacy document hashes; omitted means the original portrait layout.
+  format: z.enum(VIDEO_FORMATS).optional(),
   logo: assetRef.nullable(), shots: z.array(videoShot).min(1).max(6),
 }).strict().refine(d => d.shots.reduce((n, s) => n + s.durationMs, 0) <= 30000, "Keep the complete reel within 30 seconds.")
   .refine(d => new Set(d.shots.map(s => s.id)).size === d.shots.length, "Each shot needs a unique identifier.");

@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import sharp from "sharp";
 import { renderMotion, renderShotFrame, motionRendererAvailable } from "../src/lib/video/render";
 import { storyboardDocument } from "../src/lib/video/document";
+import { VIDEO_FORMATS, VIDEO_LAYOUTS } from "../src/lib/video/layout";
 const enabled = !!process.env.TEST_FFMPEG_PATH && !!process.env.TEST_FFPROBE_PATH;
 const suite = enabled ? describe : describe.skip;
 suite("actual local FFmpeg rendering", () => {
@@ -21,6 +22,21 @@ suite("actual local FFmpeg rendering", () => {
     expect(result).toMatchObject({ width: 720, height: 1280, durationMs: 3000 });
     expect(result.bytes.toString("ascii", 4, 8)).toBe("ftyp"); expect(result.bytes.length).toBeLessThan(2000000);
     if (process.env.MOTION_SAMPLE_OUTPUT) await writeFile(process.env.MOTION_SAMPLE_OUTPUT, result.bytes);
+  }, 40000);
+  it.each(VIDEO_FORMATS)("renders exact logo/artwork and validates a real %s MP4", async format => {
+    const original = await sharp({ create: { width: 80, height: 80, channels: 4, background: "#dd3322" } }).png().toBuffer();
+    const assets = new Map([["original", original]]), ref = { id: "original", sha256: "a".repeat(64) };
+    const d = storyboardDocument.parse({ ...document, format, logo: ref, shots: [{ ...document.shots[0], motion: "hold", caption: "Considered spaces", durationMs: 1000, asset: ref }] });
+    const frame = await renderShotFrame(d, 0, assets), l = VIDEO_LAYOUTS[format];
+    expect(await sharp(frame).metadata()).toMatchObject({ width: l.width, height: l.height });
+    const { data } = await sharp(frame).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    for (const box of [l.logo, l.media]) {
+      const at = (Math.floor(box.y + box.height / 2) * l.width + Math.floor(box.x + box.width / 2)) * 3;
+      expect([...data.subarray(at, at + 3)]).toEqual([221, 51, 34]);
+    }
+    const output = await renderMotion(d, assets);
+    expect(output).toMatchObject({ width: l.width, height: l.height, durationMs: 1000 });
+    expect(output.bytes.toString("ascii", 4, 8)).toBe("ftyp");
   }, 40000);
   it("renders exact approved image bytes without network access and rejects missing assets", async () => {
     const d = { ...document, shots: [{ ...document.shots[0], asset: { id: "original", sha256: "a".repeat(64) } }] };

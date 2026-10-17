@@ -8,6 +8,7 @@ import sharp from "sharp";
 import { assertClipSignature, boundedClipUpload, clipMetadata, normalizeClip } from "../src/lib/video/clip-normalizer";
 import { renderMotion } from "../src/lib/video/render";
 import { storyboardDocument } from "../src/lib/video/document";
+import { VIDEO_FORMATS, videoLayout } from "../src/lib/video/layout";
 const exec = promisify(execFile);
 const metadata = () => ({ streams: [{ codec_type: "video", codec_name: "h264", width: 720, height: 1280, pix_fmt: "yuv420p", avg_frame_rate: "24/1", duration: "2.0" }], format: { duration: "2.0" } });
 describe("clip boundaries", () => {
@@ -65,6 +66,19 @@ suite("real clip quarantine normalization and assembly", () => {
   it("rejects corrupted MP4 rather than rendering or exposing the original", async () => {
     await expect(normalizeClip(source.subarray(0, 128))).rejects.toThrow();
   });
+  it.each(VIDEO_FORMATS)("composites real footage into the %s media window without covering it", async format => {
+    const normalized = await normalizeClip(source);
+    const d = storyboardDocument.parse({ title: "Format footage", background: "#ffffff", format, logo: null, shots: [{ id: "clip", label: "Footage", caption: "Reviewed footage", durationMs: 1000, motion: "hold", asset: null, clip: { id: "fixture", sha256: "a".repeat(64) } }] });
+    const result = await renderMotion(d, new Map([["fixture", normalized.bytes]])), l = videoLayout(d);
+    expect(result).toMatchObject({ width: l.width, height: l.height, durationMs: 1000 });
+    const file = join(dir, `format-${format}.mp4`); await writeFile(file, result.bytes);
+    const frame = await exec(process.env.TEST_FFMPEG_PATH!, ["-nostdin", "-v", "error", "-ss", "0.5", "-i", file, "-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "pipe:1"], { timeout: 10000, encoding: "buffer", maxBuffer: 3000000 });
+    const { data } = await sharp(frame.stdout).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const at = (x: number, y: number) => [...data.subarray((y * l.width + x) * 3, (y * l.width + x) * 3 + 3)];
+    expect(at(l.media.x + l.media.width / 2, l.media.y + l.media.height / 2).some(v => v < 150)).toBe(true);
+    expect(at(10, 10).every(v => v > 230)).toBe(true);
+    expect(at(l.panel.x + 10, l.panel.y + l.panel.height / 2).every(v => v < 70)).toBe(true);
+  }, 40000);
   it("refuses overlapping decoder work", async () => {
     const first = normalizeClip(source); await expect(normalizeClip(source)).rejects.toThrow("busy"); await first;
   }, 40000);

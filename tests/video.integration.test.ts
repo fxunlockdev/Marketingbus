@@ -10,6 +10,7 @@ import { uploadAsset, changeAsset } from "../src/lib/assets/service";
 import type { AssetStore } from "../src/lib/assets/storage";
 import { uploadClip, runOneClip, reviewClip, readClip, recoverClipStorage, recoverClipLeases, purgeClips, listClips } from "../src/lib/video/clips";
 import { manageApprovals } from "../src/lib/workflows/approvals";
+import { VIDEO_FORMATS, videoLayout } from "../src/lib/video/layout";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (process.env.TEST_DATABASE_URL && (process.env.DATABASE_URL !== process.env.TEST_DATABASE_URL || !["localhost", "127.0.0.1"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Local test DB required");
 suite("storyboard and motion lifecycle", () => {
@@ -48,6 +49,49 @@ suite("storyboard and motion lifecycle", () => {
   async function queue(f: Awaited<ReturnType<typeof setup>>, id = f.id) {
     await approve(f, id); const result = await manageVideo(f.scope, { action: "render", storyboardId: id }, () => store); return result.renderId!;
   }
+  it.each(VIDEO_FORMATS)("binds %s exports to the exact format and final review without AI charges", async format => {
+    const f = await setup(), document = { ...storyboardDocument.parse((await board(f.id)).document), format };
+    const next = (await manageVideo(f.scope, { action: "save", storyboardId: f.id, document }, () => store)).storyboardId!;
+    const id = await queue(f, next), l = videoLayout(document);
+    await runOneMotion(async d => ({ bytes: Buffer.from(`format-fixture-${d.format}`), durationMs: totalDuration(d), width: l.width, height: l.height }), () => store);
+    expect((await row(id)).status).toBe("READY"); await expect(readMotion(f.scope, id, true, store)).rejects.toThrow("approval");
+    await manageVideo(f.scope, { action: "approve-render", renderId: id, continuityReviewed: true }, () => store);
+    expect((await readMotion(f.scope, id, true, store)).document.format).toBe(format);
+    expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(0);
+  });
+  it("changing format clears every shot review, cancels queued output and preserves old bytes", async () => {
+    const f = await setup(), id = await queue(f); await runOneMotion(f.renderer, () => store);
+    await manageVideo(f.scope, { action: "approve-render", renderId: id, continuityReviewed: true }, () => store);
+    const old = await row(id), oldBytes = Buffer.from(objects.get(old.objectKey)!);
+    const document = { ...storyboardDocument.parse((await board(f.id)).document), format: "square" };
+    const next = (await manageVideo(f.scope, { action: "save", storyboardId: f.id, document }, () => store)).storyboardId!;
+    expect((await board(next)).shotApprovals).toEqual([]);
+    await expect(manageVideo(f.scope, { action: "approve-storyboard", storyboardId: next }, () => store)).rejects.toThrow("every current shot");
+    await expect(readMotion(f.scope, id, true, store)).rejects.toThrow("changed"); expect(objects.get(old.objectKey)).toEqual(oldBytes);
+    const queued = await queue(f, next);
+    await manageVideo(f.scope, { action: "save", storyboardId: next, document: { ...document, format: "landscape" } }, () => store);
+    expect((await row(queued)).status).toBe("CANCELLED");
+  });
+  it.each(["wrong-dimensions", "nonfinite-duration", "changed-during-render"])("rejects %s before private format output is stored", async reason => {
+    const f = await setup(), document = { ...storyboardDocument.parse((await board(f.id)).document), format: "square" as const };
+    const next = (await manageVideo(f.scope, { action: "save", storyboardId: f.id, document }, () => store)).storyboardId!, id = await queue(f, next);
+    const put = vi.fn(store.put);
+    await runOneMotion(async d => {
+      if (reason === "changed-during-render") await db.videoStoryboard.update({ where: { id: next }, data: { document: { ...document, format: "feed" } } });
+      return { bytes: Buffer.from("must not store"), width: 720, height: reason === "wrong-dimensions" ? 1280 : 720, durationMs: reason === "nonfinite-duration" ? NaN : totalDuration(d) };
+    }, () => ({ ...store, put }));
+    expect(put).not.toHaveBeenCalled(); expect((await row(id)).status).toBe("FAILED");
+  });
+  it("rejects unknown format/overflow without creating a version and allows repairing an overflowing draft", async () => {
+    const f = await setup(), document = storyboardDocument.parse((await board(f.id)).document);
+    await expect(manageVideo(f.scope, { action: "save", storyboardId: f.id, document: { ...document, format: "custom-filter" } }, () => store)).rejects.toThrow();
+    const bad = { ...document, format: "square", shots: document.shots.map((s, i) => i === 0 ? { ...s, caption: "W".repeat(100) } : s) };
+    await expect(manageVideo(f.scope, { action: "save", storyboardId: f.id, document: bad }, () => store)).rejects.toThrow("does not fit");
+    expect(await db.videoStoryboard.count({ where: { businessId: f.scope.businessId } })).toBe(1); expect((await board(f.id)).status).toBe("DRAFT");
+    await db.videoStoryboard.update({ where: { id: f.id }, data: { document: bad } });
+    await expect(approve(f)).rejects.toThrow("does not fit");
+    expect((await manageVideo(f.scope, { action: "save", storyboardId: f.id, document }, () => store)).storyboardId).toBeTruthy();
+  });
   async function artwork(f: Awaited<ReturnType<typeof setup>>) {
     const { organizationId, businessId, actorId } = f.scope;
     // Different planned creative, same confirmed business: reuse is explicit.

@@ -7,6 +7,7 @@ import type { AssetStore } from "../assets/storage";
 import { storyboardContext, videoScope, videoStore } from "./service";
 import { renderMotion, type MotionRenderer } from "./render";
 import { MAX_VIDEO_BYTES, MOTION_RENDERER_VERSION, motionDailyLimit, motionHash } from "./limits";
+import { videoLayout } from "./layout";
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 export async function runOneMotion(renderer: MotionRenderer = renderMotion, storage: () => AssetStore = videoStore) {
   motionDailyLimit();
@@ -37,7 +38,8 @@ export async function runOneMotion(renderer: MotionRenderer = renderMotion, stor
     }
     await fresh("RUNNING"); motionDailyLimit();
     const output = await renderer(context.document, assets);
-    if (!output.bytes.length || output.bytes.length >= MAX_VIDEO_BYTES || output.width !== 720 || output.height !== 1280 || Math.abs(output.durationMs - claimed.durationMs) > 100) throw Error("Invalid motion render result.");
+    const layout = videoLayout(context.document);
+    if (!output.bytes.length || output.bytes.length >= MAX_VIDEO_BYTES || output.width !== layout.width || output.height !== layout.height || !Number.isSafeInteger(output.durationMs) || Math.abs(output.durationMs - claimed.durationMs) > 100) throw Error("Invalid motion render result.");
     await fresh("RUNNING");
     await db.$transaction(async tx => {
       await lockBusiness(tx, scope); await assertBrandEditor(tx, scope);
