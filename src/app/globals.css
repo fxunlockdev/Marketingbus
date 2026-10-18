@@ -1722,3 +1722,27 @@ fieldset { border: 1px solid #d9d6cf; padding: 16px; margin: 16px 0; border-radi
 .intelligence-suggestion blockquote { border-left: 3px solid #b06b41; margin-inline: 0; padding-left: 16px; overflow-wrap: anywhere; }
 .intelligence-apply { max-width: 720px; }
 @media (max-width: 700px) { .intelligence-compare { grid-template-columns: 1fr; } .intelligence-suggestion { padding: 14px; } }
+.asset-mode-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.asset-mode { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 10px; padding: 22px; border: 1px solid #d6cfc3; border-radius: 16px; background: #f8f4ec; color: #292821; font: inherit; cursor: pointer; }
+.asset-mode strong { font-size: 18px; }
+.asset-mode span { font-size: 14px; line-height: 1.5; }
+.asset-mode[aria-pressed="true"] { border-color: #844321; box-shadow: inset 0 0 0 1px #844321; background: #f1e7d7; }
+.asset-mode:focus-visible { outline: 3px solid #844321; outline-offset: 3px; }
+.asset-studio-intro { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.asset-studio-intro .button { flex-shrink: 0; }
+.platform-review-card { border: 1px solid #d6cfc3; border-radius: 20px; overflow: hidden; }
+.platform-review-card .panel { border: 0; border-radius: 0; box-shadow: none; }
+.platform-review-label { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 24px; background: #e9e1d4; }
+.platform-review-label > span:last-child { font-size: 14px; }
+.review-media { border-top: 1px solid #d6cfc3 !important; }
+.review-platform-filter .button { transition: none; }
+.review-media-status { display: grid; gap: 4px; margin-block: 12px; }
+.review-media-status p { margin: 0; }
+.review-media-preview { margin-top: 20px; }
+.review-media-preview > img, .review-media-preview > video { display: block; max-width: 100%; max-height: 600px; object-fit: contain; border-radius: 8px; background: #e9e1d4; }
+[hidden] { display: none !important; }
+@media (max-width: 700px) {
+  .asset-mode-grid { grid-template-columns: 1fr; }
+  .asset-studio-intro { align-items: flex-start; flex-direction: column; }
+  .platform-review-label { padding: 16px; }
+}

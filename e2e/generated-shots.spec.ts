@@ -32,7 +32,7 @@ test("generated-shot status protects quotes and uncertain jobs without exposing 
     const hold = await db.reservation.create({ data: { organizationId, key: `${organizationId}:${uncertain.id}`, credits: 10, purpose: "INITIAL" } });
     await db.wallet.update({ where: { organizationId }, data: { available: 90, held: 10 } });
     await db.videoGeneration.update({ where: { id: uncertain.id }, data: { reservationId: hold.id } });
-    await page.goto("/studio"); await page.getByRole("button", { name: "Video studio", exact: true }).click();
+    await page.goto("/studio"); await page.getByRole("button", { name: "Asset studio", exact: true }).click(); await page.getByRole("button", { name: /Video & motion/ }).click();
     await page.getByLabel("Planned creative").selectOption(item.id); await page.getByRole("button", { name: "Create or open storyboard" }).click();
     const panel = page.getByRole("region", { name: "Generated shot production" });
     await expect(panel.getByText("Generated video is awaiting a verified provider integration.", { exact: false })).toBeVisible();

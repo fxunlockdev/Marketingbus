@@ -25,7 +25,7 @@ test("approved generated artwork is labelled, selectable and blocked after sourc
     const source = await db.productionItem.create({ data: { organizationId, planId: item.planId, title: "Artwork source", format: "static", channel: "Instagram", brief: {}, revisions: { create: { version: 1, status: "APPROVED", authorId: actor.id, approvedBy: actor.id, content: {} } } }, include: { revisions: true } });
     const generation = await db.imageGeneration.create({ data: { businessId: id, organizationId, actorId: actor.id, itemId: source.id, revisionId: source.revisions[0].id, brandVersion: 1, version: 1, prompt: "No supplier fixture", references: [], route: {}, configurationHash: "fixture", credits: 1, supplierCeilingMicros: 1, expiresAt: new Date(), acceptedAt: new Date(), status: "APPROVED", approvedBy: actor.id } });
     const asset = await db.brandAsset.create({ data: { businessId: id, organizationId, generationId: generation.id, objectKey: `no-network/${crypto.randomUUID()}`, purpose: "generated", label: "Approved landscape", sha256: "a".repeat(64), bytes: 100, width: 40, height: 40, status: "READY", approvedForGeneration: true, uploadedBy: actor.id, rightsConfirmedAt: new Date() } });
-    await page.goto("/studio"); await page.getByRole("button", { name: "Video studio", exact: true }).click();
+    await page.goto("/studio"); await page.getByRole("button", { name: "Asset studio", exact: true }).click(); await page.getByRole("button", { name: /Video & motion/ }).click();
     await page.getByLabel("Planned creative").selectOption(item.id); await page.getByRole("button", { name: "Create or open storyboard" }).click();
     const scene = page.getByRole("combobox", { name: "Scene image", exact: true }).first();
     await expect(scene.getByRole("option", { name: "Approved landscape · generated" })).toHaveCount(1);
@@ -60,7 +60,7 @@ test("storyboards preserve unchanged shot reviews and enforce renderer readiness
     await page.request.post(`/api/businesses/${id}`, { headers, data: { action: "confirm", version: 1 } });
     await page.request.post(`/api/businesses/${id}`, { headers, data: { action: "plan", version: 1 } });
     const item = await db.productionItem.findFirstOrThrow({ where: { plan: { businessId: id } } });
-    await page.goto("/studio"); await page.getByRole("button", { name: "Video studio", exact: true }).click();
+    await page.goto("/studio"); await page.getByRole("button", { name: "Asset studio", exact: true }).click(); await page.getByRole("button", { name: /Video & motion/ }).click();
     await page.getByLabel("Planned creative").selectOption(item.id); await page.getByRole("button", { name: "Create or open storyboard" }).click();
     await expect(page.getByRole("heading", { name: "Storyboard version 1 · draft" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Render approved storyboard" })).toBeDisabled();
@@ -108,7 +108,7 @@ test("real motion playback, final approval, captions export and removal", async 
     // Real encoder bytes, but test-only private-media transport. No production store/provider is replaced.
     const render = await db.motionRender.create({ data: { businessId: id, organizationId, storyboardId, rendererVersion: MOTION_RENDERER_VERSION, documentHash: motionHash(document), objectKey: `browser-fixture/${crypto.randomUUID()}`, status: "READY", bytes: output.bytes.length, sha256: createHash("sha256").update(output.bytes).digest("hex"), durationMs: output.durationMs, createdBy: actor.id, purgeAfter: new Date(Date.now() + 600000) } });
     await page.route(`**${endpoint}/${render.id}?format=mp4&download=false`, route => route.fulfill({ contentType: "video/mp4", body: output.bytes }));
-    await page.goto("/studio"); await page.getByRole("button", { name: "Video studio", exact: true }).click();
+    await page.goto("/studio"); await page.getByRole("button", { name: "Asset studio", exact: true }).click(); await page.getByRole("button", { name: /Video & motion/ }).click();
     await page.getByLabel("Planned creative").selectOption(item.id);
     await expect(page.getByRole("button", { name: "Approve finished video" })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Download MP4" })).toBeDisabled();
@@ -117,13 +117,32 @@ test("real motion playback, final approval, captions export and removal", async 
     await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.videoWidth)).toBe(720);
     await video.evaluate((v: HTMLVideoElement) => v.play());
     await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThan(0);
-    await video.evaluate((v: HTMLVideoElement) => v.pause());
+    await page.getByRole("group", { name: "Asset workflow" }).getByRole("button", { name: /Images & design/ }).click();
+    expect(await video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(true);
+    await page.getByRole("group", { name: "Asset workflow" }).getByRole("button", { name: /Video & motion/ }).click();
+    await expect(video).toBeVisible();
     await page.getByRole("checkbox", { name: /I watched the complete/ }).check();
     await page.getByRole("button", { name: "Approve finished video" }).click();
     await expect(page.getByRole("button", { name: "Download VTT" })).toBeEnabled();
     const downloadPromise = page.waitForEvent("download"); await page.getByRole("button", { name: "Download VTT" }).click();
     const download = await downloadPromise; expect(await readFile((await download.path())!, "utf8")).toContain("Architecture consultations");
     expect((await db.motionRender.findUniqueOrThrow({ where: { id: render.id } })).status).toBe("APPROVED");
+    // The destination review inbox uses the same exact saved video and real
+    // approval endpoint; only private-byte transport is a browser fixture.
+    await page.getByRole("button", { name: "Review inbox", exact: true }).click();
+    await page.getByRole("group", { name: "Filter review by platform" }).getByRole("button", { name: "YouTube", exact: true }).click();
+    await page.getByRole("button", { name: "Preview saved video", exact: true }).click();
+    await expect.poll(() => page.locator("video").evaluate((v: HTMLVideoElement) => v.videoWidth)).toBe(720);
+    await expect(page.getByRole("button", { name: "Approve saved video", exact: true })).toBeDisabled();
+    await page.getByRole("button", { name: "Reject saved video · no regeneration", exact: true }).click();
+    await expect(page.getByText("Saved version rejected. No regeneration or credit charge.", { exact: true })).toBeFocused();
+    await page.getByRole("button", { name: "Preview saved video", exact: true }).click();
+    await page.getByRole("checkbox", { name: /I watched the complete video/ }).check();
+    await page.getByRole("button", { name: "Approve saved video", exact: true }).click();
+    await expect.poll(async () => (await db.motionRender.findUniqueOrThrow({ where: { id: render.id } })).status).toBe("APPROVED");
+    await page.getByRole("button", { name: "Edit video & motion", exact: true }).click();
+    await expect(page.getByLabel("Planned creative")).toHaveValue(item.id);
+    await expect(page.getByRole("button", { name: "Download MP4" })).toBeEnabled();
     await page.getByRole("button", { name: "Reject finished video" }).click(); await expect(page.getByRole("button", { name: "Download MP4" })).toBeDisabled();
     await page.getByRole("button", { name: "Remove saved video" }).click(); await page.getByRole("button", { name: "Confirm video removal" }).click();
     await expect(page.getByRole("button", { name: "Preview saved video" })).toHaveCount(0);

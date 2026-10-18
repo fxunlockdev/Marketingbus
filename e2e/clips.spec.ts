@@ -28,7 +28,7 @@ test("reviewed footage plays, joins a storyboard, and removal invalidates depend
     const clip = await db.videoClip.create({ data: { businessId: id, organizationId, brandVersion: 1, label: "Local studio footage", createdBy: actor.id, rightsConfirmedAt: new Date(), status: "READY", sourceKey: `no-network/${crypto.randomUUID()}`, sourceHash: "b".repeat(64), sourceBytes: 100, objectKey: `no-network/${crypto.randomUUID()}`, sha256: createHash("sha256").update(media.bytes).digest("hex"), bytes: media.bytes.length, durationMs: 6000, processorVersion: CLIP_PROCESSOR_VERSION, purgeAfter: new Date(Date.now() + 86400000) } });
     // Only bytes are intercepted. Review, selection, invalidation and access checks use real scoped APIs.
     await page.route(`**/api/businesses/${id}/clips/${clip.id}`, route => route.request().method() === "GET" ? route.fulfill({ contentType: "video/mp4", body: media.bytes }) : route.continue());
-    await page.goto("/studio"); await page.getByRole("button", { name: "Video studio", exact: true }).click();
+    await page.goto("/studio"); await page.getByRole("button", { name: "Asset studio", exact: true }).click(); await page.getByRole("button", { name: /Video & motion/ }).click();
     await expect(page.getByRole("button", { name: "Approve Local studio footage", exact: true })).toBeDisabled();
     await page.getByRole("button", { name: "Preview Local studio footage", exact: true }).click();
     const video = page.getByLabel("Silent clip Local studio footage"); await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.videoWidth)).toBe(720);

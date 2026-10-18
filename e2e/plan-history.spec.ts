@@ -31,7 +31,8 @@ test("earlier plans preserve selection through editing and superseded plans are 
     await page.getByRole("button", { name: "Save new copy version" }).click();
     await expect(page.getByRole("button", { name: "Approve version 2", exact: true })).toBeVisible();
     await expect(page.getByText("Revised earlier headline", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Video studio", exact: true }).click();
+    await page.getByRole("button", { name: "Asset studio", exact: true }).click();
+    await page.getByRole("button", { name: /Video & motion/ }).click();
     await expect(page.getByLabel("Planned creative").getByRole("option", { name: /Earlier week creative/ })).toHaveCount(1);
     await expect(page.getByLabel("Planned creative").getByRole("option", { name: /Current week creative/ })).toHaveCount(0);
     await page.getByRole("button", { name: "Content plan", exact: true }).click();

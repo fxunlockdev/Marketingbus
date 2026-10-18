@@ -22,6 +22,7 @@ suite("storyboard and motion lifecycle", () => {
     await db.workerHeartbeat.upsert({ where: { id: workerId }, create: { id: workerId, runtimeVersion: WORKER_RUNTIME, configurationHash: workerConfigurationHash(), executionEnabled: false, motionReady: true }, update: { runtimeVersion: WORKER_RUNTIME, configurationHash: workerConfigurationHash(), motionReady: true, lastSeenAt: new Date() } });
   });
   afterAll(async () => {
+    await db.socialPublication.deleteMany({ where: { organizationId: { in: orgs } } });
     const renders = await db.motionRender.findMany({ where: { organizationId: { in: orgs } } });
     const clips = await db.videoClip.findMany({ where: { organizationId: { in: orgs } } });
     await db.motionAuthorization.deleteMany({ where: { key: { in: [...renders, ...clips].map(r => r.id) } } });
@@ -49,6 +50,18 @@ suite("storyboard and motion lifecycle", () => {
   async function queue(f: Awaited<ReturnType<typeof setup>>, id = f.id) {
     await approve(f, id); const result = await manageVideo(f.scope, { action: "render", storyboardId: id }, () => store); return result.renderId!;
   }
+  it("repeating final video approval preserves other scheduled work and its original audit", async () => {
+    const f = await setup(), id = await queue(f); await runOneMotion(f.renderer, () => store);
+    const action = { action: "approve-render", renderId: id, continuityReviewed: true };
+    await manageVideo(f.scope, action, () => store);
+    const item = await db.productionItem.create({ data: { planId: f.item.planId, organizationId: f.scope.organizationId, title: "Other scheduled post", format: "static", channel: "Facebook", brief: {}, revisions: { create: { version: 1, status: "APPROVED", content: {} } } }, include: { revisions: true } });
+    const connection = await db.socialConnection.create({ data: { businessId: f.scope.businessId, organizationId: f.scope.organizationId, provider: "Facebook", externalAccountId: "fixture", label: "Fixture", encryptedToken: "no-live-token", permissions: [] } });
+    const post = await db.socialPublication.create({ data: { businessId: f.scope.businessId, organizationId: f.scope.organizationId, connectionId: connection.id, revisionId: item.revisions[0].id, brandVersion: 1, payload: {}, payloadHash: "a".repeat(64), scheduledFor: new Date(Date.now() + 60000), timezone: "UTC" } });
+    await Promise.all([manageVideo(f.scope, action, () => store), manageVideo(f.scope, action, () => store)]);
+    expect((await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).status).toBe("SCHEDULED");
+    expect(await db.auditEvent.count({ where: { businessId: f.scope.businessId, action: "MOTION_REVIEW" } })).toBe(1);
+    await expect(manageVideo(f.scope, { ...action, continuityReviewed: false }, () => store)).rejects.toThrow("Watch");
+  });
   it.each(VIDEO_FORMATS)("binds %s exports to the exact format and final review without AI charges", async format => {
     const f = await setup(), document = { ...storyboardDocument.parse((await board(f.id)).document), format };
     const next = (await manageVideo(f.scope, { action: "save", storyboardId: f.id, document }, () => store)).storyboardId!;

@@ -1,8 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 type ImageJob = { id: string; itemId: string; version: number; status: string; credits: number; feedback: string; errorCode: string | null; expiresAt: string; output: { id: string; status: string } | null };
-export function ImageProduction({ businessId, items, onChange }: { businessId: string; items: { id: string; title: string; format: string; revisions: { status: string }[] }[]; onChange: () => void }) {
-  const [jobs, setJobs] = useState<ImageJob[]>([]), [itemId, setItemId] = useState(""), [canEdit, setCanEdit] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(""), [message, setMessage] = useState(""), [feedback, setFeedback] = useState(""), [reviewed, setReviewed] = useState(false), [preview, setPreview] = useState("");
+export function ImageProduction({ businessId, items, initialItemId, onChange }: { businessId: string; items: { id: string; title: string; format: string; revisions: { status: string }[] }[]; initialItemId?: string; onChange: () => void }) {
+  const [jobs, setJobs] = useState<ImageJob[]>([]), [itemId, setItemId] = useState(items.some(i => i.id === initialItemId && i.format === "static" && i.revisions[0]?.status === "APPROVED") ? initialItemId! : ""), [canEdit, setCanEdit] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(""), [message, setMessage] = useState(""), [feedback, setFeedback] = useState(""), [reviewed, setReviewed] = useState(false), [preview, setPreview] = useState("");
   const [generationId, setGenerationId] = useState("");
   const endpoint = `/api/businesses/${businessId}/images`, history = jobs.filter(j => j.itemId === itemId), current = history.find(j => j.id === generationId) ?? history[0];
   async function refresh(signal?: AbortSignal) {

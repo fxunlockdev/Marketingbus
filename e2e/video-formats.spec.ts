@@ -24,7 +24,7 @@ test("format changes require fresh review and export real landscape media with f
     await page.request.post(`/api/businesses/${id}`, { headers, data: { action: "confirm", version: 1 } });
     await page.request.post(`/api/businesses/${id}`, { headers, data: { action: "plan", version: 1 } });
     const item = await db.productionItem.findFirstOrThrow({ where: { plan: { businessId: id } } }), endpoint = `/api/businesses/${id}/video`;
-    await page.goto("/studio"); await page.getByRole("button", { name: "Video studio", exact: true }).click();
+    await page.goto("/studio"); await page.getByRole("button", { name: "Asset studio", exact: true }).click(); await page.getByRole("button", { name: /Video & motion/ }).click();
     await page.getByLabel("Planned creative").selectOption(item.id); await page.getByRole("button", { name: "Create or open storyboard" }).click();
     const format = page.getByRole("combobox", { name: "Video format", exact: true });
     await expect(format).toHaveValue("portrait"); await expect(format.locator("option")).toHaveCount(4);

@@ -31,8 +31,8 @@ import { AssetLibrary } from "./asset-library";
 import { KnowledgeLibrary } from "./knowledge-library";
 import { SocialDashboard } from "./social-dashboard";
 import { SocialConnections } from "./social-connections";
-import { CompositionEditor } from "./composition-editor";
-import { VideoStudio } from "./video-studio";
+import { AssetStudio, type AssetTarget } from "./asset-studio";
+import { ReviewInbox } from "./review-inbox";
 import { TeamPanel } from "./team-panel";
 import { ProductionCard } from "./production-card";
 import { BusinessCalendar } from "./business-calendar";
@@ -61,8 +61,7 @@ type Page =
   | "Review inbox"
   | "Calendar"
   | "Publishing & analytics"
-  | "Design studio"
-  | "Video studio"
+  | "Asset studio"
   | "Team"
   | "Workflows"
   | "Memory"
@@ -73,8 +72,7 @@ const navigation = [
   { title: "Brand", icon: Palette },
   { title: "Content plan", icon: CalendarDays },
   { title: "Review inbox", icon: Layers3 },
-  { title: "Design studio", icon: ImageIcon },
-  { title: "Video studio", icon: Film },
+  { title: "Asset studio", icon: ImageIcon },
   { title: "Calendar", icon: CalendarDays },
   { title: "Publishing & analytics", icon: ArrowUpRight },
   { title: "Memory", icon: Brain },
@@ -152,6 +150,7 @@ export function Studio({
     [error, setError] = useState(""),
     [message, setMessage] = useState(""),
     [memory, setMemory] = useState("");
+  const [assetTarget, setAssetTarget] = useState<AssetTarget | undefined>();
   const business =
     initialBusinesses.find((b) => b.id === selected) ?? initialBusinesses[0];
   const wallet =
@@ -232,6 +231,7 @@ export function Studio({
   }
   function go(p: Page) {
     setPage(p);
+    setAssetTarget(undefined);
     setEditing(null);
     setError("");
     setMessage("");
@@ -288,6 +288,7 @@ export function Studio({
             value={business?.id ?? ""}
             onChange={(e) => {
               setSelected(e.target.value);
+              setAssetTarget(undefined);
               setEditing(null);
               setMessage("");
             }}
@@ -372,7 +373,7 @@ export function Studio({
           <span className="pilot-badge">PRIVATE PILOT</span>
         </header>
         <main id="main-content" className="content" tabIndex={-1}>
-          {!editing && business && ["Content plan", "Review inbox", "Design studio", "Video studio", "Publishing & analytics"].includes(page) && <div className="notice subtle plan-context" aria-busy={planLoading}>
+          {!editing && business && ["Content plan", "Review inbox", "Asset studio", "Publishing & analytics"].includes(page) && <div className="notice subtle plan-context" aria-busy={planLoading}>
             <p role="status">{planLoading ? "Loading selected plan…" : activePlan ? `Viewing: ${activePlan.title} · brand version ${activePlan.brandVersion}${planReadOnly ? " · read-only" : ""}` : "No plan selected."}</p>
             {historical && <button className="text-button" disabled={busy} onClick={latestPlan}>Return to latest plan</button>}
             {historical && planError && <p role="alert">{planError}</p>}
@@ -750,7 +751,7 @@ export function Studio({
                       </div>
                     )}
                     <div className="notice subtle">
-                      Planning outlines are free. Add a direction and request a quote for copy production. Image generation requires verified provider configuration and an available credit balance. Video studio supports bounded local motion reels; generated footage is not enabled yet.
+                      Planning outlines are free. Add a direction and request a quote for copy production. Create images, video and motion in Asset studio, then review by publishing destination. AI generation requires verified provider configuration, an available credit balance and explicit authorization.
                     </div>
                     <PlanHistory key={business.id} businessId={business.id} selectedId={activePlan?.id} busy={busy || planLoading} onChoose={choosePlan} />
                     {items.length ? (
@@ -779,7 +780,7 @@ export function Studio({
                     title="Work worth putting your name on."
                     description="Review the exact creative, request a focused change, or approve it for your calendar."
                   />
-                  {business && items.some(i => i.revisions.length) ? <div className="production-list">{items.filter(i => i.revisions.length).map(item => planReadOnly ? <HistoricalCreative key={item.id} item={item} /> : <ProductionCard key={`${item.id}:${item.revisions[0]?.version}`} item={item} brand={business} busy={busy} post={production} review />)}</div> : <Empty title="Nothing to review yet." text="Produced copy and layout previews will appear here. A planning outline is not a finished creative." />}
+                  {business ? <ReviewInbox key={`${business.id}:${activePlan?.id}`} business={business} planId={activePlan?.id} items={items} readOnly={planReadOnly} busy={busy} post={production} onOpen={target => { go("Asset studio"); setAssetTarget(target); }} /> : <Empty title="Choose a business first." text="Review is scoped to your business and selected plan." />}
                   <div className="review-explainer">
                     {[
                       ["Approve", "Approval belongs to one exact revision."],
@@ -799,8 +800,7 @@ export function Studio({
               )}
               {page === "Calendar" && <><Heading kicker="MAKE ROOM FOR GOOD WORK" title="Your content calendar." description="One business, all plans. Review weekly or monthly reservations without switching campaigns." />{business ? <BusinessCalendar key={business.id} businessId={business.id} /> : <Empty title="Choose a business first." text="Calendar reservations belong to each business." />}</>}
               {page === "Publishing & analytics" && <><Heading kicker="FROM APPROVAL TO EVIDENCE" title="Publishing & analytics" description="Business-wide outcomes and measured experiments. Only current selected-plan items are offered for new publishing requests." />{business ? <SocialDashboard key={`${business.id}:${activePlan?.id}`} businessId={business.id} items={planReadOnly ? [] : items} /> : <Empty title="Choose a business first." text="Publishing and performance belong to a specific business." />}</>}
-              {page === "Design studio" && <><Heading kicker="YOUR ASSETS, PRECISELY PLACED" title="Design studio" description="Editable, versioned compositions and downloadable files. No model cost for layout changes." />{business && !planReadOnly ? <CompositionEditor key={`${business.id}:${activePlan?.id}`} businessId={business.id} items={items} /> : <Empty title="Choose a current plan." text="Open Content plan and select a current confirmed-brand plan with editing access. Historical copy remains available in the Review inbox." />}</>}
-              {page === "Video studio" && <><Heading kicker="STORY, TIMING AND REVIEW" title="Video studio" description="Versioned storyboards and captioned motion reels made from approved originals and artwork." />{business && !planReadOnly ? <VideoStudio key={`${business.id}:${activePlan?.id}`} businessId={business.id} items={items} /> : <Empty title="Choose a current plan." text="Storyboarding needs a current confirmed-brand plan and editing access. Historical copy remains available in the Review inbox." />}</>}
+              {page === "Asset studio" && <><Heading kicker="ONE PLACE TO MAKE IT" title="Your asset studio." description="Images, video and motion, built around the same brand. Make the work here; review its destination-specific versions in Review inbox." />{business ? <AssetStudio key={`${business.id}:${activePlan?.id}:${assetTarget?.itemId ?? ""}:${assetTarget?.mode ?? ""}`} businessId={business.id} items={items} canCreate={!planReadOnly} target={assetTarget} onReview={() => go("Review inbox")} /> : <Empty title="Choose a business first." text="Your creative assets stay with the business they belong to." />}</>}
               {page === "Team" && <><Heading kicker="THE PEOPLE BEHIND THE WORK" title="Workspace team" description="Invite teammates and control who can view, create and administer your businesses." />{business ? <TeamPanel key={business.organizationId} organizationId={business.organizationId} /> : <Empty title="Choose a business first." text="Team access applies to its workspace." />}</>}
               {page === "Workflows" && <><Heading kicker="CONTROL THE WORK" title="Workflows" description="Independent review and bounded recurring planning." />{business ? <WorkflowControls key={business.id} businessId={business.id} /> : <Empty title="Choose a business first." text="Workflow policies belong to one business." />}</>}
               {page === "Memory" &&

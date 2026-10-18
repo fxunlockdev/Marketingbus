@@ -27,7 +27,7 @@ test("image review, reject, approve and scoped revision controls", async ({ page
     const job = await db.imageGeneration.create({ data: { businessId: id, organizationId, actorId: actor.id, itemId: item.id, revisionId: revision.id, brandVersion: 1, version: 1, prompt: "Synthetic browser fixture only", references: [], route: {}, configurationHash: "fixture", credits: 10, supplierCeilingMicros: 100000, expiresAt: new Date(Date.now() + 600000), acceptedAt: new Date(), status: "READY" } });
     await db.brandAsset.create({ data: { businessId: id, organizationId, generationId: job.id, objectKey: `browser-fixture/${job.id}`, label: "Synthetic review fixture", purpose: "generated", status: "READY", sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.length, width: 600, height: 600, uploadedBy: actor.id, rightsConfirmedAt: new Date() } });
     await page.route(`**/api/businesses/${id}/images/${job.id}`, route => route.fulfill({ contentType: "image/webp", body: bytes }));
-    await page.goto("/studio"); await page.getByRole("button", { name: "Design studio", exact: true }).click();
+    await page.goto("/studio"); await page.getByRole("button", { name: "Asset studio", exact: true }).click();
     await page.getByLabel("Approved creative", { exact: true }).selectOption(item.id);
     await expect(page.getByRole("heading", { name: "Artwork version 1 · ready" })).toBeVisible();
     const approve = page.getByRole("button", { name: "Approve artwork for composition" }); await expect(approve).toBeDisabled();

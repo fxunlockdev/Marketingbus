@@ -21,8 +21,10 @@ type Composition = {
 export function CompositionEditor({
   businessId,
   items,
+  initialItemId,
 }: {
   businessId: string;
+  initialItemId?: string;
   items: {
     id: string;
     title: string;
@@ -32,7 +34,7 @@ export function CompositionEditor({
 }) {
   const [generationRefresh, setGenerationRefresh] = useState(0);
   const [compositions, setCompositions] = useState<Composition[]>([]),
-    [itemId, setItemId] = useState(""),
+    [itemId, setItemId] = useState(items.some(i => i.id === initialItemId && i.format === "static" && ["READY", "APPROVED"].includes(i.revisions[0]?.status)) ? initialItemId! : ""),
     [document, setDocument] = useState<CanvasDocument | null>(null),
     [placement, setPlacement] = useState<Placement>("square"),
     [busy, setBusy] = useState(false),
@@ -129,7 +131,7 @@ export function CompositionEditor({
   }
   return (
     <div className="production-list" aria-busy={busy}>
-      <ImageProduction businessId={businessId} items={items} onChange={() => setGenerationRefresh(n => n + 1)} />
+      <ImageProduction businessId={businessId} items={items} initialItemId={initialItemId} onChange={() => setGenerationRefresh(n => n + 1)} />
       <p role="alert" className="form-error">
         {error}
       </p>

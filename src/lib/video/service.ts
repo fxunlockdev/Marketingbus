@@ -109,6 +109,7 @@ export async function manageVideo(scope: Scope, raw: unknown, storage: () => Ass
         if (render.rendererVersion !== MOTION_RENDERER_VERSION || ctx.row.status !== "APPROVED" || motionHash(ctx.document) !== render.documentHash || !["READY", "APPROVED", "REJECTED"].includes(render.status) || render.purgeAfter <= new Date()) throw new AppError(409, "Only a current verified render can be reviewed.");
         await assertReviewer(tx, scope, business.independentApproval, ctx.row.authorId);
         if (input.action === "approve-render" && input.continuityReviewed !== true) throw new AppError(400, "Watch the complete video and confirm continuity, caption and brand review.");
+        if (render.status === (input.action === "approve-render" ? "APPROVED" : "REJECTED")) return { ok: true };
         await tx.motionRender.update({ where: { id: render.id }, data: { status: input.action === "approve-render" ? "APPROVED" : "REJECTED", approvedBy: input.action === "approve-render" ? scope.actorId : null } });
       }
       await invalidatePublications(tx, scope.businessId);

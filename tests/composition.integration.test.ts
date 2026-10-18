@@ -7,6 +7,7 @@ import {
   exportComposition,
 } from "../src/lib/composition/service";
 import { actOnProduction } from "../src/lib/production/service";
+import { STATIC_RENDERER_VERSION } from "../src/lib/composition/version";
 import type { AssetStore } from "../src/lib/assets/storage";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (
@@ -31,6 +32,7 @@ suite("approved asset compositions", () => {
     },
   };
   afterAll(async () => {
+    await db.socialPublication.deleteMany({ where: { organizationId: { in: ids } } });
     await db.brandAsset.deleteMany({ where: { organizationId: { in: ids } } });
     await db.organization.deleteMany({ where: { id: { in: ids } } });
     await db.user.deleteMany({ where: { id: { in: users } } });
@@ -97,6 +99,18 @@ suite("approved asset compositions", () => {
     );
     return { scope, itemId: plan.items[0].id, assetId: uploaded.asset.id };
   }
+  it("repeated visual approval preserves scheduled posts and does not duplicate audit events", async () => {
+    const f = await setup(), made = await manageComposition(f.scope, { action: "create", itemId: f.itemId, revisionVersion: 1 });
+    const action = { action: "approve", itemId: f.itemId, version: made.composition.version, rendererVersion: STATIC_RENDERER_VERSION };
+    await manageComposition(f.scope, action);
+    const connection = await db.socialConnection.create({ data: { businessId: f.scope.businessId, organizationId: f.scope.organizationId, provider: "Facebook", externalAccountId: "fixture", label: "Fixture", encryptedToken: "no-live-token", permissions: [] } });
+    const post = await db.socialPublication.create({ data: { businessId: f.scope.businessId, organizationId: f.scope.organizationId, connectionId: connection.id, revisionId: made.composition.revisionId, brandVersion: 1, payload: {}, payloadHash: "a".repeat(64), scheduledFor: new Date(Date.now() + 60000), timezone: "UTC" } });
+    await Promise.all([manageComposition(f.scope, action), manageComposition(f.scope, action)]);
+    expect((await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).status).toBe("SCHEDULED");
+    expect(await db.auditEvent.count({ where: { businessId: f.scope.businessId, action: "COMPOSITION_APPROVED" } })).toBe(1);
+    await db.membership.update({ where: { organizationId_userId: { organizationId: f.scope.organizationId, userId: f.scope.actorId } }, data: { role: "VIEWER" } });
+    await expect(manageComposition(f.scope, action)).rejects.toThrow();
+  });
   it("uses approved assets only and requires separate visual approval for export", async () => {
     const ctx = await setup();
     await changeAsset(ctx.scope, ctx.assetId, {

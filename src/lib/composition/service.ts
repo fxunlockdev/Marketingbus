@@ -116,7 +116,6 @@ export async function manageComposition(scope: Scope, raw: unknown) {
           409,
           "Every image must be an approved, unchanged asset from this business."
         );
-    await invalidatePublications(tx, scope.businessId, item.id);
     if (input.action === "approve") {
       await assertReviewer(tx, scope, business.independentApproval, previous!.authorId);
       await assertNoBlockingComments(tx, revision.id);
@@ -125,6 +124,10 @@ export async function manageComposition(scope: Scope, raw: unknown) {
           409,
           "Approve the exact copy before approving its composition."
         );
+      // Retried reviews must not cancel scheduled work or rewrite its reviewer.
+      if (previous!.status === "APPROVED" && previous!.approvedRendererVersion === STATIC_RENDERER_VERSION)
+        return { ok: true, composition: previous! };
+      await invalidatePublications(tx, scope.businessId, item.id);
       const composition = await tx.staticComposition.update({
         where: { id: previous!.id },
         data: { status: "APPROVED", approvedBy: scope.actorId, approvedRendererVersion: STATIC_RENDERER_VERSION },
@@ -138,6 +141,7 @@ export async function manageComposition(scope: Scope, raw: unknown) {
       });
       return { ok: true, composition };
     }
+    await invalidatePublications(tx, scope.businessId, item.id);
     if ((previous?.version ?? 0) >= 100)
       throw new AppError(
         409,

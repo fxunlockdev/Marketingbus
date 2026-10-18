@@ -47,7 +47,7 @@ export async function changeAsset(scope: Scope, id: string, raw: unknown, now = 
     const asset = await tx.brandAsset.findFirst({ where: { id, businessId: scope.businessId, organizationId: scope.organizationId } });
     if (!asset || asset.status === "DELETED") throw new AppError(404, "Image not found.");
     if (input.action === "approve") {
-      if (asset.generationId) throw new AppError(409, "Review generated artwork in Design studio; asset approval cannot bypass image review.");
+      if (asset.generationId) throw new AppError(409, "Review generated artwork in Asset studio; asset approval cannot bypass image review.");
       if (asset.status !== "READY") throw new AppError(409, "Restore this image before approving it.");
       await tx.brandAsset.update({ where: { id }, data: { approvedForGeneration: input.approved } });
     } else if (input.action === "archive") {
@@ -91,6 +91,6 @@ export async function purgeExpiredAssets(store: AssetStore, now = new Date()) {
 export async function readAsset(scope: Pick<Scope, "businessId" | "organizationId">, id: string, store: AssetStore = assetStore()) {
   const asset = await db.brandAsset.findFirst({ where: { id, businessId: scope.businessId, organizationId: scope.organizationId, status: "READY" } });
   if (!asset) throw new AppError(404, "Image not found.");
-  if (asset.generationId) throw new AppError(409, "Use the current generated-artwork preview in Design studio.");
+  if (asset.generationId) throw new AppError(409, "Use the current generated-artwork preview in Asset studio.");
   return store.get(asset.objectKey);
 }

@@ -73,7 +73,7 @@ test("compose, preview, approve, export; honest analytics and owner protections"
     });
     await page.goto("/studio");
     await page
-      .getByRole("button", { name: "Design studio", exact: true })
+      .getByRole("button", { name: "Asset studio", exact: true })
       .click();
     await page.getByLabel("Creative", { exact: true }).selectOption(item.id);
     await page
@@ -112,7 +112,7 @@ test("compose, preview, approve, export; honest analytics and owner protections"
     expect((await page.request.get(`/api/businesses/${id}/compositions?export=${composition.id}`)).status()).toBe(409);
     expect((await page.request.post(`/api/businesses/${id}/compositions`, { headers, data: { action: "approve", itemId: item.id, version: 1 } })).status()).toBe(400);
     await page.reload();
-    await page.getByRole("button", { name: "Design studio", exact: true }).click();
+    await page.getByRole("button", { name: "Asset studio", exact: true }).click();
     await page.getByLabel("Creative", { exact: true }).selectOption(item.id);
     await expect(page.getByText("Typography has changed since this layout was approved.", { exact: false })).toBeVisible();
     await expect(page.getByRole("button", { name: "Download PNG" })).toBeDisabled();

@@ -58,7 +58,7 @@ export function AssetLibrary({ businessId }: { businessId: string }) {
       {asset.status === "READY" && asset.purpose !== "generated" && <img src={`${endpoint}/${asset.id}`} alt={asset.label} width={asset.width} height={asset.height} loading="lazy" />}
       <strong>{asset.label}</strong><small>{asset.purpose} · {asset.width} × {asset.height}</small>
       {asset.status === "READY" ? <>
-        {asset.purpose === "generated" ? <p>Preview and review this generated artwork in Design studio. Removal below revokes its use immediately.</p> : <button type="button" className="button secondary" disabled={busy} aria-pressed={asset.approvedForGeneration} onClick={() => manage(asset, "approve")}>{asset.approvedForGeneration ? "Revoke generation permission" : "Approve for generation"} · {asset.label}</button>}
+        {asset.purpose === "generated" ? <p>Preview and review this generated artwork in Asset studio. Removal below revokes its use immediately.</p> : <button type="button" className="button secondary" disabled={busy} aria-pressed={asset.approvedForGeneration} onClick={() => manage(asset, "approve")}>{asset.approvedForGeneration ? "Revoke generation permission" : "Approve for generation"} · {asset.label}</button>}
         {confirmArchive === asset.id ? <div>
           <p>Remove this image from use? It can be restored for seven days, then deletion is queued. Copies already exported or sent to providers are not recalled.</p>
           <button type="button" className="button secondary" disabled={busy} onClick={() => manage(asset, "archive")}>Confirm removal · {asset.label}</button>
