@@ -1,7 +1,7 @@
 import { db } from "../db";
 import { openSecret } from "../secrets";
 import { lockBusiness } from "../production/service";
-import { frozenCopy, payloadHash } from "./integrity";
+import { frozenCopy, payloadHash, validCandidateId } from "./integrity";
 import type { Account, PublicationPayload } from "./contracts";
 export type SubmissionContext = { requestId: string; account: Account; payload: PublicationPayload; adapterVersion: string };
 export interface SubmissionJournal {
@@ -29,7 +29,7 @@ export const submissionJournal: SubmissionJournal = {
     return true;
   }),
   record: (context, externalPostId) => transact(context, async (tx, post) => {
-    if (post.submissionAdapterVersion !== context.adapterVersion || (post.candidatePostId && post.candidatePostId !== externalPostId) || !/^urn:li:(share|ugcPost):[1-9][0-9]{0,30}$/.test(externalPostId)) throw Error("Unverified publication candidate.");
+    if (post.submissionAdapterVersion !== context.adapterVersion || (post.candidatePostId && post.candidatePostId !== externalPostId) || !validCandidateId(context.account.provider, externalPostId, context.account.externalAccountId)) throw Error("Unverified publication candidate.");
     await tx.socialPublication.update({ where: { id: post.id }, data: { candidatePostId: externalPostId } });
   }),
   candidate: context => transact(context, async (_tx, post) => post.submissionAdapterVersion === context.adapterVersion ? post.candidatePostId : null),

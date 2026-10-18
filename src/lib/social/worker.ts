@@ -186,7 +186,7 @@ export async function runOnePublication(adapters: SocialAdapters) {
             permalink: safePermalink(claimed.token.provider, receipt.permalink),
             status: "PUBLISHED",
             leaseUntil: null,
-            nextMetricsAt: new Date(Date.now() + 3600000),
+            nextMetricsAt: adapter.metricsAvailable === false ? null : new Date(Date.now() + 3600000),
             errorCode: null,
           },
         });
@@ -330,7 +330,7 @@ export async function reconcilePublication(publicationId: string, adapters: Soci
       }
       await tx.socialPublication.update({ where: { id: post.id }, data: {
         ...verified, permalink, status: "PUBLISHED", errorCode: null, leaseUntil: null, nextReconciliationAt: null,
-        nextMetricsAt: new Date(Date.now() + 3600000),
+        nextMetricsAt: adapters[provider]!.metricsAvailable === false ? null : new Date(Date.now() + 3600000),
       } });
       await tx.auditEvent.create({ data: { ...scope, action: "SOCIAL_RECONCILED", detail: `Provider read-back confirmed publication ${post.id}. No new post submitted.` } });
       return true;
@@ -339,7 +339,8 @@ export async function reconcilePublication(publicationId: string, adapters: Soci
 }
 
 export async function runOneMetricSync(adapters: SocialAdapters) {
-  if (!Object.keys(adapters).length) return false;
+  const providers = Object.entries(adapters).filter(([, adapter]) => adapter.metricsAvailable !== false).map(([provider]) => provider);
+  if (!providers.length) return false;
   const candidate = await db.socialPublication.findFirst({
     where: {
       status: "PUBLISHED",
@@ -351,7 +352,7 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
       ],
       connection: {
         status: "CONNECTED",
-        provider: { in: Object.keys(adapters) },
+        provider: { in: providers },
       },
     },
     orderBy: { nextMetricsAt: "asc" },

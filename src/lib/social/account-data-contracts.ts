@@ -1,15 +1,9 @@
 import { z } from "zod";
 import { socialProvider, type Account, type SocialProvider } from "./contracts";
+import { safeSocialPermalink } from "./permalink";
+export { safeSocialPermalink } from "./permalink";
 export const socialCount = z.number().int().nonnegative().safe().max(1_000_000_000_000);
 const count = socialCount.nullable();
-export function safeSocialPermalink(raw: string | undefined, provider: SocialProvider): string | null {
-  if (!raw) return null;
-  try {
-    const url = new URL(raw), domains = { Facebook: ["facebook.com", "www.facebook.com", "m.facebook.com"], Instagram: ["instagram.com", "www.instagram.com"], LinkedIn: ["linkedin.com", "www.linkedin.com"] };
-    if (raw.length > 2000 || url.protocol !== "https:" || !domains[provider].includes(url.hostname) || url.username || url.password || url.port || [...url.searchParams.keys()].some(k => /token|secret|code|authorization/i.test(k))) return null;
-    url.hash = ""; return url.href;
-  } catch { return null; }
-}
 export const accountSnapshot = z.object({
   provider: socialProvider, externalAccountId: z.string().min(1).max(200), observedAt: z.iso.datetime(), definitionVersion: z.string().min(1).max(100),
   profile: z.object({ name: z.string().min(1).max(120), followers: count, likes: count, mediaCount: count }).strict(),

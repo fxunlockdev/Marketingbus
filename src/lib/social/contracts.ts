@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { createLinkedInPublishingAdapter } from "./linkedin-publishing";
+import { createFacebookPublishingAdapter } from "./facebook-publishing";
+import { metaEnvironment } from "./meta-oauth";
 
 export const socialProvider = z.enum(["Facebook", "Instagram", "LinkedIn"]);
 export type SocialProvider = z.infer<typeof socialProvider>;
@@ -53,6 +55,8 @@ export type PublishOutcome =
     }
   | { state: "uncertain" };
 export interface SocialAdapter {
+  // False means no certified mapping: do not schedule polling or fabricate empty observations.
+  metricsAvailable?: boolean;
   // Must honor aborts and bound response size. Retryable means definitively NOT submitted.
   publish(
     account: Account,
@@ -77,8 +81,12 @@ export type SocialAdapters = Partial<Record<SocialProvider, SocialAdapter>>;
 // No mock adapter is registered in application/worker runtime. Official adapters are a separate gate.
 export function configuredSocialAdapters(): SocialAdapters {
   if (process.env.SOCIAL_EXECUTION_ENABLED !== "true") return {};
+  const result: SocialAdapters = {};
   if (process.env.LINKEDIN_PUBLISHING_ENABLED === "true" && process.env.LINKEDIN_CONNECTIONS_ENABLED === "true") {
-    try { return { LinkedIn: createLinkedInPublishingAdapter({ clientId: process.env.LINKEDIN_CLIENT_ID || "", clientSecret: process.env.LINKEDIN_CLIENT_SECRET || "", apiVersion: process.env.LINKEDIN_API_VERSION || "", verifiedUntil: process.env.LINKEDIN_API_VERIFIED_UNTIL || "" }) }; } catch { /* Disabled until completely configured/current. */ }
+    try { result.LinkedIn = createLinkedInPublishingAdapter({ clientId: process.env.LINKEDIN_CLIENT_ID || "", clientSecret: process.env.LINKEDIN_CLIENT_SECRET || "", apiVersion: process.env.LINKEDIN_API_VERSION || "", verifiedUntil: process.env.LINKEDIN_API_VERIFIED_UNTIL || "" }); } catch { /* Disabled until completely configured/current. */ }
   }
-  return {};
+  if (process.env.FACEBOOK_PUBLISHING_ENABLED === "true" && process.env.FACEBOOK_CONNECTIONS_ENABLED === "true") {
+    try { result.Facebook = createFacebookPublishingAdapter(metaEnvironment()); } catch { /* Disabled until completely configured/current. */ }
+  }
+  return result;
 }

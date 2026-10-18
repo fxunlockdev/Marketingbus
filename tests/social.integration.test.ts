@@ -26,6 +26,8 @@ import { productionMemories, validLearningEvidence } from "../src/lib/social/lea
 import { publishingFixture } from "./helpers/linkedin-publishing";
 import { submissionJournal } from "../src/lib/social/submission-journal";
 import { LINKEDIN_SCOPES } from "../src/lib/social/linkedin-oauth";
+import { facebookPublishingFixture } from "./helpers/facebook-publishing";
+import { META_SCOPES } from "../src/lib/social/meta-oauth";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (
   process.env.TEST_DATABASE_URL &&
@@ -166,6 +168,56 @@ suite("social publishing and analytics isolation", () => {
     f.post.publishedAt = Date.now();
     return { ctx, f, post };
   }
+  async function facebookQueue() {
+    const ctx = await setup(), f = facebookPublishingFixture(submissionJournal);
+    await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { externalAccountId: f.account.externalAccountId, permissions: [...META_SCOPES.Facebook], expiresAt: new Date(Date.now() + 3600000) } });
+    const post = await queue(ctx, f.adapter);
+    return { ctx, f, post };
+  }
+  it("publishes a verified Facebook text receipt without inventing metrics or resending", async () => {
+    const { f, post } = await facebookQueue();
+    await runOnePublication({ Facebook: f.adapter });
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "PUBLISHED", candidatePostId: f.id, externalPostId: f.id, nextMetricsAt: null });
+    await runOnePublication({ Facebook: f.adapter });
+    expect(f.fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    const metrics = vi.spyOn(f.adapter, "metrics");
+    await db.socialPublication.update({ where: { id: post.id }, data: { nextMetricsAt: new Date(Date.now() - 1000) } });
+    expect(await runOneMetricSync({ Facebook: f.adapter })).toBe(false);
+    expect(metrics).not.toHaveBeenCalled();
+    expect(await db.metricSnapshot.count({ where: { publicationId: post.id } })).toBe(0);
+    expect(f.replies).toHaveLength(0);
+  });
+  it("recovers a known Facebook candidate by reading it without another submission", async () => {
+    const { f, post } = await facebookQueue();
+    f.replies[3] = new Error("lost read-back");
+    await runOnePublication({ Facebook: f.adapter });
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", candidatePostId: f.id, externalPostId: null });
+    f.replies.push({ data: f.inspectedPage }, f.capability, f.post);
+    expect(await reconcilePublication(post.id, { Facebook: f.adapter })).toBe(true);
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "PUBLISHED", externalPostId: f.id, nextMetricsAt: null });
+    expect(f.fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+  });
+  it("holds a Facebook write with a missing response and never searches or resends", async () => {
+    const { f, post } = await facebookQueue();
+    f.replies.splice(2, 2, new Error("lost submission"));
+    await runOnePublication({ Facebook: f.adapter });
+    const before = f.fetcher.mock.calls.length;
+    expect(await reconcilePublication(post.id, { Facebook: f.adapter })).toBe(false);
+    await runOnePublication({ Facebook: f.adapter });
+    expect(f.fetcher).toHaveBeenCalledTimes(before);
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", candidatePostId: null, externalPostId: null });
+  });
+  it("fences Facebook writes once and binds candidate IDs to the selected Page", async () => {
+    const { ctx, f, post } = await facebookQueue();
+    await db.socialPublication.update({ where: { id: post.id }, data: { status: "SUBMITTING", leaseUntil: new Date(Date.now() + 120000) } });
+    const context = { requestId: post.id, account: { ...f.account, id: ctx.connection.id, token: "never-show-this-token" }, payload: f.payload, adapterVersion: "test:publish-v1" };
+    expect((await Promise.all([submissionJournal.begin(context), submissionJournal.begin(context)])).sort()).toEqual([false, true]);
+    for (const id of ["123_123", "urn:li:share:123", "789_0", "789_123/other"]) await expect(submissionJournal.record(context, id)).rejects.toThrow();
+    await submissionJournal.record(context, f.id);
+    await submissionJournal.record(context, f.id);
+    expect(await submissionJournal.candidate(context)).toBe(f.id);
+    await expect(submissionJournal.record(context, "789_999")).rejects.toThrow();
+  });
   it("publishes LinkedIn through the real transport and durable journal, then ingests scoped post metrics", async () => {
     const { ctx, f, post } = await linkedinQueue();
     await runOnePublication({ LinkedIn: f.adapter });

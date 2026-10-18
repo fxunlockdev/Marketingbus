@@ -32,10 +32,10 @@ The authoritative list is [`.env.example`](../.env.example). Key names below are
 - Local motion rendering: installed/pinned `FFMPEG_PATH`, `FFPROBE_PATH`, finite `MOTION_RENDER_DAILY_LIMIT`, then `MOTION_RENDERING_ENABLED`. Rendering is not free: it consumes worker CPU/memory and storage.
 - Email: `RESEND_API_KEY`, plain-address `RESEND_FROM_EMAIL`, finite `EMAIL_DAILY_LIMIT`, then `EMAIL_DELIVERY_ENABLED` after test-recipient delivery acceptance. Keys on the web service alone do not configure the worker.
 - Scraper: `FIRECRAWL_SELF_HOSTED_URL`, instance authentication where configured, `FIRECRAWL_EGRESS_RESTRICTED`, `WEBSITE_EXTRACTION_ENABLED`. The egress flag is an attestation after network tests, not a firewall. Do not set it just to bypass the gate.
-- Meta: `META_APP_ID`, `META_APP_SECRET`, verified `META_API_VERSION` and `META_API_VERIFIED_UNTIL`; separate `FACEBOOK_CONNECTIONS_ENABLED`, `INSTAGRAM_CONNECTIONS_ENABLED`.
+- Meta: `META_APP_ID`, `META_APP_SECRET`, verified `META_API_VERSION` and `META_API_VERIFIED_UNTIL`; separate `FACEBOOK_CONNECTIONS_ENABLED`, `INSTAGRAM_CONNECTIONS_ENABLED`, `FACEBOOK_PUBLISHING_ENABLED`.
 - LinkedIn: `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`, verified `LINKEDIN_API_VERSION` and `LINKEDIN_API_VERIFIED_UNTIL`; separate `LINKEDIN_CONNECTIONS_ENABLED`, `LINKEDIN_PUBLISHING_ENABLED`.
 - Account reads: `SOCIAL_DATA_ENABLED`. This permits explicit bounded refresh; it does not enable publishing.
-- Publication worker: `SOCIAL_EXECUTION_ENABLED`. The current registered publisher is LinkedIn company **text-only**. Configure its credentials and publishing switches consistently on web and worker. Instagram/Facebook publishing and image/video transfer still need implementation and acceptance.
+- Publication worker: `SOCIAL_EXECUTION_ENABLED`. Registered publishers support LinkedIn company and Facebook Page **text-only** posts. Configure credentials and provider publishing switches consistently on web and worker. Instagram publishing, Facebook per-post metrics and image/video transfer still need implementation and acceptance. See [Facebook publishing](FACEBOOK-PUBLISHING.md).
 - Billing: `STRIPE_MODE=test`, `STRIPE_ACCOUNT_ID`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PORTAL_CONFIGURATION_ID`, approved `BILLING_OFFERS_JSON`; separately gated `BILLING_EXECUTION_ENABLED` and operator-only `STRIPE_REFUNDS_ENABLED`. Follow [billing operations](BILLING.md); do not activate live charges for testing.
 
 ## Social application setup
@@ -75,7 +75,7 @@ We still need to deploy and measure the self-hosted stack with private dependenc
 
 ## Still our engineering work — not a task for you to solve with keys
 
-- Facebook/Instagram publishing, immutable image/video transfer and their per-post metrics; token renewal/revocation handling and richer reconciliation operations.
+- Instagram publishing, immutable image/video transfer and Facebook/Instagram per-post metrics; token renewal/revocation handling and richer reconciliation operations. Facebook and LinkedIn text publishers are implemented but not live-accepted.
 - Higgsfield submission/polling/download/verified expense transport; reference-led video revisions, licensed audio/voiceover and continuity evaluation.
 - Mixed-media weekly automation and stronger measured quality/learning evaluation. No automatic training on another tenant's brand or private feedback.
 - Stronger semantic fact/visual checks, production isolation and operational alerts; realistic load/chaos and independent security/manual accessibility acceptance; production database/object recovery.
