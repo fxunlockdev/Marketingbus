@@ -36,6 +36,35 @@ for (const invalidated of [false, true]) test(`verified Facebook receipt retains
     expect((await new AxeBuilder({ page }).include("main").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
     await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(await db.metricSnapshot.count({ where: { businessId: id } })).toBe(invalidated ? 1 : 0);
+    if (!invalidated) {
+      await db.socialPublication.update({ where: { id: post.id }, data: { metricsFailures: 5 } });
+      await page.reload(); await page.getByRole("button", { name: "Publishing & analytics", exact: true }).click();
+      await expect(page.getByText(/Automatic metric checks have stopped/)).toBeVisible();
+      await expect(page.getByText("Verified post metrics are not enabled for this destination yet.", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Resume metric checks", exact: true })).toHaveCount(0);
+      const input = { publicationId: post.id, expectedRequestedAt: null };
+      expect((await page.request.post(`/api/businesses/${id}/social/metrics`, { headers, data: input })).status()).toBe(503);
+      // Browser-only capability override exercises confirmation and server rejection.
+      // No fake provider is registered; successful queue/worker recovery is covered in DB tests.
+      await page.route(`**/api/businesses/${id}/social`, async route => {
+        const response = await route.fetch(), body = await response.json();
+        await route.fulfill({ response, json: { ...body, enabledMetricProviders: ["Facebook"] } });
+      });
+      await page.reload(); await page.getByRole("button", { name: "Publishing & analytics", exact: true }).click();
+      const button = page.getByRole("button", { name: "Resume metric checks", exact: true });
+      page.once("dialog", dialog => dialog.dismiss()); await button.click(); await expect(button).toBeFocused();
+      const rejected = page.waitForResponse(r => r.url().endsWith(`/api/businesses/${id}/social/metrics`) && r.request().method() === "POST");
+      page.once("dialog", dialog => { expect(dialog.message()).toContain("No content will be posted"); return dialog.accept(); });
+      await button.focus(); await page.keyboard.press("Enter"); expect((await rejected).status()).toBe(503);
+      await expect(page.getByRole("main").getByRole("alert")).toContainText("not enabled");
+      expect((await new AxeBuilder({ page }).include("main").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+      await db.membership.updateMany({ where: { organizationId }, data: { role: "VIEWER" } });
+      await page.reload(); await page.getByRole("button", { name: "Publishing & analytics", exact: true }).click();
+      await expect(page.getByText("A workspace owner or admin can resume checks.", { exact: true })).toBeVisible();
+      expect((await page.request.post(`/api/businesses/${id}/social/metrics`, { headers, data: input })).status()).toBe(403);
+      expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ metricsFailures: 5, metricsRequestedAt: null, nextMetricsAt: null });
+      expect(await db.auditEvent.count({ where: { businessId: id, action: "SOCIAL_METRICS_RESUMED" } })).toBe(0);
+    }
   } finally {
     if (organizationId) { await db.socialPublication.deleteMany({ where: { organizationId } }); await db.organization.delete({ where: { id: organizationId } }); }
     await db.user.deleteMany({ where: { email } });

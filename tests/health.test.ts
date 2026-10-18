@@ -13,6 +13,7 @@ describe("deployment readiness", () => {
     const sql = query.mock.calls.map(call => String(call[0])).join("\n");
     expect(sql).toContain("requireMfa");
     expect(sql).toContain("metricsInvalidatedAt");
+    expect(sql).toContain("metricsRequestedAt");
     expect(sql).toContain("reconciliationAttempts"); expect(sql).toContain("nextReconciliationAt");
     expect(sql).toContain("VideoGeneration"); expect(sql).toContain("providerJobKey"); expect(sql).toContain("settledAt");
     for (const table of ["IdentityToken", "EmailOutbox", "KnowledgeSource", "SocialConnection", "SocialPublication", "MetricSnapshot", "LearningProposal", "StaticComposition", "TeamInvitation", "TeamEvent"]) expect(sql).toContain(table);

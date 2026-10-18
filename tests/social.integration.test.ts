@@ -21,6 +21,7 @@ import {
 import { MetricSourceChangedError, type SocialAdapter } from "../src/lib/social/contracts";
 import { payloadHash } from "../src/lib/social/integrity";
 import { resumePublicationLookup } from "../src/lib/social/recovery";
+import { resumeMetricChecks } from "../src/lib/social/metric-recovery";
 import { seedLearningEvidence } from "./fixtures/learning";
 import { productionMemories, validLearningEvidence } from "../src/lib/social/learning-evidence";
 import { publishingFixture } from "./helpers/linkedin-publishing";
@@ -320,6 +321,74 @@ suite("social publishing and analytics isolation", () => {
         where: { businessId: ctx.scope.businessId },
       })
     ).toBe(0);
+  });
+  async function stoppedMetrics() {
+    const ctx = await setup(), provider = adapter(), post = await queue(ctx, provider);
+    await runOnePublication({ Facebook: provider });
+    await db.socialPublication.update({ where: { id: post.id }, data: { nextMetricsAt: null, metricsFailures: 5 } });
+    const session = await db.session.create({ data: { id: crypto.randomUUID(), userId: ctx.scope.actorId, expiresAt: new Date(Date.now() + 3600000) } });
+    return { ctx, provider, post, actor: { ...ctx.scope, sessionId: session.id }, input: { publicationId: post.id, expectedRequestedAt: null } };
+  }
+  it("resumes stopped metrics once, under concurrent requests, without reposting or credit operations", async () => {
+    const f = await stoppedMetrics(), adapters = () => ({ Facebook: f.provider });
+    const results = await Promise.allSettled([resumeMetricChecks(f.actor, f.input, adapters), resumeMetricChecks(f.actor, f.input, adapters)]);
+    expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    expect(f.provider.metrics).not.toHaveBeenCalled();
+    expect(await db.auditEvent.count({ where: { businessId: f.ctx.scope.businessId, action: "SOCIAL_METRICS_RESUMED" } })).toBe(1);
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: f.post.id } })).toMatchObject({ metricsFailures: 0, metricsLeaseUntil: null, metricsRequestedAt: expect.any(Date), nextMetricsAt: expect.any(Date), status: "PUBLISHED" });
+    await runOneMetricSync(adapters());
+    expect(await db.metricSnapshot.count({ where: { publicationId: f.post.id } })).toBe(1);
+    expect(f.provider.publish).toHaveBeenCalledTimes(1);
+    expect(await db.creditEntry.count({ where: { organizationId: f.ctx.scope.organizationId } })).toBe(0);
+    expect(await db.reservation.count({ where: { organizationId: f.ctx.scope.organizationId } })).toBe(0);
+  });
+  it.each(["EDITOR", "VIEWER"])("denies metric recovery by %s", async role => {
+    const f = await stoppedMetrics();
+    await db.membership.updateMany({ where: { organizationId: f.actor.organizationId, userId: f.actor.actorId }, data: { role } });
+    await expect(resumeMetricChecks(f.actor, f.input, () => ({ Facebook: f.provider }))).rejects.toThrow("owner or admin");
+    expect(f.provider.metrics).not.toHaveBeenCalled();
+  });
+  it("allows an administrator but rechecks sessions, tenant ownership and workspace MFA", async () => {
+    const f = await stoppedMetrics(), foreign = await stoppedMetrics(), adapters = () => ({ Facebook: f.provider });
+    await expect(resumeMetricChecks(foreign.actor, f.input, adapters)).rejects.toThrow("not found");
+    await db.organization.update({ where: { id: f.actor.organizationId }, data: { requireMfa: true } });
+    await expect(resumeMetricChecks(f.actor, f.input, adapters)).rejects.toThrow("MFA");
+    await db.organization.update({ where: { id: f.actor.organizationId }, data: { requireMfa: false } });
+    await db.membership.updateMany({ where: { organizationId: f.actor.organizationId, userId: f.actor.actorId }, data: { role: "ADMIN" } });
+    expect(await resumeMetricChecks(f.actor, f.input, adapters)).toMatchObject({ ok: true });
+    await db.session.delete({ where: { id: f.actor.sessionId } });
+    await expect(resumeMetricChecks(f.actor, f.input, adapters)).rejects.toThrow("Sign in again");
+  });
+  it.each(["disabled", "unsupported", "expired", "disconnected", "token", "payload", "lease", "scheduled", "invalidated", "old", "future", "cooldown", "stale"])("refuses unsafe metric recovery: %s", async kind => {
+    const f = await stoppedMetrics();
+    let expectedRequestedAt: string | null = null;
+    if (kind === "expired") await db.socialConnection.update({ where: { id: f.ctx.connection.id }, data: { expiresAt: new Date(1) } });
+    if (kind === "disconnected") await db.socialConnection.update({ where: { id: f.ctx.connection.id }, data: { status: "DISCONNECTED" } });
+    if (kind === "token") await db.socialConnection.update({ where: { id: f.ctx.connection.id }, data: { encryptedToken: "invalid" } });
+    if (kind === "payload") await db.socialPublication.update({ where: { id: f.post.id }, data: { payloadHash: "invalid" } });
+    if (kind === "lease") await db.socialPublication.update({ where: { id: f.post.id }, data: { metricsLeaseUntil: new Date(Date.now() + 60000) } });
+    if (kind === "scheduled") await db.socialPublication.update({ where: { id: f.post.id }, data: { nextMetricsAt: new Date(Date.now() + 60000) } });
+    if (kind === "invalidated") await db.socialPublication.update({ where: { id: f.post.id }, data: { metricsInvalidatedAt: new Date() } });
+    if (kind === "old" || kind === "future") await db.socialPublication.update({ where: { id: f.post.id }, data: { publishedAt: new Date(Date.now() + (kind === "old" ? -31 * 86400000 : 60000)) } });
+    if (kind === "cooldown" || kind === "stale") {
+      const requested = new Date();
+      await db.socialPublication.update({ where: { id: f.post.id }, data: { metricsRequestedAt: requested } });
+      if (kind === "cooldown") expectedRequestedAt = requested.toISOString();
+    }
+    if (kind === "unsupported") f.provider.metricsAvailable = false;
+    await expect(resumeMetricChecks(f.actor, { ...f.input, expectedRequestedAt }, () => kind === "disabled" ? {} : ({ Facebook: f.provider }))).rejects.toThrow();
+    expect(await db.auditEvent.count({ where: { businessId: f.actor.businessId, action: "SOCIAL_METRICS_RESUMED" } })).toBe(0);
+    expect(f.provider.metrics).not.toHaveBeenCalled();
+    expect(f.provider.publish).toHaveBeenCalledTimes(1);
+  });
+  it("enforces the business daily recovery quota and preserves a valid retry after cooldown", async () => {
+    const f = await stoppedMetrics(), when = new Date(Date.now() - 2 * 3600000), adapters = () => ({ Facebook: f.provider });
+    await db.socialPublication.update({ where: { id: f.post.id }, data: { metricsRequestedAt: when } });
+    const input = { ...f.input, expectedRequestedAt: when.toISOString() };
+    await db.auditEvent.createMany({ data: Array.from({ length: 6 }, () => ({ ...f.ctx.scope, action: "SOCIAL_METRICS_RESUMED", detail: "Daily quota fixture" })) });
+    await expect(resumeMetricChecks(f.actor, input, adapters)).rejects.toThrow("six metric recovery");
+    await db.auditEvent.updateMany({ where: { businessId: f.actor.businessId, action: "SOCIAL_METRICS_RESUMED" }, data: { createdAt: new Date(Date.now() - 86400000) } });
+    expect(await resumeMetricChecks(f.actor, input, adapters)).toMatchObject({ ok: true });
   });
   it("invalidates edited LinkedIn evidence without removing receipts or historical observations", async () => {
     const { ctx, f, post } = await linkedinQueue();

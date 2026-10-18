@@ -119,6 +119,7 @@ export async function readSocialDashboard(scope: Scope) {
         nextReconciliationAt: true,
         metricsFailures: true,
         metricsInvalidatedAt: true,
+        metricsRequestedAt: true,
         nextMetricsAt: true,
         connection: { select: { label: true, provider: true } },
         revision: {

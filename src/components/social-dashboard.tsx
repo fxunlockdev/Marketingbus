@@ -1,7 +1,9 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 type Dashboard = {
   enabledProviders: string[];
+  enabledMetricProviders: string[];
+  canManageMetrics: boolean;
   window: string;
   connections: {
     id: string;
@@ -22,6 +24,8 @@ type Dashboard = {
     nextReconciliationAt: string | null;
     metricsFailures: number;
     metricsInvalidatedAt: string | null;
+    metricsRequestedAt: string | null;
+    nextMetricsAt: string | null;
     connection: { label: string; provider: string };
     revision: { version: number; item: { title: string } };
   }[];
@@ -61,6 +65,8 @@ export function SocialDashboard({
   const [itemId, setItem] = useState(""),
     [connectionId, setConnection] = useState(""),
     [when, setWhen] = useState("");
+  const resultRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => { if (message.startsWith("Metric checks queued.")) resultRef.current?.focus(); }, [message]);
   useEffect(() => {
     const controller = new AbortController();
     setData(null);
@@ -94,7 +100,7 @@ export function SocialDashboard({
       const result = await response.json();
       if (!response.ok) throw Error(result.error);
       setRefresh((n) => n + 1);
-      setMessage("Saved to this business.");
+      setMessage(path === "social/metrics" ? "Metric checks queued. No post was sent and no credits changed." : "Saved to this business.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to save.");
     } finally {
@@ -108,7 +114,7 @@ export function SocialDashboard({
       <p role="alert" className="form-error">
         {error}
       </p>
-      <p role="status">{message}</p>
+      <p role="status" tabIndex={-1} ref={resultRef}>{message}</p>
       {!data ? (
         <p role="status">
           {error
@@ -276,10 +282,15 @@ export function SocialDashboard({
                 {p.metricsInvalidatedAt && <p>Metrics excluded: the published creative no longer matches its approved version. Historical records and the published-post receipt are retained, but are not used in reporting or future learning. This post will not be sent again.</p>}
                 {!p.metricsInvalidatedAt && p.metricsFailures > 0 && (
                   <p>
-                    Metrics refresh is delayed. Previously observed data is
-                    retained.
+                    {p.nextMetricsAt ? `Metrics refresh is delayed. Next eligible check: ${new Date(p.nextMetricsAt).toLocaleString()}.` : "Automatic metric checks have stopped. Review account access before resuming."} Previously observed data is retained.
                   </p>
                 )}
+                {p.status === "PUBLISHED" && !p.metricsInvalidatedAt && !p.nextMetricsAt && p.metricsFailures > 0 && <div>
+                  <p>Recovery only reads existing post metrics; it does not repost content, spend creative credits or change approvals. Limited to posts from the last 30 days, once per post per hour and six requests per business per UTC day.</p>
+                  {!data.canManageMetrics ? <p>A workspace owner or admin can resume checks.</p> : !data.enabledMetricProviders.includes(p.connection.provider) ? <p>Verified post metrics are not enabled for this destination yet.</p> : <button className="button" disabled={busy} onClick={() => {
+                    if (window.confirm("Resume read-only metric checks for this existing post? No content will be posted and no credits will be spent.")) void act("social/metrics", { publicationId: p.id, expectedRequestedAt: p.metricsRequestedAt });
+                  }}>Resume metric checks</button>}
+                </div>}
                 {p.status === "SCHEDULED" && (
                   <button
                     className="button"

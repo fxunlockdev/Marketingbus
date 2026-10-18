@@ -6,6 +6,8 @@ Marketingbus proposes reversible experiments from observed performance. It does 
 
 The current policy compares static and video formats within one business, current confirmed brand, social account, provider and metric definition. Each post must have a published receipt and an intact frozen payload. Its account must remain connected.
 
+Detected upstream content/distribution drift permanently excludes that publication's observations through `metricsInvalidatedAt`. LinkedIn learning requires the source-bound v2 reading definition; older v1 snapshots remain audit history only. Exclusion also applies when revalidating already-promoted memory. Restoring account access or resuming a stopped metric poll does not re-approve an invalidated creative.
+
 - Use one earliest metric snapshot per post taken 72–96 hours after publication, not its latest lifetime total.
 - Use posts published within 45 days of evaluation. Each format contributes the latest 5–20 eligible posts and at least 1,000 observed impressions; each post needs at least 100 impressions.
 - No post may supply more than 40% of its cohort's impressions. Mean publication dates must be within seven days and mean observation ages within twelve hours.

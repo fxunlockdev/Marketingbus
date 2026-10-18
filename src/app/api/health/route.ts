@@ -35,7 +35,7 @@ export async function GET() {
     await db.$queryRaw`SELECT "encryptedPayload" FROM "EmailOutbox" LIMIT 0`;
     await db.$queryRaw`SELECT "encryptedToken", "dataSnapshot", "dataLeaseId" FROM "SocialConnection" LIMIT 0`;
     await db.$queryRaw`SELECT "stateHash", "encryptedCandidates", "configurationHash", "authentication" FROM "SocialOAuthFlow" LIMIT 0`;
-    await db.$queryRaw`SELECT "payloadHash", "metricsLeaseUntil", "metricsInvalidatedAt", "reconciliationAttempts", "nextReconciliationAt", "submissionAdapterVersion", "candidatePostId" FROM "SocialPublication" LIMIT 0`;
+    await db.$queryRaw`SELECT "payloadHash", "metricsLeaseUntil", "metricsInvalidatedAt", "metricsRequestedAt", "reconciliationAttempts", "nextReconciliationAt", "submissionAdapterVersion", "candidatePostId" FROM "SocialPublication" LIMIT 0`;
     await db.$queryRaw`SELECT "definitionVersion" FROM "MetricSnapshot" LIMIT 0`;
     await db.$queryRaw`SELECT "evidence" FROM "LearningProposal" LIMIT 0`;
     await db.$queryRaw`SELECT "document", "approvedRendererVersion" FROM "StaticComposition" LIMIT 0`;
