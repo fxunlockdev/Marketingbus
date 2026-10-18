@@ -1,7 +1,7 @@
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { AppError } from "../http";
 import { MAX_IMAGE_BYTES } from "./images";
-export type AssetStore = { put(key: string, data: Buffer, contentType?: "image/webp" | "image/png" | "video/mp4", immutable?: boolean): Promise<void>; get(key: string): Promise<Uint8Array>; remove(key: string): Promise<void> };
+export type AssetStore = { put(key: string, data: Buffer, contentType?: "image/webp" | "image/png" | "video/mp4" | "audio/wav" | "audio/mpeg", immutable?: boolean): Promise<void>; get(key: string): Promise<Uint8Array>; remove(key: string): Promise<void> };
 export function assetStore(maxBytes = MAX_IMAGE_BYTES): AssetStore {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 20 * 1024 * 1024) throw Error("Invalid private storage size bound");
   const { ASSET_S3_ENDPOINT: endpoint, ASSET_S3_BUCKET: bucket, ASSET_S3_ACCESS_KEY_ID: accessKeyId, ASSET_S3_SECRET_ACCESS_KEY: secretAccessKey } = process.env;

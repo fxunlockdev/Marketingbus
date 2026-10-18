@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { ClipLibrary, type StudioClip } from "./clip-library";
+import { AudioLibrary } from "./audio-library";
+import { SoundtrackEditor } from "./soundtrack-editor";
 import { ClipShotEditor } from "./clip-shot-editor";
 import { GeneratedShotJobs } from "./generated-shot-jobs";
 import { MOTION_RENDERER_VERSION } from "@/lib/video/version";
@@ -11,11 +13,12 @@ type Render = { id: string; storyboardId: string; rendererVersion: string; statu
 type Asset = { id: string; sha256: string; label: string; purpose: string; generated: boolean };
 export function VideoStudio({ businessId, items }: { businessId: string; items: { id: string; title: string }[] }) {
   const [clips, setClips] = useState<StudioClip[]>([]);
+  const [audio, setAudio] = useState<StudioClip[]>([]);
   const [boards, setBoards] = useState<Board[]>([]), [renders, setRenders] = useState<Render[]>([]), [assets, setAssets] = useState<Asset[]>([]), [canEdit, setCanEdit] = useState(false), [itemId, setItemId] = useState(""), [boardId, setBoardId] = useState(""), [document, setDocument] = useState<StoryboardDocument | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState(""), [message, setMessage] = useState(""), [preview, setPreview] = useState(""), [captions, setCaptions] = useState(""), [watched, setWatched] = useState(false), [confirmRemove, setConfirmRemove] = useState(false);
   const endpoint = `/api/businesses/${businessId}/video`, history = boards.filter(b => b.itemId === itemId), board = history.find(b => b.id === boardId) ?? history[0], render = renders.find(r => r.storyboardId === board?.id), dirty = !!document && JSON.stringify(document) !== JSON.stringify(board?.document), readonly = busy || !canEdit || board?.status === "SUPERSEDED";
   async function refresh(signal?: AbortSignal) {
     const response = await fetch(endpoint, { signal }), data = await response.json(); if (!response.ok) throw Error(data.error);
-    if (!signal?.aborted) { setBoards(data.storyboards); setRenders(data.renders); setAssets(data.assets); setClips(data.clips ?? []); setCanEdit(data.canEdit); }
+    if (!signal?.aborted) { setBoards(data.storyboards); setRenders(data.renders); setAssets(data.assets); setClips(data.clips ?? []); setAudio(data.audio ?? []); setCanEdit(data.canEdit); }
   }
   useEffect(() => { const abort = new AbortController(); void refresh(abort.signal).catch(e => { if (!abort.signal.aborted) setError(e.message); }); return () => abort.abort(); }, [businessId]);
   useEffect(() => { setDocument(board?.document ?? null); setPreview(""); setCaptions(""); setWatched(false); setConfirmRemove(false); }, [board]);
@@ -44,8 +47,9 @@ export function VideoStudio({ businessId, items }: { businessId: string; items: 
   return <div className="production-list" aria-busy={busy}>
     <p role="alert" className="form-error">{error}</p><p role="status">{message}</p>
     <ClipLibrary businessId={businessId} clips={clips} canEdit={canEdit && !dirty && !busy} onChange={() => refresh()} />
+    <AudioLibrary businessId={businessId} tracks={audio} canEdit={canEdit && !dirty && !busy} onChange={() => refresh()} />
     {dirty && <p>Save storyboard edits before changing the footage library.</p>}
-    <section className="panel"><h2>Plan a motion reel</h2><p>Build a silent, captioned video in portrait, square, feed or landscape format using approved originals, generated artwork or reviewed footage and finite hold/fade scenes. Up to six shots and 30 seconds. Model-generated footage, voiceover and music are not enabled in this workflow.</p>
+    <section className="panel"><h2>Plan a motion reel</h2><p>Build a captioned video in portrait, square, feed or landscape format using approved originals, generated artwork or reviewed footage and finite hold/fade scenes. Up to six shots and 30 seconds, with optional reviewed instrumental music. Model-generated footage requires operator activation; generated voiceover and speech transcription are not enabled.</p>
       <p id="video-artwork-help">Reusing artwork makes no new model call. Generated artwork remains linked to its approved source copy and references; changes or revoked permissions block rendering and downloads. Logos must remain original assets. Review every scene for factual and brand fidelity.</p>
       <label htmlFor="video-item">Planned creative</label><select id="video-item" value={itemId} disabled={busy} onChange={e => { setItemId(e.target.value); setBoardId(""); }}><option value="">Choose a planned creative</option>{items.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select>
       <p>Confirm your brand and approve any existing copy first. Storyboarding and this bounded local renderer do not spend AI credits.</p>
@@ -64,6 +68,7 @@ export function VideoStudio({ businessId, items }: { businessId: string; items: 
             </select></label>
             <p id="video-format-help">Output: {videoLayout(document).width} × {videoLayout(document).height} pixels. Changing format creates a new saved version and requires every scene to be reviewed again. Captions reflow; inspect framing and readability. These are export shapes, not a guarantee of acceptance by a social platform.</p>
             <label>Original logo<select value={document.logo?.id || ""} onChange={e => { const a = assets.find(a => a.id === e.target.value); setDocument({ ...document, logo: a ? { id: a.id, sha256: a.sha256 } : null }); }}><option value="">No logo</option>{assets.filter(a => a.purpose === "logo").map(a => <option key={a.id} value={a.id}>{a.label}</option>)}</select></label>
+            <SoundtrackEditor document={document} tracks={audio} onChange={setDocument} />
           </fieldset>
           {document.shots.map((shot, index) => <fieldset key={shot.id} disabled={readonly}><legend>Shot {index + 1} · {shot.label}</legend>
             <label>Shot name<input required maxLength={80} value={shot.label} onChange={e => changeShot(index, { label: e.target.value })} /></label>
@@ -91,8 +96,8 @@ export function VideoStudio({ businessId, items }: { businessId: string; items: 
           {["RUNNING", "STORING"].includes(render.status) && <p>Rendering or storage is in progress. Refresh to check completion; you can remove the output once it settles.</p>}
           {render.status === "FAILED" && <><p>No verified video is available. Check whether storage completed, or save a new storyboard version to explicitly request another render.</p><button className="button" disabled={readonly} onClick={() => act({ action: "recover-render", renderId: render.id })}>Check stored video · no rerender</button></>}
           {render.rendererVersion === MOTION_RENDERER_VERSION && ["READY", "APPROVED", "REJECTED"].includes(render.status) && <><button className="button" disabled={busy || dirty} onClick={() => media("mp4", false)}>Preview saved video</button>
-            {preview && <video controls playsInline preload="metadata" src={preview} aria-label="Saved silent motion reel for final review" style={{ maxWidth: "100%", maxHeight: 650 }}><track kind="captions" src={captions} srcLang="en" label="On-screen captions" default /></video>}
-            <label className="checkbox-label"><input type="checkbox" checked={watched} onChange={e => setWatched(e.target.checked)} /> I watched the complete saved video and reviewed continuity, captions and brand fidelity.</label>
+            {preview && <video controls playsInline preload="metadata" src={preview} aria-label={board.document.soundtrack ? "Saved motion reel with instrumental music for final review" : "Saved silent motion reel for final review"} style={{ maxWidth: "100%", maxHeight: 650 }}><track kind="captions" src={captions} srcLang="en" label="On-screen captions" default /></video>}
+            <label className="checkbox-label"><input type="checkbox" checked={watched} onChange={e => setWatched(e.target.checked)} /> I watched the complete saved video and reviewed continuity, captions and brand fidelity.{board.document.soundtrack ? " I also listened to the entire soundtrack, checked levels and confirmed no speech or vocals." : ""}</label>
             <div className="tag-row"><button className="button" disabled={readonly || dirty || !preview || !watched} onClick={() => act({ action: "approve-render", renderId: render.id, continuityReviewed: true })}>Approve finished video</button><button className="button" disabled={readonly || dirty} onClick={() => act({ action: "reject-render", renderId: render.id })}>Reject finished video</button></div>
             <div className="tag-row">{(["mp4", "vtt", "json"] as const).map(format => <button className="button" key={format} disabled={busy || dirty || render.status !== "APPROVED"} onClick={() => media(format, true)}>Download {format.toUpperCase()}</button>)}</div>
           </>}

@@ -23,7 +23,7 @@ export async function GET() {
     await db.$queryRaw`SELECT "lastSeenAt", "motionReady" FROM "WorkerHeartbeat" LIMIT 0`;
     await db.$queryRaw`SELECT "document", "shotApprovals" FROM "VideoStoryboard" LIMIT 0`;
     await db.$queryRaw`SELECT "documentHash", "sha256", "purgeAfter" FROM "MotionRender" LIMIT 0`;
-    await db.$queryRaw`SELECT "sourceHash", "processorVersion", "leaseUntil", "purgeAfter" FROM "VideoClip" LIMIT 0`;
+    await db.$queryRaw`SELECT "sourceHash", "processorVersion", "mediaKind", "instrumentalConfirmedAt", "leaseUntil", "purgeAfter" FROM "VideoClip" LIMIT 0`;
     await db.$queryRaw`SELECT "reservationId", "providerJobKey", "nextPollAt", "settledAt", "supplierEstimateMicros", "expenseBasis", "supplierReconciledAt" FROM "VideoGeneration" LIMIT 0`;
     await db.$queryRaw`SELECT "key" FROM "MotionAuthorization" LIMIT 0`;
     await db.$queryRaw`SELECT "ceilingMicros" FROM "SupplierAuthorization" LIMIT 0`;

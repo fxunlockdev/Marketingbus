@@ -10,13 +10,14 @@ import { approvedFactText, evaluateCreative } from "../production/quality";
 import { invalidatePublications } from "../social/service";
 import { assetStore, type AssetStore } from "../assets/storage";
 import { WORKER_RUNTIME, HEARTBEAT_TTL_MS, workerConfigurationHash } from "../production/readiness";
-import { storyboardDocument, shotApprovals, totalDuration, clipRangeFits, type StoryboardDocument, type VideoShot } from "./document";
+import { storyboardDocument, shotApprovals, totalDuration, clipRangeFits, soundtrackRangeFits, type StoryboardDocument, type VideoShot } from "./document";
 import { MAX_VIDEO_BYTES, MOTION_RENDERER_VERSION, motionDailyLimit, motionHash } from "./limits";
 import { eligibleMotionAssets, type MotionAssetClient } from "./assets";
 import { eligibleClips, listClips } from "./clips";
 import type { ShotContextClient } from "./generation-context";
 import { videoLayout } from "./layout";
 import { layoutText } from "../typography";
+import { requireAudioProcessing } from "./audio-normalizer";
 const inputSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("create"), itemId: z.string().min(1) }).strict(),
   z.object({ action: z.literal("save"), storyboardId: z.string().min(1), document: storyboardDocument }).strict(),
@@ -26,7 +27,7 @@ const inputSchema = z.discriminatedUnion("action", [
 ]);
 export const videoStore = () => assetStore(MAX_VIDEO_BYTES);
 export const videoScope = (row: { businessId: string; organizationId: string; createdBy: string }): Scope => ({ businessId: row.businessId, organizationId: row.organizationId, actorId: row.createdBy });
-export function shotHash(document: StoryboardDocument, shot: VideoShot) { return motionHash({ background: document.background, logo: document.logo, shot, ...(document.format && document.format !== "portrait" ? { format: document.format } : {}) }); }
+export function shotHash(document: StoryboardDocument, shot: VideoShot) { return motionHash({ background: document.background, logo: document.logo, shot, ...(document.soundtrack ? { soundtrack: document.soundtrack } : {}), ...(document.format && document.format !== "portrait" ? { format: document.format } : {}) }); }
 export async function storyboardContext(scope: Scope, id: string, client: Pick<Prisma.TransactionClient, "business" | "productionItem" | "videoStoryboard" | "videoClip"> & MotionAssetClient & ShotContextClient = db, validateAssets = true) {
   const row = await client.videoStoryboard.findFirst({ where: { id, businessId: scope.businessId, organizationId: scope.organizationId } });
   if (!row) throw new AppError(404, "Storyboard not found.");
@@ -41,6 +42,8 @@ export async function storyboardContext(scope: Scope, id: string, client: Pick<P
   if (validateAssets && document.logo && !assets.some(a => a.id === document.logo!.id && a.generationId === null && a.purpose === "logo")) throw new AppError(409, "Use an approved original logo, not generated artwork.");
   const clips = await eligibleClips(client, scope, business.version, document.shots.flatMap(s => s.clip ? [s.clip.id] : []));
   if (validateAssets && document.shots.some(s => s.clip && !clips.some(c => c.id === s.clip!.id && c.sha256 === s.clip!.sha256 && clipRangeFits(s, c.durationMs)))) throw new AppError(409, "A scene clip is unavailable, unapproved or shorter than its selected range. Choose current approved footage or adjust its start and duration.");
+  const audio = await eligibleClips(client, scope, business.version, document.soundtrack ? [document.soundtrack.id] : [], "AUDIO");
+  if (validateAssets && document.soundtrack && !audio.some(a => a.id === document.soundtrack!.id && a.sha256 === document.soundtrack!.sha256 && soundtrackRangeFits(document, a.durationMs))) throw new AppError(409, "The music is unavailable, unapproved or shorter than the selected reel range. Choose current approved instrumental audio or remove it.");
   for (const shot of document.shots) {
     const quality = evaluateCreative({ headline: shot.caption, caption: shot.caption, cta: "", visualDirection: "", rationale: "", evidenceUsed: [] }, { facts: approvedFactText(business) });
     if (!quality.eligible) throw new AppError(409, quality.defects[0].detail);
@@ -49,7 +52,7 @@ export async function storyboardContext(scope: Scope, id: string, client: Pick<P
       catch { throw new AppError(409, `Caption in “${shot.label}” does not fit the selected format or uses unsupported characters. Shorten or edit it before review.`); }
     }
   }
-  return { row, document, assets, clips, business };
+  return { row, document, assets, clips, audio, business };
 }
 export async function listVideo(scope: Scope) {
   const member = await db.membership.findUnique({ where: { organizationId_userId: { organizationId: scope.organizationId, userId: scope.actorId } } });
@@ -58,6 +61,7 @@ export async function listVideo(scope: Scope) {
   const where = { businessId: scope.businessId, organizationId: scope.organizationId };
   return { canEdit: ["OWNER", "ADMIN", "EDITOR"].includes(member.role),
     clips: await listClips(scope),
+    audio: await listClips(scope, "AUDIO"),
     storyboards: await db.videoStoryboard.findMany({ where, orderBy: { createdAt: "desc" }, take: 100 }),
     assets: (await eligibleMotionAssets(db, scope, business.version)).map(a => ({ id: a.id, sha256: a.sha256, label: a.label, purpose: a.purpose, generated: a.generationId !== null })),
     renders: await db.motionRender.findMany({ where, orderBy: { createdAt: "desc" }, take: 50, select: { id: true, storyboardId: true, rendererVersion: true, status: true, durationMs: true, bytes: true, createdAt: true, purgeAfter: true, errorCode: true } }),
@@ -142,6 +146,7 @@ export async function manageVideo(scope: Scope, raw: unknown, storage: () => Ass
     if (row.status !== "APPROVED") throw new AppError(409, "Approve this storyboard before rendering.");
     const existing = await tx.motionRender.findUnique({ where: { storyboardId_rendererVersion: { storyboardId: row.id, rendererVersion: MOTION_RENDERER_VERSION } } });
     if (existing) return { ok: true, renderId: existing.id };
+    if (ctx.document.soundtrack) requireAudioProcessing();
     const dailyLimit = motionDailyLimit(); storage();
     if (!await tx.workerHeartbeat.findFirst({ where: { runtimeVersion: WORKER_RUNTIME, configurationHash: workerConfigurationHash(), motionReady: true, lastSeenAt: { gt: new Date(Date.now() - HEARTBEAT_TTL_MS) } } })) throw new AppError(503, "A matching motion-render worker is not ready. No render was queued.");
     const usage = await tx.motionRender.aggregate({ where: { businessId: scope.businessId, status: { notIn: ["DELETED", "CANCELLED"] } }, _sum: { bytes: true }, _count: true });
@@ -153,7 +158,7 @@ export async function manageVideo(scope: Scope, raw: unknown, storage: () => Ass
     const id = randomUUID(); await tx.motionAuthorization.create({ data: { key: id } });
     const render = await tx.motionRender.create({ data: { id, businessId: scope.businessId, organizationId: scope.organizationId, storyboardId: row.id, rendererVersion: MOTION_RENDERER_VERSION, documentHash: motionHash(ctx.document), objectKey: `${scope.organizationId}/${scope.businessId}/motion/${id}.mp4`, bytes: MAX_VIDEO_BYTES, durationMs: totalDuration(ctx.document), createdBy: scope.actorId, purgeAfter: new Date(Date.now() + 30 * 86400000) } });
     const layout = videoLayout(ctx.document);
-    await audit("MOTION_QUEUED", `Bounded silent ${layout.width}×${layout.height} render authorized. No AI credits charged; server CPU/storage limits apply.`); return { ok: true, renderId: render.id };
+    await audit("MOTION_QUEUED", `Bounded ${ctx.document.soundtrack ? "instrumental" : "silent"} ${layout.width}×${layout.height} render authorized. No AI credits charged; server CPU/storage limits apply.`); return { ok: true, renderId: render.id };
   });
 }
 export async function motionMetadata(scope: Scope, id: string, download: boolean) {

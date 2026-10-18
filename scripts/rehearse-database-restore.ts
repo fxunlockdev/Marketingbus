@@ -101,6 +101,8 @@ async function main() {
       reservationId: videoHold.id, settledAt: new Date(), expiresAt: new Date(), errorCode: "NORMALIZATION_FAILED",
       receipt: { submission: { journal: "synthetic-private-journal" }, estimatedCostMicros: 60000, expenseBasis: "ACCOUNT_QUOTE_V1" },
     } });
+    phase = "instrumental audio fixture";
+    await source.videoClip.create({ data: { id: "synthetic-audio", businessId: business.id, organizationId: a.id, brandVersion: 3, label: "Synthetic audio metadata only", mediaKind: "AUDIO", instrumentalConfirmedAt: new Date(), createdBy: user.id, rightsConfirmedAt: new Date(), status: "READY", sourceKey: "synthetic/audio-source.wav", sourceHash: "a".repeat(64), sourceBytes: 1024, objectKey: "synthetic/audio-normalized.wav", sha256: "b".repeat(64), bytes: 2048, durationMs: 3000, processorVersion: "instrumental-pcm-v1", purgeAfter: new Date(Date.now() + 86400000) } });
     phase = "backup checkpoint";
     const before = await recoverySnapshot(source), dumpStarted = Date.now();
     const archive = await pg("pg_dump", names.source, ["--format=custom", "--no-owner", "--no-privileges"], undefined, MAX_ARCHIVE_BYTES);
@@ -117,6 +119,10 @@ async function main() {
     const restoreMs = Date.now() - restoreStarted;
     phase = "schema and row verification";
     assertSnapshot(before, await recoverySnapshot(target));
+    const audio = await target.videoClip.findUniqueOrThrow({ where: { id: "synthetic-audio" } });
+    check(audio.mediaKind === "AUDIO" && audio.instrumentalConfirmedAt !== null && audio.status === "READY" && audio.approvedBy === null && audio.durationMs === 3000, "Audio rights or review state not preserved.");
+    await mustReject(() => target.videoClip.update({ where: { id: audio.id }, data: { instrumentalConfirmedAt: null } }));
+    await mustReject(() => target.videoClip.update({ where: { id: audio.id }, data: { durationMs: 30001 } }));
     const video = await target.videoGeneration.findUniqueOrThrow({ where: { id: "synthetic-provisional-video" } });
     check(video.status === "FAILED" && video.supplierEstimateMicros === 60000 && video.expenseBasis === "ACCOUNT_QUOTE_V1" && video.supplierCostMicros === null && video.supplierReconciledAt === null, "Provisional expense was misrepresented as a final invoice.");
     await mustReject(() => target.videoGeneration.update({ where: { id: video.id }, data: { expenseBasis: null } }));

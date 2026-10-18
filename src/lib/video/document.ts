@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { VIDEO_FORMATS } from "./layout";
 export const assetRef = z.object({ id: z.string().min(1).max(100), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+export const soundtrack = assetRef.extend({
+  startMs: z.number().int().min(0).max(29000).multipleOf(250),
+  gainPercent: z.number().int().min(5).max(100).multipleOf(5),
+  fadeInMs: z.number().int().min(0).max(2000).multipleOf(250),
+  fadeOutMs: z.number().int().min(0).max(2000).multipleOf(250),
+}).strict();
 export const clipEdit = z.object({
   startMs: z.number().int().min(0).max(7000).multipleOf(250),
   fit: z.enum(["contain", "cover"]),
@@ -22,13 +28,17 @@ export const storyboardDocument = z.object({
   title: z.string().trim().min(1).max(100), background: z.string().regex(/^#[a-fA-F0-9]{6}$/),
   // Optional preserves legacy document hashes; omitted means the original portrait layout.
   format: z.enum(VIDEO_FORMATS).optional(),
+  soundtrack: soundtrack.nullable().optional(),
   logo: assetRef.nullable(), shots: z.array(videoShot).min(1).max(6),
 }).strict().refine(d => d.shots.reduce((n, s) => n + s.durationMs, 0) <= 30000, "Keep the complete reel within 30 seconds.")
-  .refine(d => new Set(d.shots.map(s => s.id)).size === d.shots.length, "Each shot needs a unique identifier.");
+  .refine(d => new Set(d.shots.map(s => s.id)).size === d.shots.length, "Each shot needs a unique identifier.")
+  .refine(d => !d.soundtrack || d.soundtrack.startMs + d.shots.reduce((n, s) => n + s.durationMs, 0) <= 30000, "The music range must end within 30 seconds.")
+  .refine(d => !d.soundtrack || d.soundtrack.fadeInMs + d.soundtrack.fadeOutMs <= d.shots.reduce((n, s) => n + s.durationMs, 0), "Music fades cannot overlap.");
 export type StoryboardDocument = z.infer<typeof storyboardDocument>;
 export type VideoShot = z.infer<typeof videoShot>;
 export const shotApprovals = z.array(z.object({ shotId: z.string(), hash: z.string(), reviewer: z.string(), at: z.string() }).strict()).max(6);
 export function totalDuration(document: StoryboardDocument) { return document.shots.reduce((n, s) => n + s.durationMs, 0); }
+export function soundtrackRangeFits(document: StoryboardDocument, durationMs: number) { return !!document.soundtrack && Number.isSafeInteger(durationMs) && document.soundtrack.startMs + totalDuration(document) <= durationMs; }
 export function shotTimeline(document: StoryboardDocument) {
   let elapsed = 0;
   return document.shots.map(shot => {

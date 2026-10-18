@@ -5,7 +5,7 @@ import { MOTION_RENDERER_VERSION } from "./version";
 export { MOTION_RENDERER_VERSION } from "./version";
 export const MAX_VIDEO_BYTES = 20 * 1024 * 1024;
 export function motionConfigurationHash() {
-  return createHash("sha256").update(JSON.stringify({ version: MOTION_RENDERER_VERSION, typography: typographyManifest(), enabled: process.env.MOTION_RENDERING_ENABLED, daily: process.env.MOTION_RENDER_DAILY_LIMIT, ffmpeg: process.env.FFMPEG_PATH, ffprobe: process.env.FFPROBE_PATH })).digest("hex");
+  return createHash("sha256").update(JSON.stringify({ version: MOTION_RENDERER_VERSION, typography: typographyManifest(), enabled: process.env.MOTION_RENDERING_ENABLED, audio: process.env.AUDIO_PROCESSING_ENABLED, daily: process.env.MOTION_RENDER_DAILY_LIMIT, ffmpeg: process.env.FFMPEG_PATH, ffprobe: process.env.FFPROBE_PATH })).digest("hex");
 }
 export function motionDailyLimit() {
   const limit = Number(process.env.MOTION_RENDER_DAILY_LIMIT);

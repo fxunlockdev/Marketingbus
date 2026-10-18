@@ -8,6 +8,7 @@ import { storyboardContext, videoScope, videoStore } from "./service";
 import { renderMotion, type MotionRenderer } from "./render";
 import { MAX_VIDEO_BYTES, MOTION_RENDERER_VERSION, motionDailyLimit, motionHash } from "./limits";
 import { videoLayout } from "./layout";
+import { requireAudioProcessing } from "./audio-normalizer";
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 export async function runOneMotion(renderer: MotionRenderer = renderMotion, storage: () => AssetStore = videoStore) {
   motionDailyLimit();
@@ -25,6 +26,7 @@ export async function runOneMotion(renderer: MotionRenderer = renderMotion, stor
     await lockBusiness(tx, scope); await assertBrandEditor(tx, scope);
     const row = await tx.motionRender.findUniqueOrThrow({ where: { id: claimed.id } });
     const context = await storyboardContext(scope, row.storyboardId, tx);
+    if (context.document.soundtrack) requireAudioProcessing();
     if (row.status !== expected || row.leaseUntil?.getTime() !== claimed.leaseUntil?.getTime() || row.leaseUntil!.getTime() <= Date.now() || row.rendererVersion !== MOTION_RENDERER_VERSION || row.purgeAfter <= new Date() || context.row.status !== "APPROVED" || motionHash(context.document) !== row.documentHash) throw Error("Motion authorization changed.");
     return { row, context };
   });
@@ -33,7 +35,7 @@ export async function runOneMotion(renderer: MotionRenderer = renderMotion, stor
     for (const asset of context.assets) {
       const bytes = await store.get(asset.objectKey); if (hash(bytes) !== asset.sha256) throw Error("Motion input integrity failed."); assets.set(asset.id, bytes);
     }
-    for (const clip of context.clips) {
+    for (const clip of [...context.clips, ...context.audio]) {
       const bytes = await store.get(clip.objectKey); if (bytes.length !== clip.bytes || hash(bytes) !== clip.sha256) throw Error("Clip integrity failed."); assets.set(clip.id, bytes);
     }
     await fresh("RUNNING"); motionDailyLimit();
@@ -57,7 +59,7 @@ export async function runOneMotion(renderer: MotionRenderer = renderMotion, stor
       if (ctx.row.status !== "APPROVED" || motionHash(ctx.document) !== claimed.documentHash) throw Error("Storyboard changed.");
       const updated = await tx.motionRender.updateMany({ where: { id: claimed.id, status: "STORING", leaseUntil: claimed.leaseUntil }, data: { status: "READY", leaseUntil: null } });
       if (!updated.count) throw Error("Render lease changed.");
-      await tx.auditEvent.create({ data: { ...scope, action: "MOTION_READY", detail: "Silent H.264 motion reel normalized and storage-verified. Final watch-through approval required before download or publishing. No AI credits spent." } });
+      await tx.auditEvent.create({ data: { ...scope, action: "MOTION_READY", detail: "H.264 motion reel with optional reviewed instrumental audio, storage-verified. Final watch/listen approval required before download or publishing. No AI credits spent." } });
     });
   } catch {
     await db.motionRender.updateMany({ where: { id: claimed.id, status: { in: ["RUNNING", "STORING"] }, leaseUntil: claimed.leaseUntil }, data: { status: "FAILED", leaseUntil: null, errorCode: "RENDER_OR_STORAGE_FAILED", purgeAfter: new Date(Date.now() + 7 * 86400000) } });

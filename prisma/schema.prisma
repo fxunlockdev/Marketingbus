@@ -519,6 +519,9 @@ model VideoClip {
   organizationId String
   brandVersion Int
   label String
+  // Shared private-media lifecycle; AUDIO is normalized instrumental music, never generated footage.
+  mediaKind String @default("VIDEO")
+  instrumentalConfirmedAt DateTime?
   createdBy String
   rightsConfirmedAt DateTime
   status String @default("UPLOADING")

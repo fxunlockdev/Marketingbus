@@ -8,6 +8,7 @@ import { storyboardDocument, totalDuration, DEFAULT_CLIP_EDIT, type StoryboardDo
 import { MAX_VIDEO_BYTES, motionDailyLimit } from "./limits";
 import { outlinedText, typographyManifest } from "../typography";
 import { videoLayout } from "./layout";
+import { audioMetadata, requireAudioProcessing } from "./audio-normalizer";
 const exec = promisify(execFile);
 const fps = 24;
 export type MotionResult = { bytes: Buffer; durationMs: number; width: number; height: number };
@@ -22,10 +23,10 @@ let probe: { key: string; until: number; ok: boolean } | undefined;
 export async function motionRendererAvailable() {
   try {
     typographyManifest();
-    motionDailyLimit(); const paths = binaries(), key = JSON.stringify(paths);
+    motionDailyLimit(); const paths = binaries(), audio = process.env.AUDIO_PROCESSING_ENABLED === "true", key = JSON.stringify({ ...paths, audio });
     if (probe?.key === key && probe.until > Date.now()) return probe.ok;
     const results = await Promise.all([exec(paths.ffmpeg, ["-hide_banner", "-encoders"], { timeout: 5000, maxBuffer: 1000000, env: childEnv, encoding: "utf8" }), exec(paths.ffprobe, ["-version"], { timeout: 5000, maxBuffer: 100000, env: childEnv, encoding: "utf8" })]);
-    const ok = /\blibx264\b/.test(results[0].stdout) && /ffprobe version/.test(results[1].stdout);
+    const ok = /\blibx264\b/.test(results[0].stdout) && (!audio || /\baac\b/.test(results[0].stdout) && /\bpcm_s16le\b/.test(results[0].stdout)) && /ffprobe version/.test(results[1].stdout);
     probe = { key, until: Date.now() + 60000, ok }; return ok;
   } catch { return false; }
 }
@@ -80,11 +81,28 @@ export const renderMotion: MotionRenderer = async (raw, assets) => {
     }
     await writeFile(join(directory, "clips.txt"), clips.map(name => `file '${name}'`).join("\n"), { flag: "wx", mode: 0o600 });
     await run(tools.ffmpeg, ["-nostdin", "-hide_banner", "-loglevel", "error", "-protocol_whitelist", "file", "-f", "concat", "-safe", "1", "-i", "clips.txt", "-map", "0:v:0", "-c", "copy", "-an", "-map_metadata", "-1", "-fs", String(MAX_VIDEO_BYTES), "-movflags", "+faststart", "-f", "mp4", "output.mp4"]);
-    const file = join(directory, "output.mp4"), size = (await stat(file)).size;
+    let output = "output.mp4";
+    if (document.soundtrack) {
+      requireAudioProcessing();
+      const music = document.soundtrack, source = assets.get(music.id); if (!source) throw Error("Approved instrumental audio missing.");
+      await writeFile(join(directory, "music.wav"), source, { flag: "wx", mode: 0o600 });
+      const info = await run(tools.ffprobe, ["-v", "error", "-max_alloc", "67108864", "-protocol_whitelist", "file", "-f", "wav", "-show_entries", "stream=codec_type,codec_name,sample_rate,channels,duration:format=duration", "-of", "json", "music.wav"]);
+      const duration = totalDuration(document), seconds = duration / 1000;
+      if (music.startMs + duration > audioMetadata(JSON.parse(info.stdout), true).durationMs) throw Error("Music is shorter than the approved range.");
+      const filter = [`atrim=start=${music.startMs / 1000}:duration=${seconds}`, "asetpts=PTS-STARTPTS", `volume=${music.gainPercent / 100}`,
+        ...(music.fadeInMs ? [`afade=t=in:st=0:d=${music.fadeInMs / 1000}`] : []), ...(music.fadeOutMs ? [`afade=t=out:st=${seconds - music.fadeOutMs / 1000}:d=${music.fadeOutMs / 1000}`] : [])].join(",");
+      output = "with-music.mp4";
+      await run(tools.ffmpeg, ["-nostdin", "-hide_banner", "-loglevel", "error", "-xerror", "-max_alloc", "67108864", "-filter_threads", "1", "-threads", "1", "-protocol_whitelist", "file", "-f", "mov", "-enable_drefs", "0", "-use_absolute_path", "0", "-i", "output.mp4", "-protocol_whitelist", "file", "-f", "wav", "-i", "music.wav", "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-af", filter, "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2", "-t", String(seconds), "-map_metadata", "-1", "-map_chapters", "-1", "-fs", String(MAX_VIDEO_BYTES), "-movflags", "+faststart", "-f", "mp4", output]);
+    }
+    const file = join(directory, output), size = (await stat(file)).size;
     if (size <= 0 || size >= MAX_VIDEO_BYTES) throw Error("Rendered video exceeds its file allowance.");
-    const result = await run(tools.ffprobe, ["-v", "error", "-protocol_whitelist", "file", "-show_entries", "stream=codec_name,codec_type,width,height,r_frame_rate:format=duration", "-of", "json", "output.mp4"]);
+    const result = await run(tools.ffprobe, ["-v", "error", "-max_alloc", "67108864", "-protocol_whitelist", "file", "-show_entries", "stream=codec_name,codec_type,width,height,r_frame_rate,sample_rate,channels,duration:format=duration", "-of", "json", output]);
     const metadata = JSON.parse(result.stdout), stream = metadata.streams?.[0], durationMs = Math.round(Number(metadata.format?.duration) * 1000);
-    if (metadata.streams?.length !== 1 || stream?.codec_type !== "video" || stream.codec_name !== "h264" || stream.width !== width || stream.height !== height || stream.r_frame_rate !== "24/1" || !Number.isFinite(durationMs) || Math.abs(durationMs - totalDuration(document)) > 100) throw Error("Rendered media failed stream/duration validation.");
+    if (metadata.streams?.length !== (document.soundtrack ? 2 : 1) || stream?.codec_type !== "video" || stream.codec_name !== "h264" || stream.width !== width || stream.height !== height || stream.r_frame_rate !== "24/1" || !Number.isFinite(durationMs) || Math.abs(durationMs - totalDuration(document)) > 100) throw Error("Rendered media failed stream/duration validation.");
+    if (document.soundtrack) {
+      const audio = metadata.streams[1];
+      if (audio.codec_type !== "audio" || audio.codec_name !== "aac" || audio.sample_rate !== "48000" || audio.channels !== 2 || !Number.isFinite(Number(audio.duration)) || Math.abs(Number(audio.duration) * 1000 - totalDuration(document)) > 100) throw Error("Rendered soundtrack failed validation.");
+    }
     return { bytes: await readFile(file), durationMs, width, height };
   } finally {
     try { if (directory) await rm(directory, { recursive: true, force: true }); }
