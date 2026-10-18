@@ -33,7 +33,7 @@ export function SocialAccountData({ businessId, account, canManage, enabled, onC
   const cooldown = !!account.dataAttemptedAt && Date.parse(account.dataAttemptedAt) > Date.now() - 15 * 60000;
   const n = (value: number | null) => value === null ? "Not available" : value.toLocaleString();
   return <div aria-label={`Data for ${account.label}`} aria-busy={busy}>
-    <p className="muted">{account.dataFetchedAt ? `Last saved snapshot: ${new Date(account.dataFetchedAt).toLocaleString()}.` : "No saved account data."} Snapshots are retained for up to 30 days.</p>
+    <p className="muted">{account.dataFetchedAt ? `Last saved snapshot: ${new Date(account.dataFetchedAt).toLocaleString()}.` : "No saved account data."} Snapshots expire after 30 days; background removal and backup retention follow separate policies.</p>
     {account.dataErrorCode && <p>Last refresh was not completed. Check platform access before retrying.</p>}
     <div className="tag-row">
       <button className="button secondary" disabled={busy} aria-label={`View saved data for ${account.label}`} onClick={() => run("view")}>View saved data</button>
