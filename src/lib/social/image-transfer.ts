@@ -12,6 +12,7 @@ import { publicationImage, type PublicationPayload } from "./contracts";
 import { withSubmissionContext, type SubmissionContext } from "./submission-journal";
 
 export const linkedInImageId = z.string().regex(/^urn:li:image:[A-Za-z0-9_-]{1,200}$/);
+export const facebookImageId = z.string().regex(/^[1-9][0-9]{0,39}$/);
 // A private export is selected by local ID. Clients cannot provide a URL, key or fingerprint.
 export async function publicationExport(client: Prisma.TransactionClient | typeof db, scope: Scope, id: string, revisionId: string) {
   const row = await client.compositionExport.findFirst({ where: {
@@ -87,7 +88,10 @@ export function createImageTransfer(store: () => AssetStore = assetStore): Socia
       return true;
     }),
     record: (ctx, id) => withSubmissionContext(ctx, async (tx, post) => {
-      await current(tx, post, ctx); linkedInImageId.parse(id);
+      await current(tx, post, ctx);
+      if (ctx.account.provider === "LinkedIn") linkedInImageId.parse(id);
+      else if (ctx.account.provider === "Facebook") facebookImageId.parse(id);
+      else throw Error("Unsupported image destination.");
       if (post.mediaTransferVersion !== ctx.adapterVersion || post.mediaExternalId || post.mediaUploaded) throw Error("Image registration already recorded or unavailable.");
       await tx.socialPublication.update({ where: { id: post.id }, data: { mediaExternalId: id } });
     }),

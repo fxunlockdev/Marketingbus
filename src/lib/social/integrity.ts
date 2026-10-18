@@ -17,7 +17,7 @@ export function payloadHash(raw: unknown) {
 export function frozenCopy(raw: unknown, hash: string, provider: string) {
   const payload = publicationPayload.parse(raw);
   if (payloadHash(payload) !== hash || payload.channel !== provider ||
-      payload.format !== "static" || provider === "Instagram" || (payload.mediaExportId !== null && provider !== "LinkedIn")) {
+      payload.format !== "static" || provider === "Instagram") {
     throw Error("Publication snapshot is invalid or unsupported");
   }
   return payload;

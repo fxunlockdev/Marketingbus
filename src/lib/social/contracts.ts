@@ -21,7 +21,8 @@ export const publicationPayload = z
     mediaExportId: z.string().min(1).max(100).nullable(),
     image: publicationImage.optional(),
   })
-  .strict().refine(p => p.mediaExportId === null ? p.image === undefined : !!p.image && p.channel === "LinkedIn" && p.format === "static", "Unsupported media binding");
+  .strict().refine(p => p.mediaExportId === null ? p.image === undefined : !!p.image && ["LinkedIn", "Facebook"].includes(p.channel) && p.format === "static", "Unsupported media binding")
+  .refine(p => p.channel !== "Facebook" || !p.image || p.image.bytes <= 4 * 1024 * 1024, "Facebook image exports must be 4 MB or smaller.");
 export type PublicationPayload = z.infer<typeof publicationPayload>;
 export const publishedReceipt = z
   .object({

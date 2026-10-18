@@ -1,12 +1,24 @@
-# Facebook Page text publishing
+# Facebook Page text and single-image publishing
 
-This adapter connects the existing approved-copy queue to Facebook Page text publication. It is not Instagram publishing, photo/video transfer, Page Insights ingestion or live-account acceptance.
+This adapter connects the approved-copy queue to Facebook Page text or one approved PNG image. It is not Instagram publishing, video transfer, Page Insights ingestion or live-account acceptance.
 
 ## Activation
 
 Keep `FACEBOOK_PUBLISHING_ENABLED=false` and `SOCIAL_EXECUTION_ENABLED=false` until designated-account acceptance. Registration requires both flags, `FACEBOOK_CONNECTIONS_ENABLED=true`, valid Meta credentials, an explicitly verified API version and unexpired verification deadline. Configure web and worker consistently. Existing connection permissions include Page discovery, engagement read, Page posting and Insights read. A grant is not proof that all endpoints work for the approved application.
 
-The adapter accepts only a frozen approved Facebook text payload with no media. Immediately before submission and read-back it verifies the app-bound active Page token, required scopes, Page ID, applicable granular targets and current Page `can_post` capability. No customer token is sent to the browser. HTTP uses fixed HTTPS endpoints, bounded bytes/time, no redirects, no cache and generic errors.
+The adapter accepts a frozen approved Facebook text payload, optionally with one approved immutable PNG export when the separate `FACEBOOK_IMAGE_PUBLISHING_ENABLED=true` gate is enabled on web and worker. Immediately before submission and read-back it verifies the app-bound active Page token, required scopes, Page ID, applicable granular targets and current Page `can_post` capability. No customer token is sent to the browser. HTTP uses fixed HTTPS endpoints, bounded bytes/time, no redirects, no cache and generic errors.
+
+## Private image transfer
+
+Publishing & analytics lists retained exports for the exact selected approved copy version. The immutable payload binds the PNG hash, byte count, dimensions and approved headline as alt text. Facebook uploads have a conservative application ceiling of 4 MiB; larger exports are refused before provider access. This is our bound, not a claim about every Meta account's current limits. Export expiry, layout/copy/brand changes, asset rights, blocking comments, current authorization and worker ownership are rechecked before transfer and the post fence. The original logo/product composition is preserved in the uploaded bytes; Facebook may reprocess the delivered photo.
+
+The worker reads and hashes the private object before a durable media fence. It makes one multipart `POST /{page-id}/photos` with `source`, `published=false`, approved `alt_text_custom`, bearer authentication and app-secret proof. No public URL or credential is exposed, and no album, remote scheduling or automatic caption is requested. The exact returned photo ID is retained before the acknowledgement marker. An unexpected `post_id` stops for investigation instead of creating another post. The worker reads the photo's ID, owner and custom alt text before it can cross the separate post fence. It then sends one `/{page-id}/feed` write with the exact caption and one `attached_media` photo ID.
+
+Success requires the exact Page/post/caption/visibility checks below, exactly one photo attachment with the recorded target ID, no nested or paginated extra attachment, matching `object_id` when supplied, and another photo owner/alt-text read. Missing or changed evidence is uncertainty, not success. Remote pixels are not downloaded or compared: this binds the uploaded source and provider object identity, not a claim of lossless Facebook rendering.
+
+An upload timeout, lost ID, changed approval, unconfirmed acknowledgement, malformed receipt or post timeout never authorizes another upload or POST. Known post candidates can reconcile by reads only. Unknown uploads/posts remain held for investigation. The existing preview-first pre-post stop command can release an inactive attempt only when no post fence/candidate/receipt exists; it does not delete a possible remote orphan. No remote cleanup, Facebook image edits, albums or video publishing are implemented. Re-uploading on behalf of an uncertain attempt is forbidden.
+
+Migration `20261019020000_facebook_image_transfer` extends the image journal constraint with a provider-specific numeric Facebook photo ID while retaining LinkedIn URN validation. No data is deleted. Text adapter versions stay unchanged; image attempts use a separate image version so old text reconciliation is preserved. The flag defaults to false.
 
 ## Submission safety
 
@@ -16,7 +28,7 @@ The returned candidate must be an exact Page-prefixed `page_post` ID. The journa
 
 Temporary preflight errors can safely retry. Once the durable fence exists, a timeout, malformed response or server error is uncertain, never a reason to submit again. Known candidate IDs can be read back through the bounded reconciliation worker. A lost response with no ID remains held for operator investigation; the implementation never searches by caption to infer success or absence. Do not clear journal fields to retry.
 
-This reuses the existing submission-journal migration; no new migration is required. Candidate validation is provider-specific and binds Facebook IDs to the selected Page. Concurrent journal attempts cannot create another POST. Credential or payload changes during work prevent receipt persistence.
+Text-only publishing reuses the existing submission journal. Candidate validation is provider-specific and binds Facebook IDs to the selected Page. Concurrent journal attempts cannot create another POST. Credential or payload changes during work prevent receipt persistence.
 
 ## Metrics boundary
 
@@ -27,3 +39,7 @@ This reuses the existing submission-journal migration; no new migration is requi
 Injected HTTP tests exercise the real transport, invalid tokens/scopes/roles/IDs/captions, safe retries, unknown responses, bounded body parsing, known-ID-only recovery, unsafe links and registry gates. Local PostgreSQL tests exercise scheduling, durable fencing, candidate persistence, read-back/reconciliation and disabled metric polling. Browser coverage checks the safe receipt display, unknown performance, access boundaries and automated accessibility. No fixture adapter is registered in production.
 
 Before activation, obtain approved app permissions, perform OAuth on an explicitly designated Page, authorize one labelled test post, verify its actual response/read-back fields and platform ID, and test expiry/role loss and ambiguous-outcome recovery. Current provider documentation pages were unavailable during implementation. The official Meta SDK verifies the `feed` write edge and relevant fields, but it is not live version/account acceptance: [Page SDK](https://github.com/facebook/facebook-nodejs-business-sdk/blob/main/src/objects/page.js), [PagePost SDK](https://github.com/facebook/facebook-nodejs-business-sdk/blob/main/src/objects/page-post.js), [Python Page feed parameters](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/page.py).
+
+Image implementation uses the current official [Page photo/feed parameters](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/page.py), [Photo fields](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/photo.py), [multipart request implementation](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/api.py) and the archived official [binary upload example](https://github.com/facebookarchive/php-graph-sdk/blob/5.x/docs/examples/upload_photo.md). The archived example only supports the multipart `source` convention, not current permissions or endpoints. Meta's current documentation returned HTTP 429 during this work. Actual approved-account acceptance must verify unpublished binary upload, required read-back fields, single-photo attachment shape and public visibility before enabling the image flag. No real upload/post has been made.
+
+Local injected-HTTP and PostgreSQL tests cover exact multipart bytes, separate concurrent fences, retained IDs, changed authority, malformed responses, approved-source scope, SQL provider constraints, no duplicate writes after restart and unavailable metrics. Browser tests cover the real selection/error/accessibility flow with only GET capability metadata overridden; the production adapter registry stays disabled and actual POSTs fail closed. The isolated restore rehearsal checks both Facebook and LinkedIn media journals and rejects cross-provider IDs after restoration.
