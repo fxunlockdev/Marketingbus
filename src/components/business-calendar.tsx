@@ -13,6 +13,7 @@ export function BusinessCalendar({ businessId }: { businessId: string }) {
   const [day, setDay] = useState<string | null>(null), [dragged, setDragged] = useState<string | null>(null);
   const [edit, setEdit] = useState<{ entry: Entry; action: "schedule" | "unschedule" } | null>(null), [date, setDate] = useState("");
   const editor = useRef<HTMLDivElement>(null), refreshButton = useRef<HTMLButtonElement>(null);
+  const restoreAfterSave = useRef(false);
   const range = useMemo(() => { try { return calendarWindow(anchor, view); } catch { return null; } }, [anchor, view]);
   const cursor = cursors.at(-1);
   useEffect(() => { setAnchor(localDay(new Date())); setZone(Intl.DateTimeFormat().resolvedOptions().timeZone); }, []);
@@ -28,6 +29,13 @@ export function BusinessCalendar({ businessId }: { businessId: string }) {
     return () => abort.abort();
   }, [businessId, range, cursor, refresh]);
   useEffect(() => { if (edit) editor.current?.querySelector<HTMLInputElement | HTMLButtonElement>("input,button")?.focus(); }, [edit]);
+  useEffect(() => {
+    // Focus only after React has committed the enabled button; animation frames
+    // can run before the saving state is committed on a slower browser.
+    if (restoreAfterSave.current && !saving && !edit) {
+      refreshButton.current?.focus(); restoreAfterSave.current = false;
+    }
+  }, [saving, edit]);
   function reset() { setCursors([]); setDay(null); setEdit(null); setDragged(null); setNotice(""); }
   function close() { const id = edit?.entry.id; setEdit(null); setError(""); requestAnimationFrame(() => { const target = id ? document.getElementById(`calendar-move-${id}`) : null; if (target instanceof HTMLButtonElement && !target.disabled) target.focus(); else refreshButton.current?.focus(); }); }
   function open(entry: Entry, action: "schedule" | "unschedule", targetDay?: string) {
@@ -68,7 +76,7 @@ export function BusinessCalendar({ businessId }: { businessId: string }) {
         try {
           const response = await fetch(`/api/businesses/${businessId}/production`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: edit.action, itemId: edit.entry.itemId, expectedCalendar: { id: edit.entry.id, version: edit.entry.version }, ...(scheduledFor ? { version: edit.entry.revisionVersion, scheduledFor, timezone: zone } : {}) }) });
           const result = await response.json(); if (!response.ok) throw Error(result.error || "Unable to update reservation.");
-          setEdit(null); setCursors([]); setRefresh(n => n + 1); setNotice("Internal reservation updated. No credits charged and no social post sent or changed."); router.refresh(); requestAnimationFrame(() => refreshButton.current?.focus());
+          restoreAfterSave.current = true; setEdit(null); setCursors([]); setRefresh(n => n + 1); setNotice("Internal reservation updated. No credits charged and no social post sent or changed."); router.refresh();
         } catch (err) { setError(err instanceof Error ? err.message : "Unable to update reservation. Refresh before trying again."); }
         finally { setSaving(false); }
       }}>

@@ -8,6 +8,9 @@ const db = new PrismaClient();
 test.afterAll(async () => db.$disconnect());
 test.use({ timezoneId: "UTC" });
 test("business calendar spans plans, confirms moves, rejects stale edits and preserves social posts", async ({ page }) => {
+  test.setTimeout(60000);
+  const browserSession = await page.context().newCDPSession(page);
+  await browserSession.send("Emulation.setCPUThrottlingRate", { rate: 4 });
   const email = `calendar-browser-${crypto.randomUUID()}@example.test`, headers = { Origin: "http://127.0.0.1:3000" };
   let organizationId: string | undefined;
   try {
