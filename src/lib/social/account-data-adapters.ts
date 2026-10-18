@@ -56,10 +56,12 @@ export function createLinkedInDataAdapter(config: LinkedInOAuthSettings, fetcher
       const result = z.object({ elements: z.array(z.object({ id: z.string().regex(/^urn:li:(share|ugcPost):[1-9][0-9]*$/).max(200), author: z.literal(id), lifecycleState: z.literal("PUBLISHED"), commentary: z.string().max(64000), publishedAt: z.number().int().positive().safe(), adContext: z.object({ isDsc: z.boolean().optional() }).optional() })).max(20), paging: z.object({ links: z.array(z.object({ rel: z.string().max(30) })).max(10).optional() }).optional() }).parse(await get(`posts?${new URLSearchParams({ q: "author", author: id, count: "20", sortBy: "CREATED", viewContext: "READER" })}`));
       let lifetimeOrganic: AccountSnapshot["lifetimeOrganic"] = unavailableOrganic();
       try {
-        const stats = z.object({ elements: z.array(z.object({ organizationalEntity: z.literal(id), totalShareStatistics: z.object({ impressionCount: socialCount.optional(), uniqueImpressionsCount: socialCount.optional(), clickCount: socialCount.optional(), likeCount: socialCount.optional(), commentCount: socialCount.optional(), shareCount: socialCount.optional() }) })).max(1) }).parse(await get(`organizationalEntityShareStatistics?${new URLSearchParams({ q: "organizationalEntity", organizationalEntity: id })}`));
+        const stats = z.object({ elements: z.array(z.object({ organizationalEntity: z.literal(id), totalShareStatistics: z.object({ impressionCount: socialCount.optional(), uniqueImpressionsCount: socialCount.optional(), clickCount: socialCount.optional(), likeCount: z.number().int().min(-2147483647).max(2147483647).optional(), commentCount: socialCount.optional(), shareCount: socialCount.optional() }) })).max(1) }).parse(await get(`organizationalEntityShareStatistics?${new URLSearchParams({ q: "organizationalEntity", organizationalEntity: id })}`));
         if (stats.elements.length) {
           const s = stats.elements[0].totalShareStatistics;
-          lifetimeOrganic = { available: true, impressions: s.impressionCount ?? null, uniqueImpressions: s.uniqueImpressionsCount ?? null, clicks: s.clickCount ?? null, likes: s.likeCount ?? null, comments: s.commentCount ?? null, shares: s.shareCount ?? null };
+          // LinkedIn can report negative organic-like adjustments. Preserve other counts,
+          // but do not misrepresent the adjustment as a nonnegative total or zero.
+          lifetimeOrganic = { available: true, impressions: s.impressionCount ?? null, uniqueImpressions: s.uniqueImpressionsCount ?? null, clicks: s.clickCount ?? null, likes: s.likeCount !== undefined && s.likeCount >= 0 ? s.likeCount : null, comments: s.commentCount ?? null, shares: s.shareCount ?? null };
         }
       } catch (error) { if (!(error instanceof SocialReadError) || ![400, 403, 404].includes(error.status ?? 0)) throw error; }
       signal.throwIfAborted(); createLinkedInOAuthAdapter(config);

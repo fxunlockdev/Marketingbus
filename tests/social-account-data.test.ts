@@ -41,6 +41,11 @@ describe("bounded social account data adapters", () => {
     const f = linkedin(); f.replies[3] = new Response("private-error", { status });
     const result = await f.adapter.read(f.account, signal()); expect(result.lifetimeOrganic).toMatchObject({ available: false, impressions: null, clicks: null });
   });
+  it("preserves valid counts when LinkedIn reports a negative organic-like adjustment", async () => {
+    const f = linkedin(); f.stats.elements[0].totalShareStatistics.likeCount = -1;
+    const result = await f.adapter.read(f.account, signal());
+    expect(result.lifetimeOrganic).toMatchObject({ available: true, impressions: 100, clicks: 0, likes: null });
+  });
   it.each([401, 429, 500])("does not disguise LinkedIn HTTP %s as zero analytics or retry", async status => {
     const f = linkedin(); f.replies[3] = new Response("private-error", { status });
     await expect(f.adapter.read(f.account, signal())).rejects.toThrow("could not be verified"); expect(f.fetcher).toHaveBeenCalledTimes(4);

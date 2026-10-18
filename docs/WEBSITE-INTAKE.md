@@ -1,6 +1,6 @@
 # Evidence intake — implementation versus deployment
 
-The brand screen supports UTF-8 TXT/Markdown files or pasted text (24 KB), selectable-text PDF and DOCX uploads, and a queued single-page Firecrawl import. Sources are tenant-scoped, deduplicated within a business and explicitly proposed, not automatically confirmed facts. An exact-excerpt check records source/hash evidence. Users currently copy a reviewed fact into the brand form and reconfirm it; AI-generated brand/tone proposals and one-click application are **not** implemented.
+The brand screen supports UTF-8 TXT/Markdown files or pasted text (24 KB), selectable-text PDF and DOCX uploads, and a queued single-page Firecrawl import. Sources are tenant-scoped, deduplicated within a business and explicitly proposed, not automatically confirmed facts. An exact-excerpt check records source/hash evidence. The later brand-analysis workflow now supports AI fact/tone proposals, citations and selective application into an unconfirmed draft; see [module 2](MODULE-PLAN.md#module-2-brand-intelligence). Confirmation and provider acceptance remain separate from extraction.
 
 ## Low-cost bounds
 

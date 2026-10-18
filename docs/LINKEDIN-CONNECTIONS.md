@@ -2,7 +2,7 @@
 
 ## Scope and release boundary
 
-The official server-side connection adapter exchanges a one-use authorization code, introspects the access token, discovers approved company-page administrator relationships and resolves each page's name. The existing session/business-scoped workflow then presents explicit account selection and stores the selected token encrypted. A separate gated [account-data adapter](SOCIAL-ACCOUNT-DATA.md) now reads recent published posts and available lifetime organic company statistics. Neither adapter publishes content, transfers media, refreshes tokens or revokes authorization at LinkedIn. Per-publication metric ingestion and live acceptance remain separate work. Personal profiles, showcase pages and non-administrator roles are not supported by this release.
+The official server-side connection adapter exchanges a one-use authorization code, introspects the access token, discovers approved company-page administrator relationships and resolves each page's name. The existing session/business-scoped workflow then presents explicit account selection and stores the selected token encrypted. A separate gated [account-data adapter](SOCIAL-ACCOUNT-DATA.md) reads recent posts and available lifetime organic company statistics. A separately gated [text publisher](LINKEDIN-PUBLISHING.md) now implements company text submission, exact read-back and per-publication organic metrics. Media transfer, token refresh/provider revocation and live acceptance remain separate work. Personal profiles, showcase pages and non-administrator roles are not supported.
 
 No provider was enabled or contacted during automated verification. Tests inject HTTP responses into the real adapter; no fixture adapter can be enabled by a production environment variable.
 
@@ -29,7 +29,7 @@ Use LinkedIn's confidential web authorization-code flow with a client secret. It
 
 Each HTTP response is capped at 64 KiB of actual received bytes, including chunked responses, with a ten-second request timeout and a thirty-second whole-exchange deadline enforced by the calling workflow. Redirects, malformed/non-JSON responses and provider errors fail closed. No provider response body or token is copied into user-visible errors or audit events. No retries or third-party HTTP SDK dependencies were added.
 
-Application credential, API version or verification-deadline changes invalidate pending selections through a one-way configuration fingerprint. Existing tokens are not silently refreshed. Expired connections require reconnection; publication must independently recheck credentials, scopes, role and expiry when its transport is implemented.
+Application credential, API version or verification-deadline changes invalidate pending selections through a one-way configuration fingerprint. Existing tokens are not silently refreshed. Expired connections require reconnection; the separate text-publication transport independently rechecks credentials, scopes, role and expiry.
 
 Migration `20261018020000_linkedin_confidential_oauth` adds the authentication method with an `S256` default and enforces provider-specific secret-state constraints in PostgreSQL. Existing S256 data remains valid. The new application configuration fingerprint invalidates pre-release pending callbacks; users must start those connections again. The migration is additive and does not delete stored social accounts. Do not roll back by dropping the column or rewriting migration history.
 

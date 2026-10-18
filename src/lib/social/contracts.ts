@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createLinkedInPublishingAdapter } from "./linkedin-publishing";
 
 export const socialProvider = z.enum(["Facebook", "Instagram", "LinkedIn"]);
 export type SocialProvider = z.infer<typeof socialProvider>;
@@ -75,5 +76,9 @@ export interface SocialAdapter {
 export type SocialAdapters = Partial<Record<SocialProvider, SocialAdapter>>;
 // No mock adapter is registered in application/worker runtime. Official adapters are a separate gate.
 export function configuredSocialAdapters(): SocialAdapters {
+  if (process.env.SOCIAL_EXECUTION_ENABLED !== "true") return {};
+  if (process.env.LINKEDIN_PUBLISHING_ENABLED === "true" && process.env.LINKEDIN_CONNECTIONS_ENABLED === "true") {
+    try { return { LinkedIn: createLinkedInPublishingAdapter({ clientId: process.env.LINKEDIN_CLIENT_ID || "", clientSecret: process.env.LINKEDIN_CLIENT_SECRET || "", apiVersion: process.env.LINKEDIN_API_VERSION || "", verifiedUntil: process.env.LINKEDIN_API_VERIFIED_UNTIL || "" }) }; } catch { /* Disabled until completely configured/current. */ }
+  }
   return {};
 }

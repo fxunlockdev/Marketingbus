@@ -23,6 +23,9 @@ import { payloadHash } from "../src/lib/social/integrity";
 import { resumePublicationLookup } from "../src/lib/social/recovery";
 import { seedLearningEvidence } from "./fixtures/learning";
 import { productionMemories, validLearningEvidence } from "../src/lib/social/learning-evidence";
+import { publishingFixture } from "./helpers/linkedin-publishing";
+import { submissionJournal } from "../src/lib/social/submission-journal";
+import { LINKEDIN_SCOPES } from "../src/lib/social/linkedin-oauth";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (
   process.env.TEST_DATABASE_URL &&
@@ -153,6 +156,95 @@ suite("social publishing and analytics isolation", () => {
     });
     return post;
   }
+  async function linkedinQueue() {
+    const ctx = await setup(), f = publishingFixture(submissionJournal);
+    await db.productionItem.update({ where: { id: ctx.item.id }, data: { channel: "LinkedIn" } });
+    await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { provider: "LinkedIn", externalAccountId: f.account.externalAccountId, permissions: [...LINKEDIN_SCOPES], expiresAt: new Date(Date.now() + 3600000) } });
+    await manageSocial(ctx.scope, ctx.action, { LinkedIn: f.adapter });
+    const post = await db.socialPublication.findFirstOrThrow({ where: { businessId: ctx.scope.businessId } });
+    await db.socialPublication.update({ where: { id: post.id }, data: { scheduledFor: new Date(Date.now() - 1000) } });
+    f.post.publishedAt = Date.now();
+    return { ctx, f, post };
+  }
+  it("publishes LinkedIn through the real transport and durable journal, then ingests scoped post metrics", async () => {
+    const { ctx, f, post } = await linkedinQueue();
+    await runOnePublication({ LinkedIn: f.adapter });
+    const saved = await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } });
+    expect(saved).toMatchObject({ status: "PUBLISHED", candidatePostId: f.id, externalPostId: f.id, permalink: null });
+    expect(saved.submissionAdapterVersion).toContain("publish-v1");
+    await runOnePublication({ LinkedIn: f.adapter });
+    expect(f.fetcher.mock.calls.filter(([url, init]) => url === "https://api.linkedin.com/rest/posts" && init?.method === "POST")).toHaveLength(1);
+    f.replies.push(f.introspection, f.acl, f.post, f.stats);
+    await db.socialPublication.update({ where: { id: post.id }, data: { nextMetricsAt: new Date(Date.now() - 1000) } });
+    await runOneMetricSync({ LinkedIn: f.adapter });
+    const readings = await db.metricSnapshot.findMany({ where: { publicationId: post.id } });
+    expect(readings).toHaveLength(1);
+    expect(readings[0]).toMatchObject({ organizationId: ctx.scope.organizationId, businessId: ctx.scope.businessId, impressions: 100, engagements: 6, clicks: 4, reach: null, videoViews: null });
+    expect(JSON.stringify(await readSocialDashboard(ctx.scope))).toContain("linkedin-organic-post-likes-comments-shares");
+    expect(f.replies).toHaveLength(0);
+  });
+  it("reconciles a known LinkedIn candidate after read-back failure without another post", async () => {
+    const { f, post } = await linkedinQueue();
+    f.replies[3] = new Error("lost read-back");
+    await runOnePublication({ LinkedIn: f.adapter });
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", candidatePostId: f.id, externalPostId: null });
+    f.replies.push(f.introspection, f.acl, f.post);
+    expect(await reconcilePublication(post.id, { LinkedIn: f.adapter })).toBe(true);
+    expect(f.fetcher.mock.calls.filter(([url, init]) => url === "https://api.linkedin.com/rest/posts" && init?.method === "POST")).toHaveLength(1);
+    expect((await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).status).toBe("PUBLISHED");
+  });
+  it("holds a lost LinkedIn submission response without guessing an ID or sending again", async () => {
+    const { f, post } = await linkedinQueue();
+    f.replies.splice(2, 2, new Error("lost submission response"));
+    await runOnePublication({ LinkedIn: f.adapter });
+    const before = f.fetcher.mock.calls.length;
+    expect(await reconcilePublication(post.id, { LinkedIn: f.adapter })).toBe(false);
+    await runOnePublication({ LinkedIn: f.adapter });
+    expect(f.fetcher).toHaveBeenCalledTimes(before);
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", candidatePostId: null, externalPostId: null });
+  });
+  it("atomically fences LinkedIn submissions and rejects mismatched account, payload and receipt contexts", async () => {
+    const { f, post, ctx } = await linkedinQueue();
+    await db.socialPublication.update({ where: { id: post.id }, data: { status: "SUBMITTING", leaseUntil: new Date(Date.now() + 120000) } });
+    const context = { requestId: post.id, account: { ...f.account, id: ctx.connection.id, token: "never-show-this-token" }, payload: f.payload, adapterVersion: "test:publish-v1" };
+    await expect(submissionJournal.begin({ ...context, account: { ...context.account, externalAccountId: "urn:li:organization:789" } })).rejects.toThrow();
+    await expect(submissionJournal.begin({ ...context, payload: { ...context.payload, caption: "changed" } })).rejects.toThrow();
+    expect((await Promise.all([submissionJournal.begin(context), submissionJournal.begin(context)])).sort()).toEqual([false, true]);
+    await expect(submissionJournal.record({ ...context, adapterVersion: "different" }, f.id)).rejects.toThrow();
+    await submissionJournal.record(context, f.id);
+    expect(await submissionJournal.candidate(context)).toBe(f.id);
+    await expect(submissionJournal.record(context, "urn:li:share:789")).rejects.toThrow();
+    await db.socialPublication.update({ where: { id: post.id }, data: { payload: { ...f.payload, caption: "tampered without hash" } } });
+    await expect(submissionJournal.candidate(context)).rejects.toThrow();
+  });
+  it("discards a receipt when credentials change during submission", async () => {
+    const ctx = await setup(), provider = adapter();
+    const post = await queue(ctx, provider);
+    const original = provider.publish;
+    provider.publish = async (...args) => {
+      const receipt = await original(...args);
+      await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { encryptedToken: "changed" } });
+      return receipt;
+    };
+    await runOnePublication({ Facebook: provider });
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", externalPostId: null, errorCode: "SUBMISSION_CONTEXT_CHANGED" });
+  });
+  it.each(["credentials", "payload"])("discards metrics when %s change in flight", async change => {
+    const ctx = await setup(), provider = adapter();
+    const post = await queue(ctx, provider);
+    await runOnePublication({ Facebook: provider });
+    await db.socialPublication.update({ where: { id: post.id }, data: { nextMetricsAt: new Date(Date.now() - 1000) } });
+    const original = provider.metrics;
+    provider.metrics = async (...args) => {
+      const reading = await original(...args);
+      if (change === "credentials") await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { encryptedToken: "changed" } });
+      else await db.socialPublication.update({ where: { id: post.id }, data: { payload: { caption: "tampered" } } });
+      return reading;
+    };
+    await runOneMetricSync({ Facebook: provider });
+    expect(await db.metricSnapshot.count({ where: { publicationId: post.id } })).toBe(0);
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ metricsLeaseUntil: null, nextMetricsAt: null, errorCode: "METRICS_CONTEXT_CHANGED" });
+  });
   it("fails closed without an adapter; encrypts tokens and never returns them", async () => {
     const ctx = await setup();
     await expect(manageSocial(ctx.scope, ctx.action, {})).rejects.toThrow(

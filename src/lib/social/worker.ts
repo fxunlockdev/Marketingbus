@@ -135,15 +135,16 @@ export async function runOnePublication(adapters: SocialAdapters) {
       await tx.socialPublication.update({ where: { id: post.id }, data: { status: "FAILED", errorCode: "CREDENTIAL_UNAVAILABLE" } });
       return null;
     }
+    const submissionLease = new Date(Date.now() + 120000);
     await tx.socialPublication.update({
       where: { id: post.id },
       data: {
         status: "SUBMITTING",
         attempts: { increment: 1 },
-        leaseUntil: new Date(Date.now() + 120000),
+        leaseUntil: submissionLease,
       },
     });
-    return { post, payload, token };
+    return { post, payload, token, submissionLease };
   });
   if (!claimed) return true;
   const adapter = adapters[claimed.token.provider]!;
@@ -163,8 +164,14 @@ export async function runOnePublication(adapters: SocialAdapters) {
       await lockBusiness(tx, scope);
       const fresh = await tx.socialPublication.findUniqueOrThrow({
         where: { id: claimed.post.id },
+        include: { connection: true },
       });
-      if (fresh.status !== "SUBMITTING") return;
+      if (fresh.status !== "SUBMITTING" || fresh.leaseUntil?.getTime() !== claimed.submissionLease.getTime()) return;
+      const validPayload = (() => { try { frozenCopy(fresh.payload, fresh.payloadHash, claimed.token.provider); return fresh.payloadHash === claimed.post.payloadHash; } catch { return false; } })();
+      if (!validPayload || fresh.connection.status !== "CONNECTED" || fresh.connection.encryptedToken !== claimed.post.connection.encryptedToken || fresh.connection.externalAccountId !== claimed.post.connection.externalAccountId || fresh.connection.provider !== claimed.token.provider || fresh.connection.expiresAt && fresh.connection.expiresAt <= new Date()) {
+        await tx.socialPublication.update({ where: { id: fresh.id }, data: { status: "NEEDS_RECONCILIATION", leaseUntil: null, errorCode: "SUBMISSION_CONTEXT_CHANGED" } });
+        return;
+      }
       if (outcome.state === "published") {
         const receipt = publishedReceipt.parse(outcome.receipt);
         if (
@@ -233,7 +240,7 @@ export async function runOnePublication(adapters: SocialAdapters) {
   } catch {
     // Malformed receipts / uniqueness collisions are not proof that no post exists.
     await db.socialPublication.updateMany({
-      where: { id: claimed.post.id, status: "SUBMITTING" },
+      where: { id: claimed.post.id, status: "SUBMITTING", leaseUntil: claimed.submissionLease },
       data: {
         status: "NEEDS_RECONCILIATION",
         leaseUntil: null,
@@ -354,6 +361,9 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
   const claimed = await db.socialPublication.updateMany({
     where: {
       id: candidate.id,
+      status: "PUBLISHED",
+      externalPostId: candidate.externalPostId,
+      nextMetricsAt: { lte: new Date() },
       OR: [
         { metricsLeaseUntil: null },
         { metricsLeaseUntil: { lt: new Date() } },
@@ -397,10 +407,14 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
         where: { id: candidate.id },
       });
       if (
-        freshConnection.status !== "CONNECTED" ||
         post.metricsLeaseUntil?.getTime() !== leaseUntil.getTime()
       )
         return;
+      const validPayload = (() => { try { frozenCopy(post.payload, post.payloadHash, connection.provider); return post.payloadHash === candidate.payloadHash; } catch { return false; } })();
+      if (!validPayload || freshConnection.status !== "CONNECTED" || freshConnection.encryptedToken !== connection.encryptedToken || freshConnection.externalAccountId !== connection.externalAccountId || freshConnection.provider !== connection.provider || freshConnection.expiresAt && freshConnection.expiresAt <= new Date() || post.status !== "PUBLISHED" || post.externalPostId !== candidate.externalPostId) {
+        await tx.socialPublication.update({ where: { id: post.id }, data: { metricsLeaseUntil: null, nextMetricsAt: null, errorCode: "METRICS_CONTEXT_CHANGED" } });
+        return;
+      }
       // Lifetime snapshots are upserted, never summed over time. Missing metrics remain null.
       await tx.metricSnapshot.upsert({
         where: {

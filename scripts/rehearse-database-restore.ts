@@ -6,6 +6,7 @@ import { localRecoveryConfig, recoveryNames, recoveryIdentifier, recoveryUrl, as
 import { recoverySnapshot, assertSnapshot } from "./recovery/snapshot";
 import { sealSecret, openSecret } from "../src/lib/secrets";
 import { reserveCreditsInTransaction, finishReservationInTransaction } from "../src/lib/billing/wallet";
+import { payloadHash } from "../src/lib/social/integrity";
 
 // This runner only makes its own synthetic databases. It cannot accept an external
 // backup, overwrite an existing DB, start an app/worker, or enable paid execution.
@@ -78,6 +79,10 @@ async function main() {
     phase = "encrypted connection fixtures";
     const connectionId = randomUUID(), context = `social:${a.id}:${business.id}:${connectionId}`, plaintext = "synthetic-not-a-provider-token";
     await source.socialConnection.create({ data: { id: connectionId, organizationId: a.id, businessId: business.id, provider: "Instagram", status: "DISCONNECTED", externalAccountId: "synthetic", label: "Synthetic disconnected fixture", encryptedToken: sealSecret(plaintext, context), permissions: [], dataSnapshot: { fixture: "saved-account-data", followers: null }, dataFetchedAt: new Date(), dataAttemptedAt: new Date() } });
+    const publicationConnection = await source.socialConnection.create({ data: { organizationId: a.id, businessId: business.id, provider: "LinkedIn", status: "DISCONNECTED", externalAccountId: "urn:li:organization:123", label: "Synthetic publishing fixture", encryptedToken: "", permissions: [] } });
+    const publicationPlan = await source.productionPlan.create({ data: { organizationId: a.id, businessId: business.id, brandVersion: 3, title: "Synthetic journal recovery", creditCeiling: 0, items: { create: { title: "Synthetic post", channel: "LinkedIn", format: "static", brief: {}, revisions: { create: { version: 1, status: "APPROVED", content: { caption: "Synthetic restoration fixture." } } } } } }, include: { items: { include: { revisions: true } } } });
+    const frozenPayload = { caption: "Synthetic restoration fixture.", channel: "LinkedIn", format: "static", mediaExportId: null };
+    await source.socialPublication.create({ data: { id: "synthetic-publication", organizationId: a.id, businessId: business.id, connectionId: publicationConnection.id, revisionId: publicationPlan.items[0].revisions[0].id, brandVersion: 3, payload: frozenPayload, payloadHash: payloadHash(frozenPayload), scheduledFor: new Date(), timezone: "UTC", status: "NEEDS_RECONCILIATION", submissionAdapterVersion: "synthetic:publish-v1", candidatePostId: "urn:li:share:456" } });
     phase = "brand and identity fixtures";
     await source.knowledgeSource.create({ data: { businessId: business.id, organizationId: a.id, kind: "TEXT", title: "Fixture evidence", body: "Only synthetic facts.", sha256: archiveDigest(Buffer.from("Only synthetic facts.")), status: "APPROVED", createdBy: user.id } });
     await source.brandAsset.create({ data: { organizationId: a.id, businessId: business.id, objectKey: "synthetic/not-an-object", label: "Metadata only, no bucket object", purpose: "logo", sha256: "a".repeat(64), bytes: 3, width: 1, height: 1, uploadedBy: user.id, rightsConfirmedAt: new Date(), status: "APPROVED", approvedForGeneration: true } });
@@ -102,6 +107,9 @@ async function main() {
     assertSnapshot(before, await recoverySnapshot(target));
     check((await target.socialOAuthFlow.findUniqueOrThrow({ where: { id: "synthetic-meta-flow" } })).authentication === "META_CONFIDENTIAL", "Meta authorization mode not preserved.");
     check((await target.socialConnection.findUniqueOrThrow({ where: { id: connectionId } })).dataSnapshot !== null, "Saved account data not preserved.");
+    const restoredPublication = await target.socialPublication.findUniqueOrThrow({ where: { id: "synthetic-publication" } });
+    check(restoredPublication.status === "NEEDS_RECONCILIATION" && restoredPublication.submissionAdapterVersion === "synthetic:publish-v1" && restoredPublication.candidatePostId === "urn:li:share:456" && restoredPublication.externalPostId === null, "Uncertain publication journal not preserved.");
+    await mustReject(() => target.socialPublication.update({ where: { id: restoredPublication.id }, data: { submissionAdapterVersion: null } }));
     check((await target.business.findUniqueOrThrow({ where: { id: business.id } })).name === "Restore business", "Backup checkpoint not preserved.");
     check(await target.business.count({ where: { id: business.id, organizationId: b.id } }) === 0, "Tenant-scoped read failed.");
     await mustReject(() => target.knowledgeSource.create({ data: { businessId: business.id, organizationId: b.id, title: "Must reject", kind: "TEXT", createdBy: user.id } }));
@@ -136,7 +144,7 @@ async function main() {
       tablesVerified: before.tables.length, rowsVerified: before.tables.reduce((n, t) => n + t.count, 0),
       migrationsVerified: before.tables.find(t => t.name === "_prisma_migrations")?.count,
       schemaHash: before.schemaHash, backupMs, restoreMs, elapsedMs: Date.now() - started,
-      checks: ["schema-and-all-row-fingerprints", "post-backup-change-excluded", "corrupt-archive-rejected", "tenant-foreign-keys", "ledger-and-payment-uniqueness", "settlement-replay", "refund-debt", "uncertain-job-and-refund-preservation", "retained-key-decryption", "missing-key-and-cross-tenant-decryption-denial", "unchanged-email-outbox"],
+      checks: ["schema-and-all-row-fingerprints", "post-backup-change-excluded", "corrupt-archive-rejected", "tenant-foreign-keys", "ledger-and-payment-uniqueness", "settlement-replay", "refund-debt", "uncertain-job-and-refund-preservation", "uncertain-publication-journal-and-constraint", "retained-key-decryption", "missing-key-and-cross-tenant-decryption-denial", "unchanged-email-outbox"],
       productionRecoveryVerified: false, objectStorageVerified: false, workersStarted: 0, providerCalls: 0 };
   } finally {
     if (oldKeys === undefined) delete process.env.SECRET_ENCRYPTION_KEYS_JSON; else process.env.SECRET_ENCRYPTION_KEYS_JSON = oldKeys;

@@ -1,0 +1,36 @@
+import { db } from "../db";
+import { openSecret } from "../secrets";
+import { lockBusiness } from "../production/service";
+import { frozenCopy, payloadHash } from "./integrity";
+import type { Account, PublicationPayload } from "./contracts";
+export type SubmissionContext = { requestId: string; account: Account; payload: PublicationPayload; adapterVersion: string };
+export interface SubmissionJournal {
+  begin(context: SubmissionContext): Promise<boolean>;
+  record(context: SubmissionContext, externalPostId: string): Promise<void>;
+  candidate(context: SubmissionContext): Promise<string | null>;
+}
+// A durable local write fence is not provider idempotency. Lost remote IDs remain uncertain.
+import type { Prisma, SocialPublication, SocialConnection } from "@prisma/client";
+async function transact<T>(context: SubmissionContext, run: (tx: Prisma.TransactionClient, post: SocialPublication & { connection: SocialConnection }) => Promise<T>) {
+  return db.$transaction(async tx => {
+    const initial = await tx.socialPublication.findUniqueOrThrow({ where: { id: context.requestId } });
+    await lockBusiness(tx, { organizationId: initial.organizationId, businessId: initial.businessId, actorId: "social-transport" });
+    const post = await tx.socialPublication.findUniqueOrThrow({ where: { id: initial.id }, include: { connection: true } });
+    const c = post.connection;
+    frozenCopy(post.payload, post.payloadHash, c.provider);
+    if (!["SUBMITTING", "NEEDS_RECONCILIATION"].includes(post.status) || c.id !== context.account.id || c.provider !== context.account.provider || c.externalAccountId !== context.account.externalAccountId || c.status !== "CONNECTED" || !c.expiresAt || c.expiresAt <= new Date() || post.payloadHash !== payloadHash(context.payload) || openSecret(c.encryptedToken, `social:${post.organizationId}:${post.businessId}:${c.id}`) !== context.account.token) throw Error("Publication context changed.");
+    return run(tx, post);
+  });
+}
+export const submissionJournal: SubmissionJournal = {
+  begin: context => transact(context, async (tx, post) => {
+    if (post.submissionAdapterVersion || post.status !== "SUBMITTING" || !post.leaseUntil || post.leaseUntil <= new Date()) return false;
+    await tx.socialPublication.update({ where: { id: post.id }, data: { submissionAdapterVersion: context.adapterVersion } });
+    return true;
+  }),
+  record: (context, externalPostId) => transact(context, async (tx, post) => {
+    if (post.submissionAdapterVersion !== context.adapterVersion || (post.candidatePostId && post.candidatePostId !== externalPostId) || !/^urn:li:(share|ugcPost):[1-9][0-9]{0,30}$/.test(externalPostId)) throw Error("Unverified publication candidate.");
+    await tx.socialPublication.update({ where: { id: post.id }, data: { candidatePostId: externalPostId } });
+  }),
+  candidate: context => transact(context, async (_tx, post) => post.submissionAdapterVersion === context.adapterVersion ? post.candidatePostId : null),
+};
