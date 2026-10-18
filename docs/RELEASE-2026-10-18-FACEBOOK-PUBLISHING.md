@@ -1,6 +1,6 @@
 # Facebook Page text publishing release
 
-Runtime: `studio-v26-facebook-publishing`. No new database migration. Source/CI/deployment identifiers will be recorded after verification; this document is not itself deployment evidence.
+Source commit `5eaa8626fe5bfd10db78c29c3c095aa02b5bf9b0` passed [CI 39111034206](https://github.com/fxunlockdev/Marketingbus/actions/runs/39111034206). Its initial source runtime was `studio-v26-facebook-publishing`; it shipped in the subsequently verified combined `studio-v27-fair-worker` release, not as a separate v26 deployment. No new migration. See [combined deployment evidence](RELEASE-2026-10-18-FAIR-WORKER.md).
 
 ## Implemented
 
