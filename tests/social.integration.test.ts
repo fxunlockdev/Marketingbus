@@ -771,6 +771,12 @@ suite("social publishing and analytics isolation", () => {
     await expect(manageSocial(ctx.scope, { action: "disconnect", connectionId: ctx.connection.id }, {})).rejects.toThrow();
     await expect(db.socialConnection.update({ where: { id: ctx.connection.id }, data: { authorizationVersion: 0 } })).rejects.toThrow(/authorizationVersion_check/);
   });
+  it("repairs a legacy disconnected row that still contains credentials instead of claiming it is erased", async () => {
+    const ctx = await setup(), f = await disconnectFixture(ctx);
+    await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { status: "DISCONNECTED" } });
+    await expect(disconnectSocialAccount(f.scope, f.input)).resolves.toMatchObject({ alreadyDisconnected: false });
+    expect(await db.socialConnection.findUnique({ where: { id: ctx.connection.id } })).toMatchObject({ status: "DISCONNECTED", authorizationVersion: 2, encryptedToken: "", permissions: [] });
+  });
   it.each(["shape", "hash", "media", "format"])("quarantines %s corruption before submission without blocking later posts", async kind => {
     const ctx = await setup(), provider = adapter(), post = await queue(ctx, provider);
     const valid = { caption: creative.caption, channel: "Facebook", format: "static", mediaExportId: null };

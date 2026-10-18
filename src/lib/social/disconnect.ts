@@ -21,7 +21,11 @@ export async function disconnectSocialAccount(scope: OAuthScope, raw: unknown) {
     if (!account) throw new AppError(404, "Social account not found.");
     if (account.authorizationVersion !== input.authorizationVersion)
       throw new AppError(409, "Account access changed. Refresh connections and review before disconnecting.");
-    if (account.status === "DISCONNECTED") return { ok: true, alreadyDisconnected: true };
+    // Legacy/restored rows can be labelled disconnected without having erased all local secrets.
+    if (account.status === "DISCONNECTED" && account.encryptedToken === "" && account.permissions.length === 0 &&
+        account.expiresAt === null && account.dataSnapshot === null && account.dataFetchedAt === null &&
+        account.dataLeaseId === null && account.dataLeaseUntil === null)
+      return { ok: true, alreadyDisconnected: true };
     await tx.socialConnection.update({ where: { id: account.id }, data: {
       ...eraseSocialData, status: "DISCONNECTED", encryptedToken: "", permissions: [], expiresAt: null,
       authorizationVersion: { increment: 1 },
