@@ -11,14 +11,15 @@ export function ReviewMediaCard({ businessId, row, canEdit, copyApproved, onOpen
 }) {
   const uid = useId(), outcome = useRef<HTMLParagraphElement>(null), controller = useRef<AbortController | null>(null);
   const [preview, setPreview] = useState<{ kind: Kind; url: string; captions?: string } | null>(null);
-  const [busy, setBusy] = useState(false), [error, setError] = useState(""), [message, setMessage] = useState(""), [reviewed, setReviewed] = useState(false);
+  const [busy, setBusy] = useState(false), [error, setError] = useState(""), [reviewed, setReviewed] = useState(false);
   const endpoint = `/api/businesses/${businessId}`;
   const alreadyApproved = (kind: Kind) => kind === "image" ? row.image?.status === "APPROVED" : kind === "composition" ? row.composition?.approved : row.video?.render?.status === "APPROVED";
   useEffect(() => () => controller.current?.abort(), []);
+  useEffect(() => { if (error) outcome.current?.focus(); }, [error]);
   useEffect(() => () => { if (preview) { URL.revokeObjectURL(preview.url); if (preview.captions) URL.revokeObjectURL(preview.captions); } }, [preview]);
   async function show(kind: Kind) {
     controller.current?.abort(); const abort = new AbortController(); controller.current = abort;
-    setBusy(true); setError(""); setMessage(""); setPreview(null); setReviewed(false);
+    setBusy(true); setError(""); setPreview(null); setReviewed(false);
     const path = kind === "image" ? `/images/${row.image!.id}` : kind === "composition" ? `/compositions?export=${encodeURIComponent(row.composition!.id)}&placement=square&format=png&preview=true` : `/video/${row.video!.render!.id}?format=mp4&download=false`;
     try {
       const response = await fetch(endpoint + path, { signal: abort.signal });
@@ -30,7 +31,7 @@ export function ReviewMediaCard({ businessId, row, canEdit, copyApproved, onOpen
   }
   async function act(kind: Kind, approve: boolean) {
     if (!canEdit || busy || approve && (!reviewed || preview?.kind !== kind || alreadyApproved(kind))) return;
-    setBusy(true); setError(""); setMessage("");
+    setBusy(true); setError("");
     const path = kind === "image" ? "images" : kind === "composition" ? "compositions" : "video";
     const body = kind === "image" ? { action: approve ? "approve" : "reject", generationId: row.image!.id, ...(approve ? { fidelityReviewed: true } : {}) }
       : kind === "composition" ? { action: "approve", rendererVersion: STATIC_RENDERER_VERSION, itemId: row.itemId, version: row.composition!.version }
@@ -39,14 +40,15 @@ export function ReviewMediaCard({ businessId, row, canEdit, copyApproved, onOpen
       const response = await fetch(`${endpoint}/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const data = await response.json(); if (!response.ok) throw Error(data.error);
       const notice = approve ? "This exact saved version was approved. Nothing was published." : "Saved version rejected. No regeneration or credit charge.";
-      setMessage(notice); setPreview(null); setReviewed(false); onChange(notice);
+      // The inbox owns success focus because this card is replaced on refresh.
+      setPreview(null); setReviewed(false); onChange(notice);
     } catch (e) { setError(e instanceof Error ? e.message : "Unable to save review."); }
-    finally { setBusy(false); requestAnimationFrame(() => outcome.current?.focus()); }
+    finally { setBusy(false); }
   }
   const labels = { image: "artwork", composition: "layout", video: "video" };
   return <section className="panel review-media" aria-labelledby={`${uid}-title`} aria-busy={busy}>
     <h3 id={`${uid}-title`}>Saved images & video</h3>
-    <p ref={outcome} tabIndex={-1} role={error ? "alert" : "status"} className={error ? "error" : ""}>{error || message}</p>
+    <p ref={outcome} tabIndex={-1} role="alert" className="error">{error}</p>
     {!row.image && !row.composition && !row.video && <p>No media has been made for this creative yet. The copy preview above is not a finished image.</p>}
     <div className="review-media-status">
       {row.image && <p>Artwork v{row.image.version} · {row.image.current ? row.image.status.toLowerCase().replaceAll("_", " ") : "source changed — review in Asset studio"}</p>}

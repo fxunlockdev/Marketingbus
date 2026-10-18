@@ -8,6 +8,8 @@ const db = new PrismaClient();
 test.afterAll(async () => db.$disconnect());
 const headers = { Origin: "http://127.0.0.1:3000" };
 test("one asset studio preserves format drafts and reviews exact media by destination", async ({ page }) => {
+  const browserSession = await page.context().newCDPSession(page);
+  await browserSession.send("Emulation.setCPUThrottlingRate", { rate: 4 });
   const email = `unified-studio-${crypto.randomUUID()}@example.test`;
   let organizationId: string | undefined;
   try {
@@ -38,8 +40,8 @@ test("one asset studio preserves format drafts and reviews exact media by destin
     await expect(card.getByRole("button", { name: "Approve saved layout", exact: true })).toBeDisabled();
     await card.getByLabel("I inspected this saved image", { exact: false }).check();
     await card.getByRole("button", { name: "Approve saved layout", exact: true }).click();
-    await expect(page.getByRole("status").filter({ hasText: "This exact saved version was approved" })).toBeFocused();
     await expect(card.getByText(/approval recorded — preview rechecks assets/)).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: "This exact saved version was approved" })).toBeFocused();
     await card.getByRole("button", { name: "Edit images & design", exact: true }).click();
     await expect(page.getByLabel("Creative", { exact: true })).toHaveValue(items[0].id);
     await expect(page.getByLabel("Approved creative", { exact: true })).toHaveValue(items[0].id);
