@@ -1,0 +1,13 @@
+# Production worker scheduling
+
+Runtime `studio-v27-fair-worker` replaces early-loop continuation with one sequential attempt per enabled workflow per cycle. Continuous copy work no longer skips social publishing, reconciliation, metrics or website intake. Continuous clip normalization no longer skips approved motion rendering. Existing global/daily budgets, CPU leases, current-role/approval checks and single-submission policies still govern each worker.
+
+Every workflow has its own failure boundary. A failed brand, image, payment, recovery or social operation records only its code-owned lane label and does not prevent independent lanes from running. This is not a generic provider retry mechanism: uncertain external writes stay governed by the existing durable job/reconciliation contracts. Raw errors, tokens, URLs and content are not logged by the scheduler.
+
+Readiness is established at the beginning of each cycle and refreshed between lanes when at least 30 seconds have elapsed. A readiness/database failure stops the cycle and makes health unavailable. There is no background heartbeat timer masking a stuck operation. A single genuinely stuck lane can still exceed the 120-second health deadline; independent process/container supervision remains an operational requirement, not something this scheduler certifies.
+
+Shutdown is checked before and after readiness and before each lane. An already-running bounded operation may finish; no later lane starts. The process removes its heartbeat and closes the database/health server. There is no extra five-second sleep after shutdown. Existing hard-stop behavior remains.
+
+The scheduler does not introduce parallel paid jobs or new infrastructure. Fast/empty cycles still have a five-second delay. A cycle containing slow provider/media work may take longer; this is not a precise execution-time SLA. Retention remains bounded background work with existing object leases/tombstones; full per-lane process isolation, metrics/alerts and load/chaos acceptance remain unfinished.
+
+Verification includes deterministic tests for busy/failing lanes, disabled paid work, changing readiness, no overlapping mutations, cancellation and clean error projection. A local-only child-process test launches the actual production entrypoint with no inherited supplier/storage credentials and every execution flag disabled, verifies HTTP health and the persisted runtime heartbeat, then sends SIGTERM and verifies a clean exit and heartbeat removal. It does not execute live provider work or prove production load capacity.

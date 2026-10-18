@@ -90,6 +90,8 @@ Required internal work: mixed image/video planning, broader media/job cancellati
 
 ## Module 7 Production readiness
 
+Current source adds a fair sequential worker cycle with per-lane error isolation, between-lane readiness refresh and graceful stop checks. Busy copy/clip queues no longer skip social/intake/motion lanes. Real local worker startup, health, disabled execution and clean shutdown are tested. See [worker scheduling](WORKER-SCHEDULING.md). Full operational isolation, alerts and load/chaos testing remain separate gates.
+
 Implemented locally: invitation-aware registration, in-page existing-account sign-in and explicit acceptance. New users receive only the invited workspace role and no new wallet or credits. The one-use emailed token verifies the exact new address; it cannot overwrite an existing account or bypass MFA. Revocation, expiry and inviter authority are checked transactionally. Tokens remain in page memory after the URL fragment is removed. Reloading requires reopening the original email link.
 
 Added and verified locally and in CI: repeatable isolated PostgreSQL dump/restore rehearsal with fresh synthetic databases, full schema/row fingerprints, tenant constraints, ledger/payment uniqueness, idempotent settlement, refund debt, uncertain-state preservation and retained/missing-key checks. It is wired into CI and cleans only its own disposable databases. The production recovery runbook keeps cutover, object recovery, identity quarantine and external reconciliation as explicit gates. See [database recovery](DATABASE-RECOVERY.md).

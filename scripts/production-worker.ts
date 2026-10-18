@@ -6,6 +6,7 @@ import { createDuePlan, runOneWeeklyDraft } from "../src/lib/workflows/planning"
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { heartbeat, HEARTBEAT_TTL_MS } from "../src/lib/production/readiness";
+import { runWorkerCycle, type WorkerStep } from "../src/lib/production/cycle";
 import { purgeExpiredAssets } from "../src/lib/assets/service";
 import { purgeCompositionExports } from "../src/lib/composition/exports";
 import { assetStore } from "../src/lib/assets/storage";
@@ -25,6 +26,43 @@ let stopping = false;
 let lastHealthyAt = 0;
 let lastRetentionCheck = 0;
 const instance = process.env.RAILWAY_REPLICA_ID || randomUUID();
+const steps: WorkerStep[] = [
+  { name: "copy-recovery", run: recoverExpiredLeases },
+  { name: "brand-recovery", run: recoverBrandAnalysisLeases },
+  { name: "image-recovery", run: recoverImageLeases },
+  { name: "motion-recovery", run: recoverMotionLeases },
+  { name: "clip-recovery", run: recoverClipLeases },
+  { name: "shot-recovery", run: recoverShotGenerations },
+  { name: "social-recovery", run: recoverSocialLeases },
+  { name: "payments", run: processOnePayment },
+  { name: "weekly-plan", run: createDuePlan },
+  { name: "weekly-draft", enabled: paid => paid, run: runOneWeeklyDraft },
+  { name: "retention", run: async () => {
+    if (Date.now() - lastRetentionCheck <= 300000) return;
+    lastRetentionCheck = Date.now();
+    await expireIdentityArtifacts();
+    await expireSocialOAuth();
+    await expireSocialAccountData();
+    if (process.env.ASSET_S3_ENDPOINT) {
+      const store = assetStore();
+      void purgeExpiredAssets(store).catch(() => console.error("Asset retention check failed; retry remains queued."));
+      void purgeCompositionExports(store).catch(() => console.error("Export retention check failed; private tombstones retained for retry."));
+      void purgeMotion(videoStore()).catch(() => console.error("Motion retention check failed; private tombstones retained for retry."));
+      void purgeClips(videoStore()).catch(() => console.error("Clip retention check failed; private tombstones retained for retry."));
+    }
+  } },
+  { name: "email", enabled: () => process.env.EMAIL_DELIVERY_ENABLED === "true", run: runOneEmail },
+  { name: "brand", enabled: paid => paid, run: runOneBrandAnalysis },
+  { name: "image", enabled: paid => paid, run: runOneImage },
+  { name: "shot", run: runOneShotGeneration },
+  { name: "clip", enabled: () => process.env.MOTION_RENDERING_ENABLED === "true", run: runOneClip },
+  { name: "motion", enabled: () => process.env.MOTION_RENDERING_ENABLED === "true", run: runOneMotion },
+  { name: "copy", enabled: paid => paid, run: runOneJob },
+  { name: "social-publish", enabled: () => process.env.SOCIAL_EXECUTION_ENABLED === "true", run: async () => runOnePublication(configuredSocialAdapters()) },
+  { name: "social-reconcile", enabled: () => process.env.SOCIAL_EXECUTION_ENABLED === "true", run: async () => runOneReconciliation(configuredSocialAdapters()) },
+  { name: "social-metrics", enabled: () => process.env.SOCIAL_EXECUTION_ENABLED === "true", run: async () => runOneMetricSync(configuredSocialAdapters()) },
+  { name: "website", enabled: () => process.env.WEBSITE_EXTRACTION_ENABLED === "true", run: runOneSourceJob },
+];
 const server = createServer((req, res) => {
   if (req.url !== "/health") { res.writeHead(404).end(); return; }
   const healthy = !stopping && Date.now() - lastHealthyAt < HEARTBEAT_TTL_MS;
@@ -47,52 +85,13 @@ async function main() {
   console.info("Production worker started; paid execution requires explicit server configuration.");
   while (!stopping) {
     try {
-      await recoverExpiredLeases();
-      await recoverBrandAnalysisLeases();
-      await recoverImageLeases();
-      await recoverMotionLeases();
-      await recoverClipLeases();
-      await recoverShotGenerations();
-      await recoverSocialLeases();
-      const enabled = await heartbeat(instance);
-      lastHealthyAt = Date.now();
-      try { await processOnePayment(); } catch { console.error("Payment processing failed; durable event retained for retry and other job types remain available."); }
-      await createDuePlan();
-      if (enabled) await runOneWeeklyDraft();
-      if (Date.now() - lastRetentionCheck > 300000) {
-        lastRetentionCheck = Date.now();
-        await expireIdentityArtifacts();
-        await expireSocialOAuth();
-        await expireSocialAccountData();
-        // Separate from paid work. Each pass is bounded, and ambiguous deletes retain their tombstone.
-        if (process.env.ASSET_S3_ENDPOINT) {
-          try {
-            const store = assetStore();
-            void purgeExpiredAssets(store).catch(() => console.error("Asset retention check failed; retry remains queued."));
-            void purgeCompositionExports(store).catch(() => console.error("Export retention check failed; private tombstones retained for retry."));
-            void purgeMotion(videoStore()).catch(() => console.error("Motion retention check failed; private tombstones retained for retry."));
-            void purgeClips(videoStore()).catch(() => console.error("Clip retention check failed; private tombstones retained for retry."));
-          } catch { console.error("Private storage configuration is incomplete; other job types remain available."); }
-        }
-      }
-      if (!stopping && process.env.EMAIL_DELIVERY_ENABLED === "true") {
-        try { await runOneEmail(); } catch { console.error("Email delivery check failed; other job types remain available."); }
-      }
-      if (!stopping && enabled) await runOneBrandAnalysis();
-      if (!stopping && enabled) await runOneImage();
-      if (!stopping) await runOneShotGeneration();
-      if (!stopping && process.env.MOTION_RENDERING_ENABLED === "true") {
-        try { if (!await runOneClip()) await runOneMotion(); } catch { console.error("Motion rendering check failed; other workflows remain available."); }
-      }
-      if (!stopping && enabled && await runOneJob()) continue;
-      if (!stopping && process.env.SOCIAL_EXECUTION_ENABLED === "true") {
-        const adapters = configuredSocialAdapters();
-        await runOnePublication(adapters);
-        await runOneReconciliation(adapters);
-        await runOneMetricSync(adapters);
-      }
-      if (!stopping && process.env.WEBSITE_EXTRACTION_ENABLED === "true" && await runOneSourceJob()) continue;
-    } catch { console.error("Production worker check failed; no automatic provider retry."); }
+      await runWorkerCycle(steps, {
+        heartbeat: async () => { const enabled = await heartbeat(instance); lastHealthyAt = Date.now(); return enabled; },
+        stopping: () => stopping,
+        failed: name => console.error(`Worker lane ${name} failed; other lanes remain available. No automatic provider resubmission.`),
+      });
+    } catch { lastHealthyAt = 0; console.error("Worker readiness check failed; cycle stopped without provider retries."); }
+    if (stopping) break;
     await new Promise(resolve => setTimeout(resolve, 5000));
   }
   await db.workerHeartbeat.deleteMany({ where: { id: instance } });
