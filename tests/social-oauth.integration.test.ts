@@ -5,6 +5,8 @@ import { beginSocialOAuth, cancelSocialOAuth, chooseSocialAccount, completeSocia
 import { openSecret } from "../src/lib/secrets";
 import { createLinkedInOAuthAdapter } from "../src/lib/social/linkedin-oauth";
 import { linkedInFixture } from "./helpers/linkedin";
+import { metaFixture } from "./helpers/meta";
+import { createMetaOAuthAdapter } from "../src/lib/social/meta-oauth";
 const local = process.env.TEST_DATABASE_URL;
 if (local && (process.env.DATABASE_URL !== local || !["localhost", "127.0.0.1"].includes(new URL(local).hostname))) throw Error("Local test DB required");
 const suite = local ? describe : describe.skip;
@@ -42,6 +44,22 @@ suite("session-bound social authorization", () => {
     return { scope, adapter, adapters, exchange, begin };
   }
   it("leaves unconfigured providers disabled", () => expect(configuredSocialOAuthAdapters()).toEqual({}));
+  it.each(["Facebook", "Instagram"] as const)("completes %s confidential authorization with explicit selection and encrypted storage", async provider => {
+    const f = await fixture(), transport = metaFixture(provider), adapters = { [provider]: createMetaOAuthAdapter(provider, transport.config, transport.fetcher) };
+    const url = new URL((await beginSocialOAuth(f.scope, provider, adapters)).authorizationUrl), state = url.searchParams.get("state")!;
+    expect(url.origin).toBe("https://www.facebook.com"); expect(url.searchParams.has("code_challenge")).toBe(false); expect(url.searchParams.get("scope")).toContain(",");
+    const flow = await db.socialOAuthFlow.findUniqueOrThrow({ where: { stateHash: createHash("sha256").update(state).digest("hex") } });
+    expect(flow).toMatchObject({ authentication: "META_CONFIDENTIAL", encryptedVerifier: null });
+    await expect(db.socialOAuthFlow.update({ where: { id: flow.id }, data: { provider: "LinkedIn" } })).rejects.toThrow(/authentication_check/);
+    const params = new URLSearchParams({ state, code: "local-code" });
+    await expect(completeSocialOAuth("other-session", provider, params, adapters)).rejects.toThrow(/does not match/); expect(transport.fetcher).not.toHaveBeenCalled();
+    await completeSocialOAuth(f.scope.sessionId, provider, params, adapters);
+    const view = await readSocialConnections(f.scope, adapters); expect(JSON.stringify(view)).not.toContain("local-page-token");
+    const connected = await chooseSocialAccount(f.scope, flow.id, view.flows[0].choices[0].choiceId, adapters), stored = await db.socialConnection.findUniqueOrThrow({ where: { id: connected.id } });
+    expect(stored.externalAccountId).toBe(provider === "Facebook" ? "789" : "987");
+    expect(openSecret(stored.encryptedToken, `social:${f.scope.organizationId}:${f.scope.businessId}:${stored.id}`)).toBe("local-page-token");
+    await expect(completeSocialOAuth(f.scope.sessionId, provider, params, adapters)).rejects.toThrow(/already used/);
+  });
   it("completes the LinkedIn web flow through explicit selection and encrypted tenant-bound storage", async () => {
     const f = await fixture(), transport = linkedInFixture();
     const adapters = { LinkedIn: createLinkedInOAuthAdapter(transport.config, transport.fetcher) };

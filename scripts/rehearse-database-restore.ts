@@ -77,11 +77,12 @@ async function main() {
     await source.billingRefundOperation.create({ data: { id: "synthetic-refund", paymentId: payment.id, organizationId: a.id, amountMinor: 1000, operatorId: "rehearsal", evidence: "synthetic receipt", status: "NEEDS_RECONCILIATION" } });
     phase = "encrypted connection fixtures";
     const connectionId = randomUUID(), context = `social:${a.id}:${business.id}:${connectionId}`, plaintext = "synthetic-not-a-provider-token";
-    await source.socialConnection.create({ data: { id: connectionId, organizationId: a.id, businessId: business.id, provider: "Instagram", status: "DISCONNECTED", externalAccountId: "synthetic", label: "Synthetic disconnected fixture", encryptedToken: sealSecret(plaintext, context), permissions: [] } });
+    await source.socialConnection.create({ data: { id: connectionId, organizationId: a.id, businessId: business.id, provider: "Instagram", status: "DISCONNECTED", externalAccountId: "synthetic", label: "Synthetic disconnected fixture", encryptedToken: sealSecret(plaintext, context), permissions: [], dataSnapshot: { fixture: "saved-account-data", followers: null }, dataFetchedAt: new Date(), dataAttemptedAt: new Date() } });
     phase = "brand and identity fixtures";
     await source.knowledgeSource.create({ data: { businessId: business.id, organizationId: a.id, kind: "TEXT", title: "Fixture evidence", body: "Only synthetic facts.", sha256: archiveDigest(Buffer.from("Only synthetic facts.")), status: "APPROVED", createdBy: user.id } });
     await source.brandAsset.create({ data: { organizationId: a.id, businessId: business.id, objectKey: "synthetic/not-an-object", label: "Metadata only, no bucket object", purpose: "logo", sha256: "a".repeat(64), bytes: 3, width: 1, height: 1, uploadedBy: user.id, rightsConfirmedAt: new Date(), status: "APPROVED", approvedForGeneration: true } });
     await source.session.create({ data: { id: "synthetic-session-hash", userId: user.id, expiresAt: new Date(Date.now() + 60000) } });
+    await source.socialOAuthFlow.create({ data: { id: "synthetic-meta-flow", organizationId: a.id, businessId: business.id, actorId: user.id, sessionId: "synthetic-session-hash", provider: "Facebook", authentication: "META_CONFIDENTIAL", stateHash: "synthetic-meta-state", configurationHash: "synthetic-config", expiresAt: new Date(Date.now() + 60000) } });
     await source.emailOutbox.create({ data: { id: "synthetic-email", userId: user.id, kind: "VERIFY_EMAIL", encryptedPayload: sealSecret("synthetic message", `email:synthetic-email:${user.id}`), expiresAt: new Date(Date.now() + 60000) } });
     phase = "backup checkpoint";
     const before = await recoverySnapshot(source), dumpStarted = Date.now();
@@ -99,6 +100,8 @@ async function main() {
     const restoreMs = Date.now() - restoreStarted;
     phase = "schema and row verification";
     assertSnapshot(before, await recoverySnapshot(target));
+    check((await target.socialOAuthFlow.findUniqueOrThrow({ where: { id: "synthetic-meta-flow" } })).authentication === "META_CONFIDENTIAL", "Meta authorization mode not preserved.");
+    check((await target.socialConnection.findUniqueOrThrow({ where: { id: connectionId } })).dataSnapshot !== null, "Saved account data not preserved.");
     check((await target.business.findUniqueOrThrow({ where: { id: business.id } })).name === "Restore business", "Backup checkpoint not preserved.");
     check(await target.business.count({ where: { id: business.id, organizationId: b.id } }) === 0, "Tenant-scoped read failed.");
     await mustReject(() => target.knowledgeSource.create({ data: { businessId: business.id, organizationId: b.id, title: "Must reject", kind: "TEXT", createdBy: user.id } }));

@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
+import { SocialAccountData } from "./social-account-data";
 type View = {
-  canManage: boolean; enabledProviders: string[];
-  connections: { id: string; provider: string; label: string; status: string; expiresAt: string | null }[];
+  canManage: boolean; enabledProviders: string[]; dataEnabledProviders: string[];
+  connections: { id: string; provider: string; label: string; status: string; expiresAt: string | null; dataFetchedAt: string | null; dataAttemptedAt: string | null; dataLeaseUntil: string | null; dataErrorCode: string | null }[];
   flows: { id: string; provider: string; status: string; expiresAt: string; choices: { choiceId: string; label: string }[] }[];
 };
 export function SocialConnections({ businessId }: { businessId: string }) {
@@ -44,6 +45,7 @@ export function SocialConnections({ businessId }: { businessId: string }) {
       <p className="muted">X and YouTube are planned destinations and are not available yet.</p>
       {view.connections.length === 0 ? <p>No accounts connected for this business.</p> : <ul>{view.connections.map(account => <li key={account.id}>
         {account.provider} · {account.label} · {account.status === "CONNECTED" && account.expiresAt && new Date(account.expiresAt) <= new Date() ? "Reconnect required" : account.status.toLowerCase()}
+        <SocialAccountData businessId={businessId} account={account} canManage={view.canManage} enabled={view.dataEnabledProviders?.includes(account.provider) ?? false} onChanged={reload} />
       </li>)}</ul>}
       {view.flows.map(flow => <article key={flow.id} className="panel" aria-label={`${flow.provider} connection request`}>
         <h3>{flow.provider} connection request</h3>

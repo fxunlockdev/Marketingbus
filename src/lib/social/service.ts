@@ -1,6 +1,6 @@
 import { payloadHash } from "./integrity";
 import { z } from "zod";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { AppError } from "../http";
 import { sealSecret } from "../secrets";
@@ -105,6 +105,7 @@ export async function saveVerifiedConnectionInTransaction(tx: Prisma.Transaction
       `social:${scope.organizationId}:${scope.businessId}:${id}`
     );
     const data = {
+      dataSnapshot: Prisma.DbNull, dataFetchedAt: null, dataLeaseId: null, dataLeaseUntil: null, dataErrorCode: null,
       provider: input.provider,
       externalAccountId: input.externalAccountId,
       label: input.label,
@@ -171,7 +172,7 @@ export async function manageSocial(
         await assertNoPublicationInFlight(tx, scope.businessId);
         await tx.socialConnection.update({
           where: { id: connection.id },
-          data: { status: "DISCONNECTED", encryptedToken: "" },
+          data: { status: "DISCONNECTED", encryptedToken: "", dataSnapshot: Prisma.DbNull, dataFetchedAt: null, dataLeaseId: null, dataLeaseUntil: null, dataErrorCode: null },
         });
         await tx.socialPublication.updateMany({
           where: { connectionId: connection.id, status: "SCHEDULED" },

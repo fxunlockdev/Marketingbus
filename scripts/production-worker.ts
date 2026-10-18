@@ -19,6 +19,7 @@ import { runOneEmail } from "../src/lib/identity/worker";
 import { expireIdentityArtifacts } from "../src/lib/identity/service";
 import { configuredSocialAdapters } from "../src/lib/social/contracts";
 import { expireSocialOAuth } from "../src/lib/social/oauth";
+import { expireSocialAccountData } from "../src/lib/social/account-data-service";
 import { runOnePublication, runOneMetricSync, recoverSocialLeases, runOneReconciliation } from "../src/lib/social/worker";
 let stopping = false;
 let lastHealthyAt = 0;
@@ -62,6 +63,7 @@ async function main() {
         lastRetentionCheck = Date.now();
         await expireIdentityArtifacts();
         await expireSocialOAuth();
+        await expireSocialAccountData();
         // Separate from paid work. Each pass is bounded, and ambiguous deletes retain their tombstone.
         if (process.env.ASSET_S3_ENDPOINT) {
           try {

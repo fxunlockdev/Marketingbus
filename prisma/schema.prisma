@@ -633,11 +633,18 @@ model SocialConnection {
   permissions String[]
   status String @default("CONNECTED")
   expiresAt DateTime?
+  dataSnapshot Json?
+  dataFetchedAt DateTime?
+  dataAttemptedAt DateTime?
+  dataLeaseId String?
+  dataLeaseUntil DateTime?
+  dataErrorCode String?
   createdAt DateTime @default(now())
   business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
   publications SocialPublication[]
   @@unique([id, businessId, organizationId])
   @@unique([businessId, provider, externalAccountId])
+  @@index([dataFetchedAt])
 }
 
 model SocialPublication {

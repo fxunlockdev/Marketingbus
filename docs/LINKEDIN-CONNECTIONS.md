@@ -2,7 +2,7 @@
 
 ## Scope and release boundary
 
-The official server-side connection adapter exchanges a one-use authorization code, introspects the access token, discovers approved company-page administrator relationships and resolves each page's name. The existing session/business-scoped workflow then presents explicit account selection and stores the selected token encrypted. It does not publish content, transfer media, fetch performance metrics, refresh tokens or revoke authorization at LinkedIn. Those transports and live acceptance remain separate work. Personal profiles, showcase pages and non-administrator roles are not supported by this release.
+The official server-side connection adapter exchanges a one-use authorization code, introspects the access token, discovers approved company-page administrator relationships and resolves each page's name. The existing session/business-scoped workflow then presents explicit account selection and stores the selected token encrypted. A separate gated [account-data adapter](SOCIAL-ACCOUNT-DATA.md) now reads recent published posts and available lifetime organic company statistics. Neither adapter publishes content, transfers media, refreshes tokens or revokes authorization at LinkedIn. Per-publication metric ingestion and live acceptance remain separate work. Personal profiles, showcase pages and non-administrator roles are not supported by this release.
 
 No provider was enabled or contacted during automated verification. Tests inject HTTP responses into the real adapter; no fixture adapter can be enabled by a production environment variable.
 
@@ -17,7 +17,7 @@ Keep `LINKEDIN_CONNECTIONS_ENABLED=false` until approved app access and a design
 
 Register the exact HTTPS callback `<APP_ORIGIN>/api/social/linkedin/callback` with the app. The requested permissions are `r_organization_admin`, `w_organization_social` and `r_organization_social`; approval for these must be verified in the LinkedIn developer application. There is no personal profile/email request. Enabling this connection flag does not enable `SOCIAL_EXECUTION_ENABLED` or register a publishing adapter.
 
-Use LinkedIn's confidential web authorization-code flow with a client secret. Its separately documented native PKCE flow is not assumed to support this web redirect. The shared workflow still uses S256 by default for other adapters; confidential mode is code-restricted to LinkedIn's exact authorization endpoint. There is no runtime downgrade after an error. State remains random, hashed, single-use and bound to the initiating session, business and provider.
+Use LinkedIn's confidential web authorization-code flow with a client secret. Its separately documented native PKCE flow is not assumed to support this web redirect. The shared workflow still uses S256 by default; LinkedIn confidential mode is code-restricted to LinkedIn's exact authorization endpoint, and Meta has a separate restricted mode. There is no runtime downgrade after an error. State remains random, hashed, single-use and bound to the initiating session, business and provider.
 
 ## Verification and limits
 

@@ -9,6 +9,7 @@ import { socialProvider } from "./contracts";
 import { saveVerifiedConnectionInTransaction } from "./service";
 import { assertWorkspaceMfa } from "../identity/workspace-security";
 import { createLinkedInOAuthAdapter, LINKEDIN_AUTHORIZATION_ENDPOINT } from "./linkedin-oauth";
+import { createMetaOAuthAdapter, metaEnvironment } from "./meta-oauth";
 
 type Provider = z.infer<typeof socialProvider>;
 export type OAuthScope = Scope & { sessionId: string };
@@ -27,23 +28,29 @@ const configSchema = z.object({
   // Configurations are code-owned, never submitted by a customer. No implicit grant or silent PKCE downgrade.
   version: z.string().min(1).max(80), clientId: z.string().min(1).max(200),
   authorizationEndpoint: z.url(), scopes: z.array(z.string().regex(/^[a-zA-Z0-9_.:-]{1,100}$/)).min(1).max(30),
-  authentication: z.enum(["S256", "LINKEDIN_CONFIDENTIAL"]).optional(),
+  authentication: z.enum(["S256", "LINKEDIN_CONFIDENTIAL", "META_CONFIDENTIAL"]).optional(),
 }).strict();
 export interface SocialOAuthAdapter {
   config: z.infer<typeof configSchema>;
   // Must verify token audience/scopes and management rights for every returned account, with bounded I/O.
-  // Transport receives secrets only here, never in a URL or a log. Returned tokens stay encrypted server-side.
+  // Secrets stay server-side. Provider-required query credentials must never be logged or returned to a browser.
   exchange(input: { code: string; verifier: string; redirectUri: string; signal: AbortSignal }): Promise<unknown>;
 }
 export type SocialOAuthAdapters = Partial<Record<Provider, SocialOAuthAdapter>>;
 export function configuredSocialOAuthAdapters(): SocialOAuthAdapters {
+  const adapters: SocialOAuthAdapters = {};
   // No fixture or generic arbitrary-URL adapter can be enabled through environment variables.
   if (process.env.LINKEDIN_CONNECTIONS_ENABLED === "true") {
     try {
-      return { LinkedIn: createLinkedInOAuthAdapter({ clientId: process.env.LINKEDIN_CLIENT_ID || "", clientSecret: process.env.LINKEDIN_CLIENT_SECRET || "", apiVersion: process.env.LINKEDIN_API_VERSION || "", verifiedUntil: process.env.LINKEDIN_API_VERIFIED_UNTIL || "" }) };
+      adapters.LinkedIn = createLinkedInOAuthAdapter({ clientId: process.env.LINKEDIN_CLIENT_ID || "", clientSecret: process.env.LINKEDIN_CLIENT_SECRET || "", apiVersion: process.env.LINKEDIN_API_VERSION || "", verifiedUntil: process.env.LINKEDIN_API_VERIFIED_UNTIL || "" });
     } catch { /* Missing/expired operator verification must leave the destination disabled. */ }
   }
-  return {};
+  for (const provider of ["Facebook", "Instagram"] as const) {
+    if (process.env[`${provider.toUpperCase()}_CONNECTIONS_ENABLED`] === "true") {
+      try { adapters[provider] = createMetaOAuthAdapter(provider, metaEnvironment()); } catch { /* Disabled until complete/current. */ }
+    }
+  }
+  return adapters;
 }
 function configuration(provider: Provider, adapters: SocialOAuthAdapters) {
   const adapter = adapters[provider];
@@ -53,13 +60,15 @@ function configuration(provider: Provider, adapters: SocialOAuthAdapters) {
     throw new AppError(503, "Destination authorization configuration is invalid.");
   if (config.authentication === "LINKEDIN_CONFIDENTIAL" && (provider !== "LinkedIn" || endpoint.href !== LINKEDIN_AUTHORIZATION_ENDPOINT))
     throw new AppError(503, "Destination authorization configuration is invalid.");
+  if (config.authentication === "META_CONFIDENTIAL" && (!["Facebook", "Instagram"].includes(provider) || !/^https:\/\/www\.facebook\.com\/v[1-9][0-9]?\.0\/dialog\/oauth$/.test(endpoint.href)))
+    throw new AppError(503, "Destination authorization configuration is invalid.");
   const origin = new URL(process.env.APP_ORIGIN || "http://invalid");
   if ((origin.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(origin.hostname)) || origin.username || origin.password || origin.search || origin.hash || origin.pathname !== "/")
     throw new AppError(503, "Application origin is not configured safely.");
   const redirectUri = `${origin.origin}/api/social/${provider.toLowerCase()}/callback`;
   return { adapter, config, redirectUri, hash: digest(JSON.stringify({ provider, config, redirectUri, authentication: config.authentication ?? "S256" })) };
 }
-async function authorize(tx: Prisma.TransactionClient, scope: OAuthScope, write = true) {
+export async function authorizeSocialScope(tx: Prisma.TransactionClient, scope: OAuthScope, write = true) {
   // Same order as account/invitation operations; hold these locks through the final write.
   await tx.$queryRaw`SELECT id FROM "User" WHERE id=${scope.actorId} FOR UPDATE`;
   await tx.$queryRaw`SELECT id FROM "Organization" WHERE id=${scope.organizationId} FOR UPDATE`;
@@ -81,9 +90,9 @@ function assertFlow(flow: SocialOAuthFlow | null, scope: OAuthScope) {
 export async function beginSocialOAuth(scope: OAuthScope, rawProvider: unknown, adapters: SocialOAuthAdapters) {
   const provider = socialProvider.parse(rawProvider);
   return db.$transaction(async tx => {
-    await authorize(tx, scope);
+    await authorizeSocialScope(tx, scope);
     const { config, redirectUri, hash } = configuration(provider, adapters);
-    const state = randomBytes(32).toString("base64url"), verifier = config.authentication === "LINKEDIN_CONFIDENTIAL" ? null : randomBytes(32).toString("base64url");
+    const state = randomBytes(32).toString("base64url"), verifier = !config.authentication || config.authentication === "S256" ? randomBytes(32).toString("base64url") : null;
     const id = randomUUID();
     // Replacing this session's older requests is explicit and keeps the pending-secret footprint bounded.
     await tx.socialOAuthFlow.updateMany({ where: { businessId: scope.businessId, sessionId: scope.sessionId, provider, status: { in: active } }, data: { status: "CANCELLED", ...erased } });
@@ -91,7 +100,7 @@ export async function beginSocialOAuth(scope: OAuthScope, rawProvider: unknown, 
       encryptedVerifier: verifier ? sealSecret(verifier, `${context({ ...scope, id })}:verifier`) : null, expiresAt: new Date(Date.now() + 600000) } });
     const url = new URL(config.authorizationEndpoint);
     url.search = new URLSearchParams({ client_id: config.clientId, response_type: "code", redirect_uri: redirectUri,
-      scope: config.scopes.join(" "), state }).toString();
+      scope: config.scopes.join(config.authentication === "META_CONFIDENTIAL" ? "," : " "), state }).toString();
     if (verifier) {
       url.searchParams.set("code_challenge", createHash("sha256").update(verifier).digest("base64url"));
       url.searchParams.set("code_challenge_method", "S256");
@@ -107,7 +116,7 @@ export async function completeSocialOAuth(sessionId: string, rawProvider: unknow
   if (!initial || initial.sessionId !== sessionId || initial.provider !== provider) throw new AppError(400, "Connection request does not match this session or destination.");
   const scope = { businessId: initial.businessId, organizationId: initial.organizationId, actorId: initial.actorId, sessionId };
   const claimed = await db.$transaction(async tx => {
-    await authorize(tx, scope);
+    await authorizeSocialScope(tx, scope);
     const flow = assertFlow(await tx.socialOAuthFlow.findUnique({ where: { id: initial.id } }), scope);
     if (flow.status !== "PENDING" || flow.expiresAt <= new Date()) throw new AppError(409, "This connection request was already used or expired. Start again.");
     if (parameters.has("error")) {
@@ -117,7 +126,7 @@ export async function completeSocialOAuth(sessionId: string, rawProvider: unknow
     const current = configuration(provider, adapters);
     if (current.hash !== flow.configurationHash) throw new AppError(409, "Destination settings changed. Start again.");
     const code = z.string().min(1).max(4096).parse(parameters.get("code"));
-    const verifier = current.config.authentication === "LINKEDIN_CONFIDENTIAL" ? "" : openSecret(flow.encryptedVerifier!, `${context(flow)}:verifier`);
+    const verifier = !current.config.authentication || current.config.authentication === "S256" ? openSecret(flow.encryptedVerifier!, `${context(flow)}:verifier`) : "";
     // Claim BEFORE network I/O. Never retry an exchange after an uncertain outcome or worker interruption.
     await tx.socialOAuthFlow.update({ where: { id: flow.id }, data: { status: "EXCHANGING", ...erased } });
     return { flow, current, code, verifier };
@@ -136,7 +145,7 @@ export async function completeSocialOAuth(sessionId: string, rawProvider: unknow
     }
     const candidates = accounts.map(account => ({ ...account, choiceId: randomUUID() }));
     await db.$transaction(async tx => {
-      await authorize(tx, scope);
+      await authorizeSocialScope(tx, scope);
       const flow = assertFlow(await tx.socialOAuthFlow.findUnique({ where: { id: initial.id } }), scope);
       if (flow.status !== "EXCHANGING" || flow.expiresAt <= new Date() || configuration(provider, adapters).hash !== flow.configurationHash) throw Error("Connection context changed");
       await tx.socialOAuthFlow.update({ where: { id: flow.id }, data: { status: "CHOOSING", encryptedCandidates: sealSecret(JSON.stringify(candidates), `${context(flow)}:candidates`) } });
@@ -154,7 +163,7 @@ export const connectionAction = z.discriminatedUnion("action", [
 ]);
 export async function chooseSocialAccount(scope: OAuthScope, flowId: string, choiceId: string, adapters: SocialOAuthAdapters) {
   return db.$transaction(async tx => {
-    await authorize(tx, scope);
+    await authorizeSocialScope(tx, scope);
     const flow = assertFlow(await tx.socialOAuthFlow.findUnique({ where: { id: flowId } }), scope);
     if (flow.status !== "CHOOSING" || flow.expiresAt <= new Date()) throw new AppError(409, "This account selection was already used or expired. Start again.");
     const provider = socialProvider.parse(flow.provider), current = configuration(provider, adapters);
@@ -172,7 +181,7 @@ export async function chooseSocialAccount(scope: OAuthScope, flowId: string, cho
 }
 export async function cancelSocialOAuth(scope: OAuthScope, flowId: string) {
   return db.$transaction(async tx => {
-    await authorize(tx, scope);
+    await authorizeSocialScope(tx, scope);
     const flow = assertFlow(await tx.socialOAuthFlow.findUnique({ where: { id: flowId } }), scope);
     if (active.includes(flow.status)) await tx.socialOAuthFlow.update({ where: { id: flow.id }, data: { status: "CANCELLED", ...erased } });
     return { ok: true };
@@ -180,9 +189,9 @@ export async function cancelSocialOAuth(scope: OAuthScope, flowId: string) {
 }
 export async function readSocialConnections(scope: OAuthScope, adapters: SocialOAuthAdapters) {
   return db.$transaction(async tx => {
-    const member = await authorize(tx, scope, false), canManage = ["OWNER", "ADMIN"].includes(member.role);
+    const member = await authorizeSocialScope(tx, scope, false), canManage = ["OWNER", "ADMIN"].includes(member.role);
     const connections = await tx.socialConnection.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId }, orderBy: { createdAt: "desc" }, take: 100,
-      select: { id: true, provider: true, label: true, status: true, expiresAt: true } });
+      select: { id: true, provider: true, label: true, status: true, expiresAt: true, dataFetchedAt: true, dataAttemptedAt: true, dataLeaseUntil: true, dataErrorCode: true } });
     const flows = canManage ? await tx.socialOAuthFlow.findMany({ where: { businessId: scope.businessId, sessionId: scope.sessionId, actorId: scope.actorId, expiresAt: { gt: new Date() } }, orderBy: { createdAt: "desc" }, take: 10 }) : [];
     const enabledProviders = socialProvider.options.filter(provider => { try { configuration(provider, adapters); return true; } catch { return false; } });
     return { canManage, connections, enabledProviders, flows: flows.map(flow => {

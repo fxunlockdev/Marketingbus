@@ -1,13 +1,14 @@
 import { rateLimit, requireBusiness, requireSessionId } from "@/lib/auth";
 import { api, readBody } from "@/lib/http";
 import { beginSocialOAuth, cancelSocialOAuth, chooseSocialAccount, configuredSocialOAuthAdapters, connectionAction, readSocialConnections } from "@/lib/social/oauth";
+import { configuredSocialDataAdapters } from "@/lib/social/account-data-adapters";
 type Context = { params: Promise<{ id: string }> };
 async function scope(context: Context) {
   const { id } = await context.params, { user, business } = await requireBusiness(id);
   return { businessId: id, organizationId: business.organizationId, actorId: user.id, sessionId: await requireSessionId() };
 }
 export async function GET(_request: Request, context: Context) {
-  return api(async () => readSocialConnections(await scope(context), configuredSocialOAuthAdapters()));
+  return api(async () => ({ ...await readSocialConnections(await scope(context), configuredSocialOAuthAdapters()), dataEnabledProviders: Object.keys(configuredSocialDataAdapters()) }));
 }
 export async function POST(request: Request, context: Context) {
   return api(async () => {
