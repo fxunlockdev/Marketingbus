@@ -281,7 +281,7 @@ suite("social publishing and analytics isolation", () => {
     await runOnePublication({ Facebook: provider });
     expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", externalPostId: null, errorCode: "SUBMISSION_CONTEXT_CHANGED" });
   });
-  it.each(["credentials", "payload", "publication time"])("discards metrics when %s change in flight", async change => {
+  it.each(["credentials", "payload", "publication time", "brand version", "connection"])("discards metrics when %s change in flight", async change => {
     const ctx = await setup(), provider = adapter();
     const post = await queue(ctx, provider);
     await runOnePublication({ Facebook: provider });
@@ -291,6 +291,11 @@ suite("social publishing and analytics isolation", () => {
       const reading = await original(...args);
       if (change === "credentials") await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { encryptedToken: "changed" } });
       else if (change === "publication time") await db.socialPublication.update({ where: { id: post.id }, data: { publishedAt: new Date(Date.now() - 60000) } });
+      else if (change === "brand version") await db.socialPublication.update({ where: { id: post.id }, data: { brandVersion: 2 } });
+      else if (change === "connection") {
+        const other = await db.socialConnection.create({ data: { organizationId: ctx.scope.organizationId, businessId: ctx.scope.businessId, provider: "Facebook", externalAccountId: "another-account", label: "Other scoped fixture", encryptedToken: "not-used", permissions: [] } });
+        await db.socialPublication.update({ where: { id: post.id }, data: { connectionId: other.id } });
+      }
       else await db.socialPublication.update({ where: { id: post.id }, data: { payload: { caption: "tampered" } } });
       return reading;
     };
