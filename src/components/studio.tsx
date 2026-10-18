@@ -324,7 +324,6 @@ export function Studio({
             >
               <Icon size={17} />
               {title}
-              {title === "Review inbox" && <span className="nav-count">{items.filter(i => i.revisions[0]?.status === "READY").length}</span>}
             </button>
           ))}
         </nav>

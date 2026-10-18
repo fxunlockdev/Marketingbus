@@ -27,6 +27,8 @@ test("one asset studio preserves format drafts and reviews exact media by destin
     await page.goto("/studio");
     await expect(page.getByRole("button", { name: "Design studio", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Video studio", exact: true })).toHaveCount(0);
+    // A copy-only badge must not claim zero when saved media still needs review.
+    await expect(page.getByRole("button", { name: "Review inbox", exact: true }).locator(".nav-count")).toHaveCount(0);
     await page.getByRole("button", { name: "Review inbox", exact: true }).click();
     await expect(page.getByRole("article")).toHaveCount(3);
     const filter = page.getByRole("group", { name: "Filter review by platform" });
