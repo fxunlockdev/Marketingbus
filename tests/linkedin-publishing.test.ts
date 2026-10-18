@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { publishingFixture } from "./helpers/linkedin-publishing";
-import { configuredSocialAdapters } from "../src/lib/social/contracts";
+import { configuredSocialAdapters, MetricSourceChangedError } from "../src/lib/social/contracts";
 describe("LinkedIn verified text publication and per-post metrics", () => {
   afterEach(() => vi.unstubAllEnvs());
   it("fences once, submits only approved text, persists the returned ID and verifies exact read-back", async () => {
@@ -64,16 +64,16 @@ describe("LinkedIn verified text publication and per-post metrics", () => {
     expect(await f.adapter.publish(f.account, f.payload, "request", f.signal())).toEqual({ state: "uncertain" }); expect(f.fetcher).toHaveBeenCalledTimes(2);
   });
   it("maps exact-post organic metrics, separating missing reach and video views", async () => {
-    const f = publishingFixture(); f.replies.splice(2, 2, f.post, f.stats);
-    expect(await f.adapter.metrics(f.account, f.id, f.signal())).toMatchObject({ impressions: 100, engagements: 6, clicks: 4, reach: null, videoViews: null });
+    const f = publishingFixture(); f.replies.splice(2, 2, f.post, f.stats, f.post);
+    expect(await f.adapter.metrics(f.account, f.id, f.signal(), { payload: f.payload, publishedAt: new Date(f.post.publishedAt) })).toMatchObject({ impressions: 100, engagements: 6, clicks: 4, reach: null, videoViews: null });
     expect(new URL(String(f.fetcher.mock.calls[3][0])).searchParams.get("shares")).toBe(`List(${f.id})`);
     expect(String(f.fetcher.mock.calls[3][0])).toContain(`shares=List(${encodeURIComponent(f.id)})`);
   });
   it("uses the exact UGC post filter and matching response identity", async () => {
     const f = publishingFixture(), id = "urn:li:ugcPost:456";
     f.post.id = id;
-    f.replies.splice(2, 2, f.post, { elements: [{ organizationalEntity: f.account.externalAccountId, ugcPost: id, totalShareStatistics: f.stats.elements[0].totalShareStatistics }] });
-    expect(await f.adapter.metrics(f.account, id, f.signal())).toMatchObject({ impressions: 100, engagements: 6 });
+    f.replies.splice(2, 2, f.post, { elements: [{ organizationalEntity: f.account.externalAccountId, ugcPost: id, totalShareStatistics: f.stats.elements[0].totalShareStatistics }] }, f.post);
+    expect(await f.adapter.metrics(f.account, id, f.signal(), { payload: f.payload, publishedAt: new Date(f.post.publishedAt) })).toMatchObject({ impressions: 100, engagements: 6 });
     const url = new URL(String(f.fetcher.mock.calls[3][0]));
     expect(url.searchParams.get("ugcPosts[0]")).toBe(id); expect(url.searchParams.has("shares")).toBe(false);
   });
@@ -88,15 +88,15 @@ describe("LinkedIn verified text publication and per-post metrics", () => {
     expect(f.journal.record).toHaveBeenCalledWith(expect.anything(), f.id);
   });
   it.each(["foreign-post", "foreign-company", "aggregate", "negative-likes", "empty", "denied"])("handles %s without inventing performance evidence", async kind => {
-    const f = publishingFixture(); f.replies.splice(2, 2, f.post, f.stats);
+    const f = publishingFixture(); f.replies.splice(2, 2, f.post, f.stats, f.post);
     if (kind === "foreign-post") f.stats.elements[0].share = "urn:li:share:999";
     if (kind === "foreign-company") f.stats.elements[0].organizationalEntity = "urn:li:organization:999";
     if (kind === "aggregate") f.replies[3] = { elements: [{ organizationalEntity: f.account.externalAccountId, totalShareStatistics: f.stats.elements[0].totalShareStatistics }] };
     if (kind === "negative-likes") f.stats.elements[0].totalShareStatistics.likeCount = -1;
     if (kind === "empty") f.replies[3] = { elements: [] };
     if (kind === "denied") f.replies[3] = new Response("secret", { status: 403 });
-    if (["negative-likes", "empty"].includes(kind)) expect(await f.adapter.metrics(f.account, f.id, f.signal())).toMatchObject({ engagements: null, impressions: kind === "empty" ? null : 100 });
-    else await expect(f.adapter.metrics(f.account, f.id, f.signal())).rejects.toThrow("could not be verified");
+    if (["negative-likes", "empty"].includes(kind)) expect(await f.adapter.metrics(f.account, f.id, f.signal(), { payload: f.payload, publishedAt: new Date(f.post.publishedAt) })).toMatchObject({ engagements: null, impressions: kind === "empty" ? null : 100 });
+    else await expect(f.adapter.metrics(f.account, f.id, f.signal(), { payload: f.payload, publishedAt: new Date(f.post.publishedAt) })).rejects.toThrow("could not be verified");
   });
   it("requires independent configuration and never enables other destinations", () => {
     vi.stubEnv("LINKEDIN_PUBLISHING_ENABLED", "false"); expect(configuredSocialAdapters()).toEqual({});
@@ -105,5 +105,32 @@ describe("LinkedIn verified text publication and per-post metrics", () => {
     vi.stubEnv("SOCIAL_EXECUTION_ENABLED", "false"); expect(configuredSocialAdapters()).toEqual({});
     vi.stubEnv("SOCIAL_EXECUTION_ENABLED", "true");
     vi.stubEnv("LINKEDIN_API_VERIFIED_UNTIL", "2020-01-01T00:00:00Z"); expect(configuredSocialAdapters()).toEqual({});
+  });
+  it.each(["caption before", "caption after", "time before", "time after"])("rejects changed metric source: %s", async change => {
+    const f = publishingFixture(), subject = { payload: { ...f.payload }, publishedAt: new Date(f.post.publishedAt) };
+    const changed = { ...f.post, ...(change.startsWith("caption") ? { commentary: "Edited outside the studio" } : { publishedAt: f.post.publishedAt - 1000 }) };
+    f.replies.splice(2, 2, change.endsWith("before") ? changed : f.post, f.stats, change.endsWith("after") ? changed : f.post);
+    await expect(f.adapter.metrics(f.account, f.id, f.signal(), subject)).rejects.toBeInstanceOf(MetricSourceChangedError);
+    expect(f.fetcher).toHaveBeenCalledTimes(change.endsWith("before") ? 3 : 5);
+    expect(f.journal.begin).not.toHaveBeenCalled();
+  });
+  it.each(["missing", "future", "media", "bad id"])("rejects invalid metric subject %s before network access", async kind => {
+    const f = publishingFixture(), subject = { payload: { ...f.payload }, publishedAt: new Date(f.post.publishedAt) };
+    if (kind === "future") subject.publishedAt = new Date(Date.now() + 60000);
+    if (kind === "media") subject.payload.mediaExportId = "unverified";
+    await expect(f.adapter.metrics(f.account, kind === "bad id" ? "invalid" : f.id, f.signal(), kind === "missing" ? undefined as unknown as typeof subject : subject)).rejects.toThrow("could not be verified");
+    expect(f.fetcher).not.toHaveBeenCalled();
+  });
+  it.each(["media", "ad", "reshare", "private", "draft", "feed"])("invalidates changed distribution or content: %s", async kind => {
+    const f = publishingFixture();
+    const changed = { ...f.post, ...(kind === "media" ? { content: { media: { id: "new-image" } } } : kind === "ad" ? { adContext: {} } : kind === "reshare" ? { reshareContext: {} } : kind === "private" ? { visibility: "CONNECTIONS" } : kind === "draft" ? { lifecycleState: "DRAFT" } : { distribution: { feedDistribution: "NONE" } }) };
+    f.replies.splice(2, 2, changed);
+    await expect(f.adapter.metrics(f.account, f.id, f.signal(), { payload: f.payload, publishedAt: new Date(f.post.publishedAt) })).rejects.toBeInstanceOf(MetricSourceChangedError);
+  });
+  it.each(["denied", "malformed", "wrong author"])("does not permanently invalidate on %s read-back", async kind => {
+    const f = publishingFixture();
+    f.replies.splice(2, 2, kind === "denied" ? new Response("private", { status: 403 }) : kind === "malformed" ? { commentary: "incomplete" } : { ...f.post, author: "urn:li:organization:999" });
+    try { await f.adapter.metrics(f.account, f.id, f.signal(), { payload: f.payload, publishedAt: new Date(f.post.publishedAt) }); throw Error("Expected rejection"); }
+    catch (error) { expect(error).not.toBeInstanceOf(MetricSourceChangedError); expect((error as Error).message).toBe("LinkedIn publication or metrics could not be verified."); }
   });
 });

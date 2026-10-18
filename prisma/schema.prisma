@@ -678,6 +678,7 @@ model SocialPublication {
   nextMetricsAt DateTime?
   metricsLeaseUntil DateTime?
   metricsFailures Int @default(0)
+  metricsInvalidatedAt DateTime?
   errorCode String?
   createdAt DateTime @default(now())
   business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)

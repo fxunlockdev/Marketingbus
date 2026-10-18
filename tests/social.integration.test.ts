@@ -18,7 +18,7 @@ import {
   readSocialDashboard,
   manageLearning,
 } from "../src/lib/social/analytics";
-import type { SocialAdapter } from "../src/lib/social/contracts";
+import { MetricSourceChangedError, type SocialAdapter } from "../src/lib/social/contracts";
 import { payloadHash } from "../src/lib/social/integrity";
 import { resumePublicationLookup } from "../src/lib/social/recovery";
 import { seedLearningEvidence } from "./fixtures/learning";
@@ -226,7 +226,7 @@ suite("social publishing and analytics isolation", () => {
     expect(saved.submissionAdapterVersion).toContain("publish-v1");
     await runOnePublication({ LinkedIn: f.adapter });
     expect(f.fetcher.mock.calls.filter(([url, init]) => url === "https://api.linkedin.com/rest/posts" && init?.method === "POST")).toHaveLength(1);
-    f.replies.push(f.introspection, f.acl, f.post, f.stats);
+    f.replies.push(f.introspection, f.acl, f.post, f.stats, f.post);
     await db.socialPublication.update({ where: { id: post.id }, data: { nextMetricsAt: new Date(Date.now() - 1000) } });
     await runOneMetricSync({ LinkedIn: f.adapter });
     const readings = await db.metricSnapshot.findMany({ where: { publicationId: post.id } });
@@ -281,7 +281,7 @@ suite("social publishing and analytics isolation", () => {
     await runOnePublication({ Facebook: provider });
     expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", externalPostId: null, errorCode: "SUBMISSION_CONTEXT_CHANGED" });
   });
-  it.each(["credentials", "payload"])("discards metrics when %s change in flight", async change => {
+  it.each(["credentials", "payload", "publication time"])("discards metrics when %s change in flight", async change => {
     const ctx = await setup(), provider = adapter();
     const post = await queue(ctx, provider);
     await runOnePublication({ Facebook: provider });
@@ -290,6 +290,7 @@ suite("social publishing and analytics isolation", () => {
     provider.metrics = async (...args) => {
       const reading = await original(...args);
       if (change === "credentials") await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { encryptedToken: "changed" } });
+      else if (change === "publication time") await db.socialPublication.update({ where: { id: post.id }, data: { publishedAt: new Date(Date.now() - 60000) } });
       else await db.socialPublication.update({ where: { id: post.id }, data: { payload: { caption: "tampered" } } });
       return reading;
     };
@@ -314,6 +315,62 @@ suite("social publishing and analytics isolation", () => {
         where: { businessId: ctx.scope.businessId },
       })
     ).toBe(0);
+  });
+  it("invalidates edited LinkedIn evidence without removing receipts or historical observations", async () => {
+    const { ctx, f, post } = await linkedinQueue();
+    await runOnePublication({ LinkedIn: f.adapter });
+    const saved = await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } });
+    await db.metricSnapshot.create({ data: { publicationId: post.id, businessId: post.businessId, organizationId: post.organizationId, observedAt: new Date(), definitionVersion: `linkedin-organic-post-likes-comments-shares-${f.config.apiVersion}-v2`, impressions: 999 } });
+    f.replies.push(f.introspection, f.acl, { ...f.post, commentary: "Externally changed text" });
+    await db.socialPublication.update({ where: { id: post.id }, data: { nextMetricsAt: new Date(Date.now() - 1000) } });
+    expect(await runOneMetricSync({ LinkedIn: f.adapter })).toBe(true);
+    const changed = await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } });
+    expect(changed).toMatchObject({ status: "PUBLISHED", externalPostId: saved.externalPostId, publishedAt: saved.publishedAt, nextMetricsAt: null, metricsLeaseUntil: null, errorCode: "METRICS_SOURCE_CHANGED" });
+    expect(changed.metricsInvalidatedAt).toBeInstanceOf(Date);
+    expect(await db.metricSnapshot.count({ where: { publicationId: post.id } })).toBe(1);
+    expect((await readSocialDashboard(ctx.scope)).summary[0].metrics.impressions.value).toBeNull();
+    expect(await runOneMetricSync({ LinkedIn: f.adapter })).toBe(false);
+    await expect(db.socialPublication.update({ where: { id: post.id }, data: { nextMetricsAt: new Date() } })).rejects.toThrow();
+    await expect(db.socialPublication.update({ where: { id: post.id }, data: { metricsLeaseUntil: new Date() } })).rejects.toThrow();
+    expect(f.fetcher.mock.calls.filter(([url, init]) => url === "https://api.linkedin.com/rest/posts" && init?.method === "POST")).toHaveLength(1);
+  });
+  it.each(["token", "lease", "payload"])("does not invalidate a different context after a %s race", async change => {
+    const ctx = await setup(), provider = adapter(), post = await queue(ctx, provider);
+    await runOnePublication({ Facebook: provider });
+    await db.socialPublication.update({ where: { id: post.id }, data: { nextMetricsAt: new Date(Date.now() - 1000) } });
+    provider.metrics = vi.fn(async () => {
+      if (change === "token") await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { encryptedToken: "changed" } });
+      if (change === "lease") await db.socialPublication.update({ where: { id: post.id }, data: { metricsLeaseUntil: new Date(Date.now() + 900000) } });
+      if (change === "payload") await db.socialPublication.update({ where: { id: post.id }, data: { payload: {} } });
+      throw new MetricSourceChangedError();
+    });
+    await runOneMetricSync({ Facebook: provider });
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ metricsInvalidatedAt: null });
+    expect(await db.metricSnapshot.count({ where: { publicationId: post.id } })).toBe(0);
+  });
+  it("drops invalidated evidence from already-promoted experimental memory without deleting its audit history", async () => {
+    const ctx = await setup(), fixture = await seedLearningEvidence(db, { ...ctx.scope, connectionId: ctx.connection.id, planId: ctx.item.planId });
+    const result = await manageLearning(ctx.scope, { action: "evaluate" }) as { id: string };
+    await manageLearning(ctx.scope, { action: "promote", proposalId: result.id });
+    expect(await db.$transaction(tx => productionMemories(tx, ctx.scope, 1))).toHaveLength(1);
+    await db.socialPublication.update({ where: { id: fixture[0].post.id }, data: { metricsInvalidatedAt: new Date() } });
+    expect(await db.$transaction(tx => productionMemories(tx, ctx.scope, 1))).toHaveLength(0);
+    expect(await db.memory.count({ where: { businessId: ctx.scope.businessId } })).toBe(1);
+    expect(await db.metricSnapshot.count({ where: { businessId: ctx.scope.businessId } })).toBe(10);
+  });
+  it("excludes older LinkedIn readings that did not verify the immutable creative", async () => {
+    const ctx = await setup(), fixture = await seedLearningEvidence(db, { ...ctx.scope, connectionId: ctx.connection.id, planId: ctx.item.planId });
+    await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { provider: "LinkedIn" } });
+    for (const { post } of fixture) {
+      const payload = { ...(post.payload as object), channel: "LinkedIn" };
+      await db.socialPublication.update({ where: { id: post.id }, data: { payload, payloadHash: payloadHash(payload) } });
+    }
+    await db.metricSnapshot.updateMany({ where: { businessId: ctx.scope.businessId }, data: { definitionVersion: "linkedin-organic-post-likes-comments-shares-202610-v1" } });
+    await expect(manageLearning(ctx.scope, { action: "evaluate" })).rejects.toThrow("Insufficient");
+    expect((await readSocialDashboard(ctx.scope)).summary[0].metrics.impressions.value).toBeNull();
+    await db.metricSnapshot.updateMany({ where: { businessId: ctx.scope.businessId }, data: { definitionVersion: "linkedin-organic-post-likes-comments-shares-202610-v2" } });
+    expect((await readSocialDashboard(ctx.scope)).summary[0].metrics.impressions.value).toBe(10000);
+    expect(await manageLearning(ctx.scope, { action: "evaluate" })).toMatchObject({ ok: true });
   });
   it("isolates accounts and records; publishing replays never duplicate", async () => {
     const a = await setup(),
@@ -491,10 +548,11 @@ suite("social publishing and analytics isolation", () => {
     await db.business.update({ where: { id: ctx.scope.businessId }, data: { version: 2 } });
     await expect(manageLearning(ctx.scope, { action: "promote", proposalId: stale.id })).rejects.toThrow("current-brand");
   });
-  it.each(["removed snapshot", "changed count", "changed definition", "tampered payload", "old brand", "disconnected account", "changed hypothesis"])("blocks promotion after %s", async reason => {
+  it.each(["removed snapshot", "changed count", "changed definition", "tampered payload", "old brand", "disconnected account", "changed hypothesis", "invalidated source"])("blocks promotion after %s", async reason => {
     const ctx = await setup(), fixture = await seedLearningEvidence(db, { ...ctx.scope, connectionId: ctx.connection.id, planId: ctx.item.planId });
     const proposal = await manageLearning(ctx.scope, { action: "evaluate" }) as { id: string };
     if (reason === "removed snapshot") await db.metricSnapshot.delete({ where: { id: fixture[0].metric.id } });
+    if (reason === "invalidated source") await db.socialPublication.update({ where: { id: fixture[0].post.id }, data: { metricsInvalidatedAt: new Date() } });
     if (reason === "changed count") await db.metricSnapshot.update({ where: { id: fixture[0].metric.id }, data: { engagements: 51 } });
     if (reason === "changed definition") await db.metricSnapshot.update({ where: { id: fixture[0].metric.id }, data: { definitionVersion: "different" } });
     if (reason === "tampered payload") await db.socialPublication.update({ where: { id: fixture[0].post.id }, data: { payloadHash: "changed" } });

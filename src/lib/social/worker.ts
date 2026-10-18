@@ -7,6 +7,7 @@ import { creativeSchema } from "../production/content";
 import { approvedFactText, evaluateCreative } from "../production/quality";
 import {
   metricReading,
+  MetricSourceChangedError,
   publishedReceipt,
   socialProvider,
   type Account,
@@ -344,6 +345,7 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
   const candidate = await db.socialPublication.findFirst({
     where: {
       status: "PUBLISHED",
+      metricsInvalidatedAt: null,
       externalPostId: { not: null },
       nextMetricsAt: { lte: new Date() },
       OR: [
@@ -363,6 +365,7 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
     where: {
       id: candidate.id,
       status: "PUBLISHED",
+      metricsInvalidatedAt: null,
       externalPostId: candidate.externalPostId,
       nextMetricsAt: { lte: new Date() },
       OR: [
@@ -378,8 +381,9 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
     organizationId: candidate.organizationId,
     actorId: "metrics-worker",
   };
+  let connection: SocialConnection | null = null;
   try {
-    const connection = await db.socialConnection.findUniqueOrThrow({
+    connection = await db.socialConnection.findUniqueOrThrow({
       where: { id: candidate.connectionId },
     });
     if (
@@ -387,11 +391,15 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
       (connection.expiresAt && connection.expiresAt <= new Date())
     )
       throw Error("Connection unavailable");
+    const payload = frozenCopy(candidate.payload, candidate.payloadHash, connection.provider);
+    if (!candidate.publishedAt || candidate.publishedAt > new Date()) throw Error("Publication time unavailable");
+    const observedConnection = connection;
     const reading = metricReading.parse(
       await adapters[socialProvider.parse(connection.provider)]!.metrics(
         account(connection),
         candidate.externalPostId!,
-        AbortSignal.timeout(30000)
+        AbortSignal.timeout(30000),
+        { payload, publishedAt: candidate.publishedAt }
       )
     );
     if (
@@ -402,7 +410,7 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
     await db.$transaction(async (tx) => {
       await lockBusiness(tx, scope);
       const freshConnection = await tx.socialConnection.findUniqueOrThrow({
-        where: { id: connection.id },
+        where: { id: observedConnection.id },
       });
       const post = await tx.socialPublication.findUniqueOrThrow({
         where: { id: candidate.id },
@@ -411,8 +419,8 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
         post.metricsLeaseUntil?.getTime() !== leaseUntil.getTime()
       )
         return;
-      const validPayload = (() => { try { frozenCopy(post.payload, post.payloadHash, connection.provider); return post.payloadHash === candidate.payloadHash; } catch { return false; } })();
-      if (!validPayload || freshConnection.status !== "CONNECTED" || freshConnection.encryptedToken !== connection.encryptedToken || freshConnection.externalAccountId !== connection.externalAccountId || freshConnection.provider !== connection.provider || freshConnection.expiresAt && freshConnection.expiresAt <= new Date() || post.status !== "PUBLISHED" || post.externalPostId !== candidate.externalPostId) {
+      const validPayload = (() => { try { frozenCopy(post.payload, post.payloadHash, observedConnection.provider); return post.payloadHash === candidate.payloadHash; } catch { return false; } })();
+      if (!validPayload || post.metricsInvalidatedAt || freshConnection.status !== "CONNECTED" || freshConnection.encryptedToken !== observedConnection.encryptedToken || freshConnection.externalAccountId !== observedConnection.externalAccountId || freshConnection.provider !== observedConnection.provider || freshConnection.expiresAt && freshConnection.expiresAt <= new Date() || post.status !== "PUBLISHED" || post.externalPostId !== candidate.externalPostId || post.publishedAt?.getTime() !== candidate.publishedAt?.getTime()) {
         await tx.socialPublication.update({ where: { id: post.id }, data: { metricsLeaseUntil: null, nextMetricsAt: null, errorCode: "METRICS_CONTEXT_CHANGED" } });
         return;
       }
@@ -446,7 +454,23 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
         },
       });
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof MetricSourceChangedError && connection) {
+      const observedConnection = connection;
+      await db.$transaction(async tx => {
+        await lockBusiness(tx, scope);
+        const post = await tx.socialPublication.findUniqueOrThrow({ where: { id: candidate.id } });
+        if (post.metricsLeaseUntil?.getTime() !== leaseUntil.getTime()) return;
+        const fresh = await tx.socialConnection.findUniqueOrThrow({ where: { id: observedConnection.id } });
+        const validPayload = (() => { try { frozenCopy(post.payload, post.payloadHash, fresh.provider); return post.payloadHash === candidate.payloadHash; } catch { return false; } })();
+        const sameContext = validPayload && post.status === "PUBLISHED" && post.externalPostId === candidate.externalPostId && post.publishedAt?.getTime() === candidate.publishedAt?.getTime() && fresh.status === "CONNECTED" && fresh.encryptedToken === observedConnection.encryptedToken && fresh.externalAccountId === observedConnection.externalAccountId && fresh.provider === observedConnection.provider && (!fresh.expiresAt || fresh.expiresAt > new Date());
+        await tx.socialPublication.update({ where: { id: post.id }, data: {
+          metricsLeaseUntil: null, nextMetricsAt: null,
+          ...(sameContext ? { metricsInvalidatedAt: new Date(), errorCode: "METRICS_SOURCE_CHANGED" } : { errorCode: "METRICS_CONTEXT_CHANGED" }),
+        } });
+      });
+      return true;
+    }
     await db.socialPublication.updateMany({
       where: { id: candidate.id, metricsLeaseUntil: leaseUntil },
       data: {

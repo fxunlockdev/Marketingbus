@@ -6,7 +6,9 @@ The target is a working multi-tenant marketing product, with only explicitly ide
 
 Every module needs scoped persistence, role checks, usable screens, failure/recovery behavior, cost bounds where applicable, database tests, browser tests and deployment verification. Fixture transports must never be registered as production providers. Customer Connections contains publishing destinations only; AI providers are operator-managed.
 
-Local source changes are not production deployment. Third-party account approval and creative quality cannot be guaranteed by code or a test count. No further paid AI calls are authorized by this plan.
+Local source changes are not production deployment. Third-party account approval and creative quality cannot be guaranteed by code or a test count. This plan itself grants no spending permission. On 18 October the owner separately authorized a one-time $10 combined Gemini/Higgsfield live-verification budget; see the activation checklist. It is not recurring and does not reset existing supplier accounting.
+
+18 October metric-provenance implementation (verification/deployment in progress): LinkedIn statistics are bound to the immutable approved caption and verified publication time, with exact identity/content/distribution reads both before and after the statistics request. Detected source changes permanently stop that publication's polling and exclude its observations from summary reporting, new experiments and already-promoted experimental memory. Published receipts and old observations remain for audit. Permission/transport/malformed-response failures do not masquerade as definitive edits. Legacy LinkedIn v1 readings are not eligible for current summaries or learning. Database constraints prevent polling or leasing invalidated sources. This detects observed drift, not edits made and reverted between polls; it is not an upstream edit-history guarantee. Automatic source re-approval and stopped-poll recovery remain separate work. No provider calls or new publishing capability are enabled by this change.
 
 ## Module 1 Billing and credits
 

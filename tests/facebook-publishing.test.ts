@@ -83,7 +83,7 @@ describe("Facebook Page text publishing transport", () => {
   });
   it("has no metrics mapping, makes no metrics requests and invents no snapshot", async () => {
     const f = fixture(); expect(f.adapter.metricsAvailable).toBe(false);
-    await expect(f.adapter.metrics(f.account, f.id, f.signal())).rejects.toThrow("not implemented"); expect(f.fetcher).not.toHaveBeenCalled();
+    await expect(f.adapter.metrics(f.account, f.id, f.signal(), { payload: f.payload, publishedAt: new Date() })).rejects.toThrow("not implemented"); expect(f.fetcher).not.toHaveBeenCalled();
   });
   it("omits unsafe permalinks without disguising a verified publication as missing", async () => {
     const f = fixture(); f.post.permalink_url = "https://attacker.example/secret";

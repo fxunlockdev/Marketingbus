@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createLinkedInOAuthAdapter, LINKEDIN_SCOPES, type LinkedInOAuthSettings } from "./linkedin-oauth";
 import { socialJson, SocialReadError } from "./provider-http";
-import { publicationPayload, metricReading, type Account, type SocialAdapter, type PublicationPayload, type PublishedReceipt } from "./contracts";
+import { publicationPayload, metricReading, metricSubject, MetricSourceChangedError, type MetricSubject, type Account, type SocialAdapter, type PublicationPayload, type PublishedReceipt } from "./contracts";
 import { submissionJournal, type SubmissionJournal, type SubmissionContext } from "./submission-journal";
 const company = z.string().regex(/^urn:li:organization:[1-9][0-9]{0,15}$/);
 const postId = z.string().regex(/^urn:li:(share|ugcPost):[1-9][0-9]{0,30}$/);
@@ -31,9 +31,12 @@ export function createLinkedInPublishingAdapter(config: LinkedInOAuthSettings, f
     }
     throw failure();
   }
-  async function readPost(account: Account, id: string, signal: AbortSignal, caption?: string): Promise<PublishedReceipt> {
+  async function readPost(account: Account, id: string, signal: AbortSignal, caption?: string, subject?: MetricSubject): Promise<PublishedReceipt> {
     postId.parse(id);
-    const result = z.object({ id: z.literal(id), author: z.literal(account.externalAccountId), lifecycleState: z.literal("PUBLISHED"), commentary: z.string().max(64000), publishedAt: z.number().int().positive().safe(), visibility: z.literal("PUBLIC"), distribution: z.object({ feedDistribution: z.literal("MAIN_FEED") }), content: z.object({}).strict().optional(), reshareContext: z.never().optional(), adContext: z.never().optional() }).parse(await get(account, `posts/${encodeURIComponent(id)}?viewContext=READER`, signal));
+    const result = z.object({ id: z.literal(id), author: z.literal(account.externalAccountId), lifecycleState: z.string().max(100), commentary: z.string().max(64000), publishedAt: z.number().int().positive().safe(), visibility: z.string().max(100), distribution: z.object({ feedDistribution: z.string().max(100) }), content: z.record(z.string(), z.unknown()).optional(), reshareContext: z.record(z.string(), z.unknown()).optional(), adContext: z.record(z.string(), z.unknown()).optional() }).parse(await get(account, `posts/${encodeURIComponent(id)}?viewContext=READER`, signal));
+    const eligible = result.lifecycleState === "PUBLISHED" && result.visibility === "PUBLIC" && result.distribution.feedDistribution === "MAIN_FEED" && Object.keys(result.content ?? {}).length === 0 && result.reshareContext === undefined && result.adContext === undefined;
+    if (subject && (!eligible || result.commentary !== subject.payload.caption || result.publishedAt !== subject.publishedAt.getTime())) throw new MetricSourceChangedError();
+    if (!eligible) throw failure();
     if (caption !== undefined && result.commentary !== caption || result.publishedAt > Date.now() + 60000) throw failure();
     return { externalPostId: id, publishedAt: new Date(result.publishedAt), permalink: null };
   }
@@ -71,9 +74,12 @@ export function createLinkedInPublishingAdapter(config: LinkedInOAuthSettings, f
         return await readPost(account, id, signal, payload.caption);
       } catch { return null; }
     },
-    async metrics(account, externalPostId, signal) {
+    async metrics(account, externalPostId, signal, rawSubject) {
       try {
-        await authorize(account, signal); await readPost(account, externalPostId, signal);
+        const subject = metricSubject.parse(rawSubject);
+        validatePayload(account, subject.payload); postId.parse(externalPostId);
+        if (subject.publishedAt.getTime() <= 0 || subject.publishedAt > new Date()) throw failure();
+        await authorize(account, signal); await readPost(account, externalPostId, signal, undefined, subject);
         const kind = externalPostId.startsWith("urn:li:ugcPost:") ? "ugcPost" : "share";
         const query = new URLSearchParams({ q: "organizationalEntity", organizationalEntity: account.externalAccountId });
         // Preserve documented Rest.li list delimiters while encoding the validated URN.
@@ -86,9 +92,11 @@ export function createLinkedInPublishingAdapter(config: LinkedInOAuthSettings, f
         // or let incomplete/negative components create a positive engagement-learning signal.
         const components = [s?.likeCount, s?.commentCount, s?.shareCount];
         const engagements = components.every(n => n !== undefined && n >= 0) ? components.reduce<number>((sum, n) => sum + n!, 0) : null;
+        // Detect edits during the statistics request as well as edits preceding it.
+        await readPost(account, externalPostId, signal, undefined, subject);
         signal.throwIfAborted(); createLinkedInOAuthAdapter(config);
-        return metricReading.parse({ observedAt: new Date(), definitionVersion: `linkedin-organic-post-likes-comments-shares-${config.apiVersion}-v1`, impressions: s?.impressionCount ?? null, reach: s?.uniqueImpressionsCount ?? null, engagements, clicks: s?.clickCount ?? null, videoViews: null });
-      } catch { throw failure(); }
+        return metricReading.parse({ observedAt: new Date(), definitionVersion: `linkedin-organic-post-likes-comments-shares-${config.apiVersion}-v2`, impressions: s?.impressionCount ?? null, reach: s?.uniqueImpressionsCount ?? null, engagements, clicks: s?.clickCount ?? null, videoViews: null });
+      } catch (error) { if (error instanceof MetricSourceChangedError) throw error; throw failure(); }
     },
   };
 }

@@ -36,6 +36,12 @@ export const metricReading = z
   })
   .strict();
 export type MetricReading = z.infer<typeof metricReading>;
+// Metrics describe this immutable creative, not whichever text happens to be at its URL now.
+export const metricSubject = z.object({ payload: publicationPayload, publishedAt: z.date() }).strict();
+export type MetricSubject = z.infer<typeof metricSubject>;
+export class MetricSourceChangedError extends Error {
+  constructor() { super("Published creative changed; metrics cannot be attributed to the approved version."); }
+}
 export type Account = {
   id: string;
   externalAccountId: string;
@@ -74,7 +80,8 @@ export interface SocialAdapter {
   metrics(
     account: Account,
     externalPostId: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    subject: MetricSubject
   ): Promise<MetricReading>;
 }
 export type SocialAdapters = Partial<Record<SocialProvider, SocialAdapter>>;

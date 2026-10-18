@@ -82,7 +82,7 @@ async function performanceRows(scope: Scope) {
     provider: p.connection.provider,
     format: p.revision.item.format,
     publishedAt: p.publishedAt!,
-    reading: p.metrics[0] ?? null,
+    reading: p.metricsInvalidatedAt || (p.connection.provider === "LinkedIn" && !/^linkedin-organic-post-likes-comments-shares-[0-9]{6}-v2$/.test(p.metrics[0]?.definitionVersion ?? "")) ? null : p.metrics[0] ?? null,
   }));
 }
 export async function readSocialDashboard(scope: Scope) {
@@ -118,6 +118,7 @@ export async function readSocialDashboard(scope: Scope) {
         reconciliationAttempts: true,
         nextReconciliationAt: true,
         metricsFailures: true,
+        metricsInvalidatedAt: true,
         nextMetricsAt: true,
         connection: { select: { label: true, provider: true } },
         revision: {
@@ -141,7 +142,7 @@ export async function readSocialDashboard(scope: Scope) {
     proposals,
     summary: summarizePerformance(rows),
     window:
-      "Latest 500 published posts; latest lifetime snapshot per post. Not a date-range delta.",
+      "Latest 500 published posts; latest eligible lifetime snapshot per post. Changed-source and legacy unverified LinkedIn readings are excluded. Not a date-range delta.",
   };
 }
 export async function manageLearning(scope: Scope, raw: unknown) {

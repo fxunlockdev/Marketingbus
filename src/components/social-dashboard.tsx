@@ -21,6 +21,7 @@ type Dashboard = {
     reconciliationAttempts: number;
     nextReconciliationAt: string | null;
     metricsFailures: number;
+    metricsInvalidatedAt: string | null;
     connection: { label: string; provider: string };
     revision: { version: number; item: { title: string } };
   }[];
@@ -272,7 +273,8 @@ export function SocialDashboard({
                     View published post
                   </a>
                 )}
-                {p.metricsFailures > 0 && (
+                {p.metricsInvalidatedAt && <p>Metrics excluded: the published creative no longer matches its approved version. Historical records and the published-post receipt are retained, but are not used in reporting or future learning. This post will not be sent again.</p>}
+                {!p.metricsInvalidatedAt && p.metricsFailures > 0 && (
                   <p>
                     Metrics refresh is delayed. Previously observed data is
                     retained.

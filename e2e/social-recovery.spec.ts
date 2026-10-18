@@ -6,7 +6,7 @@ test.skip(!local, "Requires explicit localhost fixture database.");
 if (local && (process.env.DATABASE_URL !== local || !["127.0.0.1", "localhost"].includes(new URL(local).hostname))) throw Error("Refusing non-local fixture writes");
 const db = new PrismaClient();
 test.afterAll(async () => db.$disconnect());
-test("verified Facebook receipt is visible without fabricated performance or exposed submission context", async ({ page }) => {
+for (const invalidated of [false, true]) test(`verified Facebook receipt retains safe history; metrics invalidated: ${invalidated}`, async ({ page }) => {
   const email = `facebook-receipt-${crypto.randomUUID()}@example.test`, headers = { Origin: "http://127.0.0.1:3000" };
   let organizationId: string | undefined;
   try {
@@ -19,7 +19,8 @@ test("verified Facebook receipt is visible without fabricated performance or exp
     const revision = await db.creativeRevision.create({ data: { itemId: item.id, organizationId, version: 1, status: "APPROVED", content: { headline: "Considered spaces", caption: "Architecture consultations for homeowners.", cta: "Meet us", visualDirection: "Brand typography", rationale: "Local fixture", evidenceUsed: [] } } });
     const connection = await db.socialConnection.create({ data: { businessId: id, organizationId, provider: "Facebook", externalAccountId: "789", label: "Fixture page", encryptedToken: "fixture-never-use-or-return", permissions: [] } });
     // Local display fixture only. Real adapter/worker receipt verification is covered in database tests.
-    await db.socialPublication.create({ data: { businessId: id, organizationId, connectionId: connection.id, revisionId: revision.id, brandVersion: 1, payload: { privateFixture: "not-for-browser" }, payloadHash: "private-fixture-hash", status: "PUBLISHED", scheduledFor: new Date(), publishedAt: new Date(), timezone: "UTC", externalPostId: "789_123", candidatePostId: "789_123", submissionAdapterVersion: "private-adapter-version", permalink: "https://www.facebook.com/789/posts/123", nextMetricsAt: null } });
+    const post = await db.socialPublication.create({ data: { businessId: id, organizationId, connectionId: connection.id, revisionId: revision.id, brandVersion: 1, payload: { privateFixture: "not-for-browser" }, payloadHash: "private-fixture-hash", status: "PUBLISHED", scheduledFor: new Date(), publishedAt: new Date(), timezone: "UTC", externalPostId: "789_123", candidatePostId: "789_123", submissionAdapterVersion: "private-adapter-version", permalink: "https://www.facebook.com/789/posts/123", nextMetricsAt: null, metricsInvalidatedAt: invalidated ? new Date() : null } });
+    if (invalidated) await db.metricSnapshot.create({ data: { publicationId: post.id, businessId: id, organizationId, observedAt: new Date(), definitionVersion: "fixture-only", impressions: 123456789 } });
     const result = await page.request.get(`/api/businesses/${id}/social`), body = await result.text();
     expect(result.ok()).toBe(true); expect(result.headers()["cache-control"]).toContain("no-store");
     for (const hidden of ["encryptedToken", "fixture-never-use-or-return", "not-for-browser", "private-fixture-hash", "candidatePostId", "submissionAdapterVersion", "private-adapter-version"]) expect(body).not.toContain(hidden);
@@ -29,10 +30,12 @@ test("verified Facebook receipt is visible without fabricated performance or exp
     await expect(link).toHaveAttribute("href", "https://www.facebook.com/789/posts/123");
     await expect(link).toHaveAttribute("rel", "noopener noreferrer");
     await expect(page.getByText(/Not yet observed/)).toBeVisible();
+    await expect(page.getByText(/Metrics excluded: the published creative/)).toHaveCount(invalidated ? 1 : 0);
+    expect(body).not.toContain("123456789");
     await expect(page.getByRole("button", { name: "Cancel publication", exact: true })).toHaveCount(0);
     expect((await new AxeBuilder({ page }).include("main").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
     await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    expect(await db.metricSnapshot.count({ where: { businessId: id } })).toBe(0);
+    expect(await db.metricSnapshot.count({ where: { businessId: id } })).toBe(invalidated ? 1 : 0);
   } finally {
     if (organizationId) { await db.socialPublication.deleteMany({ where: { organizationId } }); await db.organization.delete({ where: { id: organizationId } }); }
     await db.user.deleteMany({ where: { email } });

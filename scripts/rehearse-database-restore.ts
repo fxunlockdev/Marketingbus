@@ -85,6 +85,8 @@ async function main() {
     const publicationPlan = await source.productionPlan.create({ data: { organizationId: a.id, businessId: business.id, brandVersion: 3, title: "Synthetic journal recovery", creditCeiling: 0, items: { create: { title: "Synthetic post", channel: "LinkedIn", format: "static", brief: {}, revisions: { create: { version: 1, status: "APPROVED", content: { caption: "Synthetic restoration fixture." } } } } } }, include: { items: { include: { revisions: true } } } });
     const frozenPayload = { caption: "Synthetic restoration fixture.", channel: "LinkedIn", format: "static", mediaExportId: null };
     await source.socialPublication.create({ data: { id: "synthetic-publication", organizationId: a.id, businessId: business.id, connectionId: publicationConnection.id, revisionId: publicationPlan.items[0].revisions[0].id, brandVersion: 3, payload: frozenPayload, payloadHash: payloadHash(frozenPayload), scheduledFor: new Date(), timezone: "UTC", status: "NEEDS_RECONCILIATION", submissionAdapterVersion: "synthetic:publish-v1", candidatePostId: "urn:li:share:456" } });
+    const invalidatedRevision = await source.creativeRevision.create({ data: { itemId: publicationPlan.items[0].id, organizationId: a.id, version: 2, status: "APPROVED", content: { caption: frozenPayload.caption } } });
+    await source.socialPublication.create({ data: { id: "synthetic-invalidated-metrics", organizationId: a.id, businessId: business.id, connectionId: publicationConnection.id, revisionId: invalidatedRevision.id, brandVersion: 3, payload: frozenPayload, payloadHash: payloadHash(frozenPayload), scheduledFor: new Date(), timezone: "UTC", status: "PUBLISHED", publishedAt: new Date(), externalPostId: "urn:li:share:789", metricsInvalidatedAt: new Date(), errorCode: "METRICS_SOURCE_CHANGED", metrics: { create: { observedAt: new Date(), definitionVersion: "fixture-v2", impressions: 100 } } } });
     phase = "brand and identity fixtures";
     await source.knowledgeSource.create({ data: { businessId: business.id, organizationId: a.id, kind: "TEXT", title: "Fixture evidence", body: "Only synthetic facts.", sha256: archiveDigest(Buffer.from("Only synthetic facts.")), status: "APPROVED", createdBy: user.id } });
     await source.brandAsset.create({ data: { organizationId: a.id, businessId: business.id, objectKey: "synthetic/not-an-object", label: "Metadata only, no bucket object", purpose: "logo", sha256: "a".repeat(64), bytes: 3, width: 1, height: 1, uploadedBy: user.id, rightsConfirmedAt: new Date(), status: "APPROVED", approvedForGeneration: true } });
@@ -129,6 +131,10 @@ async function main() {
     check((await target.socialOAuthFlow.findUniqueOrThrow({ where: { id: "synthetic-meta-flow" } })).authentication === "META_CONFIDENTIAL", "Meta authorization mode not preserved.");
     check((await target.socialConnection.findUniqueOrThrow({ where: { id: connectionId } })).dataSnapshot !== null, "Saved account data not preserved.");
     const restoredPublication = await target.socialPublication.findUniqueOrThrow({ where: { id: "synthetic-publication" } });
+    const invalidated = await target.socialPublication.findUniqueOrThrow({ where: { id: "synthetic-invalidated-metrics" }, include: { metrics: true } });
+    check(invalidated.status === "PUBLISHED" && invalidated.metricsInvalidatedAt !== null && invalidated.nextMetricsAt === null && invalidated.metrics.length === 1, "Invalidated metric provenance or historical receipt lost.");
+    await mustReject(() => target.socialPublication.update({ where: { id: invalidated.id }, data: { nextMetricsAt: new Date() } }));
+    await mustReject(() => target.socialPublication.update({ where: { id: invalidated.id }, data: { metricsLeaseUntil: new Date() } }));
     check(restoredPublication.status === "NEEDS_RECONCILIATION" && restoredPublication.submissionAdapterVersion === "synthetic:publish-v1" && restoredPublication.candidatePostId === "urn:li:share:456" && restoredPublication.externalPostId === null, "Uncertain publication journal not preserved.");
     await mustReject(() => target.socialPublication.update({ where: { id: restoredPublication.id }, data: { submissionAdapterVersion: null } }));
     check((await target.business.findUniqueOrThrow({ where: { id: business.id } })).name === "Restore business", "Backup checkpoint not preserved.");
@@ -166,7 +172,7 @@ async function main() {
       migrationsVerified: before.tables.find(t => t.name === "_prisma_migrations")?.count,
       schemaHash: before.schemaHash, backupMs, restoreMs, elapsedMs: Date.now() - started,
       checks: ["schema-and-all-row-fingerprints", "post-backup-change-excluded", "corrupt-archive-rejected", "tenant-foreign-keys", "ledger-and-payment-uniqueness", "settlement-replay", "refund-debt", "uncertain-job-and-refund-preservation", "uncertain-publication-journal-and-constraint", "retained-key-decryption", "missing-key-and-cross-tenant-decryption-denial", "unchanged-email-outbox"],
-      provisionalVideoExpenseVerified: true, productionRecoveryVerified: false, objectStorageVerified: false, workersStarted: 0, providerCalls: 0 };
+      metricProvenanceVerified: true, provisionalVideoExpenseVerified: true, productionRecoveryVerified: false, objectStorageVerified: false, workersStarted: 0, providerCalls: 0 };
   } finally {
     if (oldKeys === undefined) delete process.env.SECRET_ENCRYPTION_KEYS_JSON; else process.env.SECRET_ENCRYPTION_KEYS_JSON = oldKeys;
     if (oldActive === undefined) delete process.env.SECRET_ENCRYPTION_ACTIVE_KEY; else process.env.SECRET_ENCRYPTION_ACTIVE_KEY = oldActive;
