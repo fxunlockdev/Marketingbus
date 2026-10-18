@@ -51,7 +51,7 @@ export function GeneratedShotJobs({ businessId, board, dirty, onRefresh }: { bus
     {data?.jobs.length === 0 && <p>No generated-shot jobs yet.</p>}
     {data?.jobs.map(job => <article className="review-card" key={job.id} aria-label={`Generation ${job.shotLabel}`}>
       <h3>{job.shotLabel} · {(job.durationMs / 1000).toFixed(2)} seconds</h3>
-      <p>Take {job.creativeBrief.revisions.length + 1} · reference {job.id.slice(-6)}. Match this reference in the footage library.</p>
+      <p>Take {job.creativeBrief.revisions.length + 1} · reference {job.id.slice(-6)}. New jobs carry this reference in the footage library.</p>
       <p>{status[job.status] ?? "Status requires operator review"} · quote ceiling {job.credits} credits</p>
       <details><summary>Creative direction{job.revisionOfId ? ` · revision ${job.creativeBrief.revisions.length}` : " · initial take"}</summary><p>{job.creativeBrief.direction || "Approved scene and brand brief."}</p>{job.creativeBrief.revisions.length > 0 && <ol>{job.creativeBrief.revisions.map(r => <li key={r.parentId}>{r.feedback}</li>)}</ol>}</details>
       {job.storyboardId !== board?.id && <p>From another saved storyboard version.</p>}
