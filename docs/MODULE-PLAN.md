@@ -100,6 +100,10 @@ Added and verified locally/in CI: a read-only operator queue inventory across jo
 
 ## Current release boundary
 
+Release `5cc807a` is deployed successfully on worker (`28e5ed16-e249-4c7d-93d7-450105f48393`) and web (`5d1b27e7-46ec-4937-bffb-bdaebf101e78`), runtime `studio-v25-linkedin-publishing`, with all 36 migrations applied. [CI run 39108182921](https://github.com/fxunlockdev/Marketingbus/actions/runs/39108182921) passes 717 tests/49 suites, 31 browser journeys, synthetic restoration, build and audit; one private-storage journey remains skipped. Hosted health is 200. No live publishing, paid provider tests or configuration/budget changes were performed. LinkedIn text submission/read-back/per-post metrics are now implemented, not live-accepted. Facebook/Instagram publishing, media transfer, Higgsfield/audio, mixed-media automation and broader production assurance remain. See [release evidence](RELEASE-2026-10-18-LINKEDIN-PUBLISHING.md) and [activation checklist](ACTIVATION-CHECKLIST.md).
+
+### Previous account-data release
+
 Release `bc6a54c` is deployed successfully on worker (`99e7a2d9-241a-4e75-8dd0-7025731528d2`) and web (`365d91ff-973f-4916-b893-956042e2bc81`), runtime `studio-v24-social-account-data`, with all 35 migrations applied. [Final CI run 39106015886](https://github.com/fxunlockdev/Marketingbus/actions/runs/39106015886) passes 669 tests/48 suites, 31 browser journeys, synthetic restoration, build and audit; one private-storage journey remains skipped. Hosted health is 200; anonymous connections/data are 401; all three callback error paths return fixed 303/no-store/no-referrer responses. No provider settings, budgets, real posts or production fixtures were changed. See [release evidence](RELEASE-2026-10-18-SOCIAL-DATA.md). Live OAuth/data acceptance, actual publishing/media transfer, token renewal/revocation and per-publication metrics remain unfinished; the complete seven-module product is not finished.
 
 ### Previous LinkedIn release
