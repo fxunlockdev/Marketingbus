@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { PrismaClient } from "@prisma/client";
 import { resolve } from "node:path";
 import { localRecoveryConfig, recoveryNames, recoveryIdentifier, recoveryUrl, assertLocalContainer, isolatedEnvironment, MAX_ARCHIVE_BYTES, archiveDigest, verifyArchive } from "./recovery/safety";
@@ -106,6 +107,13 @@ async function main() {
       receipt: { submission: { journal: "synthetic-private-journal" }, estimatedCostMicros: 60000, expenseBasis: "ACCOUNT_QUOTE_V1" },
     } });
     phase = "instrumental audio fixture";
+    await source.videoGeneration.create({ data: {
+      id: "synthetic-new-take", businessId: business.id, organizationId: a.id, actorId: user.id,
+      storyboardId: "synthetic-board", itemId: "synthetic-item", brandVersion: 3, shotId: "synthetic-shot", shotLabel: "Direction history fixture",
+      documentHash: "synthetic-hash", prompt: "Synthetic new take; never submitted", route: {}, configurationHash: "synthetic-config",
+      durationMs: 5000, credits: 7, supplierCeilingMicros: 70000, expiresAt: new Date(),
+      revisionOfId: "synthetic-provisional-video", creativeBrief: { version: 1, direction: "Warm side lighting.", revisions: [{ parentId: "synthetic-provisional-video", feedback: "Slower camera movement." }] },
+    } });
     await source.videoClip.create({ data: { id: "synthetic-audio", businessId: business.id, organizationId: a.id, brandVersion: 3, label: "Synthetic audio metadata only", mediaKind: "AUDIO", instrumentalConfirmedAt: new Date(), createdBy: user.id, rightsConfirmedAt: new Date(), status: "READY", sourceKey: "synthetic/audio-source.wav", sourceHash: "a".repeat(64), sourceBytes: 1024, objectKey: "synthetic/audio-normalized.wav", sha256: "b".repeat(64), bytes: 2048, durationMs: 3000, processorVersion: "instrumental-pcm-v1", purgeAfter: new Date(Date.now() + 86400000) } });
     phase = "backup checkpoint";
     const before = await recoverySnapshot(source), dumpStarted = Date.now();
@@ -130,6 +138,10 @@ async function main() {
     const video = await target.videoGeneration.findUniqueOrThrow({ where: { id: "synthetic-provisional-video" } });
     check(video.status === "FAILED" && video.supplierEstimateMicros === 60000 && video.expenseBasis === "ACCOUNT_QUOTE_V1" && video.supplierCostMicros === null && video.supplierReconciledAt === null, "Provisional expense was misrepresented as a final invoice.");
     await mustReject(() => target.videoGeneration.update({ where: { id: video.id }, data: { expenseBasis: null } }));
+    const take = await target.videoGeneration.findUniqueOrThrow({ where: { id: "synthetic-new-take" } });
+    check(take.revisionOfId === video.id && isDeepStrictEqual(take.creativeBrief, { version: 1, direction: "Warm side lighting.", revisions: [{ parentId: video.id, feedback: "Slower camera movement." }] }), "Shot direction or lineage not preserved.");
+    await mustReject(() => target.videoGeneration.update({ where: { id: take.id }, data: { revisionOfId: null } }));
+    await mustReject(() => target.videoGeneration.update({ where: { id: take.id }, data: { creativeBrief: {} } }));
     check((await target.socialOAuthFlow.findUniqueOrThrow({ where: { id: "synthetic-meta-flow" } })).authentication === "META_CONFIDENTIAL", "Meta authorization mode not preserved.");
     check((await target.socialConnection.findUniqueOrThrow({ where: { id: connectionId } })).dataSnapshot !== null, "Saved account data not preserved.");
     const restoredPublication = await target.socialPublication.findUniqueOrThrow({ where: { id: "synthetic-publication" } });

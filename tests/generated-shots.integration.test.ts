@@ -61,6 +61,85 @@ suite("generated-shot authorization, asynchronous receipts and delivery", () => 
   async function accept(f: Fixture, existing?: string) { const id = existing || await quote(f); await manageShotGeneration(f.scope, { action: "accept", generationId: id, rightsConfirmed: true }, f.adapters, () => store); return id; }
   async function due(id: string) { await db.videoGeneration.update({ where: { id }, data: { nextPollAt: new Date(0) } }); }
   async function ingested(f: Fixture) { const id = await accept(f); await runOneShotGeneration(f.adapters, () => store); await due(id); await runOneShotGeneration(f.adapters, () => store); return id; }
+  async function readyTake(f: Fixture, body: Record<string, unknown> = {}) {
+    const id = (await manageShotGeneration(f.scope, { action: "quote", storyboardId: f.boardId, shotId: f.shotId, ...body }, f.adapters, () => store)).generationId!;
+    await accept(f, id); await runOneShotGeneration(f.adapters, () => store); await due(id); await runOneShotGeneration(f.adapters, () => store); await runOneClip(async () => processed, () => store); return row(id);
+  }
+  const takeQuote = (f: Fixture, parentId: string, feedback = "Use softer side lighting and a slower camera move.") => manageShotGeneration(f.scope, { action: "quote", storyboardId: f.boardId, shotId: f.shotId, revisionOfId: parentId, feedback }, f.adapters, () => store);
+  it("carries saved art direction through feedback-driven takes without replacing or reapproving prior media", async () => {
+    const f = await setup(), original = await readyTake(f, { direction: "Restrained warm side lighting; slow architectural dolly." });
+    await reviewClip(f.scope, original.output!.id, { action: "approve", watched: true });
+    const before = await wallet(f), secondId = (await takeQuote(f, original.id)).generationId!;
+    expect(await wallet(f)).toEqual(before); expect(f.submit).toHaveBeenCalledTimes(1);
+    const second = await row(secondId); expect(second).toMatchObject({ revisionOfId: original.id, creativeBrief: { version: 1, direction: "Restrained warm side lighting; slow architectural dolly.", revisions: [{ parentId: original.id, feedback: "Use softer side lighting and a slower camera move." }] } });
+    expect(second.prompt).toContain("No prior footage or reference image is supplied");
+    expect(second.prompt).toContain("softer side lighting"); expect(second.prompt).not.toContain(original.output!.objectKey);
+    await Promise.all([accept(f, secondId), accept(f, secondId)]); expect((await wallet(f)).held).toBe(10);
+    await runOneShotGeneration(f.adapters, () => store); expect(f.submit).toHaveBeenCalledTimes(2);
+    expect(f.submit.mock.calls[1][0].prompt).toBe(second.prompt);
+    await due(secondId); await runOneShotGeneration(f.adapters, () => store); await runOneClip(async () => processed, () => store);
+    expect(await row(original.id)).toMatchObject({ status: "READY", output: { status: "APPROVED" } });
+    expect(await row(secondId)).toMatchObject({ status: "READY", output: { status: "READY", approvedBy: null } });
+    expect((await row(secondId)).output!.label).toContain(`take 2 · ${secondId.slice(-6)}`);
+    expect(await wallet(f)).toMatchObject({ available: 88, held: 0, revisionAvailable: 20 });
+    // Completed new takes are independent media; removing prior footage does not retract delivered text-guided work.
+    await reviewClip(f.scope, original.output!.id, { action: "remove" });
+    expect(await readClip(f.scope, (await row(secondId)).output!.id, store)).toEqual(processed.bytes);
+  });
+  it.each(["tenant", "item", "scene", "copy", "brand", "uncertain", "removed", "expired"])("refuses %s revision sources without charges or supplier calls", async reason => {
+    const f = await setup(), parent = await readyTake(f); let target = f;
+    if (reason === "tenant") target = await setup();
+    if (reason === "item") await db.videoGeneration.update({ where: { id: parent.id }, data: { itemId: "different-item" } });
+    if (reason === "scene") await db.videoGeneration.update({ where: { id: parent.id }, data: { shotId: "different-scene" } });
+    if (reason === "copy") await db.videoGeneration.update({ where: { id: parent.id }, data: { copyRevisionId: "different-copy" } });
+    if (reason === "brand") await db.videoGeneration.update({ where: { id: parent.id }, data: { brandVersion: 2 } });
+    if (reason === "uncertain") await db.videoGeneration.update({ where: { id: parent.id }, data: { status: "NEEDS_RECONCILIATION" } });
+    if (reason === "removed") await reviewClip(f.scope, parent.output!.id, { action: "remove" });
+    if (reason === "expired") await db.videoClip.update({ where: { id: parent.output!.id }, data: { purgeAfter: new Date(0) } });
+    const before = await wallet(target);
+    await expect(takeQuote(target, parent.id)).rejects.toThrow("source take");
+    expect(await wallet(target)).toEqual(before); expect(f.submit).toHaveBeenCalledTimes(1);
+  });
+  it.each(["acceptance", "submission", "delivery"])("rechecks the retained source at %s and never automatically retries", async stage => {
+    const f = await setup(), parent = await readyTake(f), childId = (await takeQuote(f, parent.id)).generationId!;
+    if (stage !== "acceptance") await accept(f, childId);
+    if (stage === "delivery") { await runOneShotGeneration(f.adapters, () => store); await due(childId); }
+    await reviewClip(f.scope, parent.output!.id, { action: "remove" });
+    if (stage === "acceptance") await expect(accept(f, childId)).rejects.toThrow("source take");
+    else { await runOneShotGeneration(f.adapters, () => store); await runOneShotGeneration(f.adapters, () => store); expect((await row(childId)).status).toBe("FAILED"); }
+    expect((await wallet(f)).held).toBe(0); expect(f.submit).toHaveBeenCalledTimes(stage === "delivery" ? 2 : 1);
+  });
+  it("supports a new take of the selected generated clip, but never silently replaces unrelated imagery", async () => {
+    const f = await setup(), parent = await readyTake(f); await reviewClip(f.scope, parent.output!.id, { action: "approve", watched: true });
+    const doc = storyboardDocument.parse((await db.videoStoryboard.findUniqueOrThrow({ where: { id: f.boardId } })).document);
+    doc.shots[0].clip = { id: parent.output!.id, sha256: parent.output!.sha256 };
+    f.boardId = (await manageVideo(f.scope, { action: "save", storyboardId: f.boardId, document: doc }, () => store)).storyboardId!;
+    for (const s of doc.shots) await manageVideo(f.scope, { action: "review-shot", storyboardId: f.boardId, shotId: s.id, approved: true }, () => store);
+    await manageVideo(f.scope, { action: "approve-storyboard", storyboardId: f.boardId }, () => store);
+    const id = (await takeQuote(f, parent.id)).generationId!; expect((await row(id)).revisionOfId).toBe(parent.id);
+    expect((await storyboardContext(f.scope, f.boardId)).document.shots[0].clip?.id).toBe(parent.output!.id);
+    await expect(quote(f)).rejects.toThrow("empty scene");
+  });
+  it("retains a bounded chronological feedback chain and rejects altered source history", async () => {
+    const f = await setup(); let parent = await readyTake(f, { direction: "Side-lit architectural detail." });
+    for (let i = 1; i <= 4; i++) parent = await readyTake(f, { revisionOfId: parent.id, feedback: `Make the camera movement slower for take ${i}.` });
+    expect((parent.creativeBrief as { revisions: unknown[] }).revisions).toHaveLength(4);
+    await expect(takeQuote(f, parent.id)).rejects.toThrow("Four feedback-driven takes");
+    const first = await db.videoGeneration.findFirstOrThrow({ where: { businessId: f.scope.businessId, revisionOfId: null } });
+    const offered = (await takeQuote(f, first.id)).generationId!;
+    await db.videoGeneration.update({ where: { id: first.id }, data: { creativeBrief: { version: 1, direction: "Changed behind quote", revisions: [] } } });
+    await expect(accept(f, offered)).rejects.toThrow("direction history changed"); expect((await wallet(f)).held).toBe(0);
+  });
+  it("rejects malformed direction, missing feedback and forged lineage at the service and database boundaries", async () => {
+    const f = await setup(), parent = await readyTake(f);
+    for (const extra of [{ direction: "x".repeat(1001) }, { feedback: "Unexpected initial feedback" }, { revisionOfId: parent.id }, { revisionOfId: parent.id, feedback: "short" }, { revisionOfId: parent.id, feedback: "Long enough feedback", direction: "changed" }, { creativeBrief: { version: 1, direction: "forged", revisions: [] } }]) {
+      await expect(manageShotGeneration(f.scope, { action: "quote", storyboardId: f.boardId, shotId: f.shotId, ...extra }, f.adapters, () => store)).rejects.toThrow();
+    }
+    await expect(db.videoGeneration.update({ where: { id: parent.id }, data: { creativeBrief: { version: 1, direction: "x" } } })).rejects.toThrow();
+    await expect(db.videoGeneration.update({ where: { id: parent.id }, data: { revisionOfId: parent.id, creativeBrief: { version: 1, direction: "x", revisions: [{ parentId: parent.id, feedback: "Self-referencing feedback" }] } } })).rejects.toThrow();
+    const other = await setup(), foreign = await readyTake(other);
+    await expect(db.videoGeneration.update({ where: { id: parent.id }, data: { revisionOfId: foreign.id, creativeBrief: { version: 1, direction: "x", revisions: [{ parentId: foreign.id, feedback: "Cross-tenant feedback" }] } } })).rejects.toThrow();
+  });
   it("quotes freely, holds once, submits once, settles only normalized footage and requires human review", async () => {
     const f = await setup(), id = await quote(f); expect(await wallet(f)).toMatchObject({ available: 100, held: 0 });
     await Promise.all([accept(f, id), accept(f, id)]); expect(await wallet(f)).toMatchObject({ available: 90, held: 10, revisionAvailable: 20 });

@@ -4,9 +4,25 @@ import { motionHash } from "./limits";
 import { storyboardDocument } from "./document";
 import { finishReservationInTransaction } from "../billing/wallet";
 import { shotRoute } from "./generation-contracts";
+import { validateShotBriefBinding } from "./creative-brief";
 export type ShotContextClient = Pick<Prisma.TransactionClient, "business" | "productionItem" | "reviewComment" | "videoStoryboard" | "videoGeneration">;
 export const generationScope = (r: VideoGeneration) => ({ businessId: r.businessId, organizationId: r.organizationId, actorId: r.actorId });
+type RevisionScope = Pick<VideoGeneration, "revisionOfId" | "businessId" | "organizationId" | "itemId" | "copyRevisionId" | "brandVersion" | "shotId">;
+export async function assertShotRevisionSource(client: ShotContextClient, row: RevisionScope) {
+  const parent = row.revisionOfId ? await client.videoGeneration.findFirst({ where: { id: row.revisionOfId, businessId: row.businessId, organizationId: row.organizationId, itemId: row.itemId, copyRevisionId: row.copyRevisionId, brandVersion: row.brandVersion, shotId: row.shotId, status: "READY" }, include: { output: true } }) : null;
+  if (!parent?.output || !["READY", "APPROVED", "REJECTED"].includes(parent.output.status) || parent.output.mediaKind !== "VIDEO" || parent.output.purgeAfter <= new Date()) throw new AppError(409, "The source take is unavailable or belongs to a different creative. Choose retained completed footage from this exact scene.");
+  // Only text direction is reused. No recursive media dependency or previous footage is sent.
+  validateShotBriefBinding(parent.creativeBrief, parent.revisionOfId);
+  await assertShotContext(client, parent, false);
+  return parent;
+}
 export async function assertShotContext(client: ShotContextClient, row: VideoGeneration, requireStoryboard = true) {
+  const brief = validateShotBriefBinding(row.creativeBrief, row.revisionOfId);
+  if (row.revisionOfId && requireStoryboard) {
+    const parent = await assertShotRevisionSource(client, row);
+    const original = validateShotBriefBinding(parent.creativeBrief, parent.revisionOfId);
+    if (brief.direction !== original.direction || JSON.stringify(brief.revisions.slice(0, -1)) !== JSON.stringify(original.revisions)) throw new AppError(409, "Generated-shot direction history changed.");
+  }
   const business = await client.business.findFirst({ where: { id: row.businessId, organizationId: row.organizationId } });
   const item = await client.productionItem.findFirst({ where: { id: row.itemId, organizationId: row.organizationId, plan: { businessId: row.businessId, brandVersion: row.brandVersion, status: "PROPOSED" } }, include: { revisions: { orderBy: { version: "desc" }, take: 1 } } });
   if (!business?.confirmedAt || business.version !== row.brandVersion || !item || (item.revisions[0]?.id ?? null) !== row.copyRevisionId || row.copyRevisionId && item.revisions[0]?.status !== "APPROVED") throw new AppError(409, "Generated footage source brand or approved copy changed.");

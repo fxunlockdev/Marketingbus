@@ -559,6 +559,11 @@ model VideoGeneration {
   shotLabel String
   documentHash String
   prompt String
+  // Customer direction, not supplier prompts or media references. Legacy jobs use {}.
+  creativeBrief Json @default("{}")
+  revisionOfId String?
+  revisionOf VideoGeneration? @relation("ShotTakes", fields: [revisionOfId, businessId, organizationId], references: [id, businessId, organizationId], onDelete: NoAction, onUpdate: NoAction)
+  newTakes VideoGeneration[] @relation("ShotTakes")
   route Json
   configurationHash String
   durationMs Int
@@ -588,6 +593,7 @@ model VideoGeneration {
   @@unique([id, businessId, organizationId])
   @@index([businessId, organizationId, createdAt])
   @@index([status, nextPollAt, leaseUntil])
+  @@index([revisionOfId, businessId, organizationId])
 }
 
 model MotionRender {
