@@ -110,6 +110,18 @@ suite("read-only operator queue inventory", () => {
     expect((await report(scope)).items).toHaveLength(1);
     expect((await report(scope, { overdueMinutes: 16 })).items).toEqual([]);
   });
+  it.each(["READY", "FAILED"])("surfaces %s provisional supplier expense without secrets or changes to settlement", async status => {
+    const scope = await setup();
+    const record = await db.videoGeneration.create({ data: { ...scope, actorId: "fixture", storyboardId: "fixture", itemId: "fixture", brandVersion: 1, shotId: "fixture", shotLabel: "fixture", documentHash: "fixture", prompt: "private prompt", route: {}, configurationHash: "fixture", durationMs: 1000, credits: 1, supplierCeilingMicros: 1, supplierEstimateMicros: 1, expenseBasis: "ACCOUNT_QUOTE_V1", status, settledAt: old, expiresAt: future, createdAt: old, receipt: { evidence: "private invoice" } } });
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } });
+    const result = await report(scope);
+    expect(result.items.find(r => r.id === record.id)).toMatchObject({ queue: "video", status, reason: "SUPPLIER_INVOICE_DUE" });
+    expect(JSON.stringify(result)).not.toMatch(/private|receipt|supplierEstimateMicros/);
+    expect(await db.videoGeneration.findUniqueOrThrow({ where: { id: record.id } })).toEqual(record);
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } })).toEqual(wallet);
+    await db.videoGeneration.update({ where: { id: record.id }, data: { supplierCostMicros: 1, supplierReconciledAt: old } });
+    expect((await report(scope)).items.some(r => r.reason === "SUPPLIER_INVOICE_DUE")).toBe(false);
+  });
   it("executes under PostgreSQL read-only enforcement and a bounded statement timeout", async () => {
     const scope = await setup(); let inspected = false;
     const client = { $transaction: (callback: (tx: Prisma.TransactionClient) => Promise<unknown>, options: { timeout?: number }) => db.$transaction(async tx => {

@@ -1,6 +1,6 @@
 # Higgsfield low-level transport
 
-The concrete network layer is implemented in `src/lib/providers/higgsfield.ts`, with a durable job bridge in `src/lib/video/higgsfield-adapter.ts`. It is **not yet registered as a production ShotAdapter** because final expense cannot yet be independently verified. Adding keys does not activate it. It has no tenant-controlled endpoint or fixture registration. No authenticated or paid Higgsfield call was made during implementation.
+The concrete network layer is implemented in `src/lib/providers/higgsfield.ts`, with a durable job bridge in `src/lib/video/higgsfield-adapter.ts`. Explicit, disabled-by-default production registration now supports a separately labelled provisional account-quote delivery policy. Adding keys does not activate it. It has no tenant-controlled endpoint or fixture registration. No authenticated or paid Higgsfield call was made during implementation. See [delivery accounting](VIDEO-DELIVERY-ACCOUNTING.md).
 
 ## Request and price binding
 
@@ -26,12 +26,12 @@ The worker performs an optional read-only estimate before entering `SUBMITTING`.
 
 The signed estimate is persisted at the submission fence. The accepted signed journal is saved with the provider ID under the same lease, then supplied to read-only polling after a process restart. The bridge verifies its operation, prompt/parameter hash, model, credential identity, provider UUID, signature and ceiling. Missing/changed journals or credentials stop safely. Ambiguous submission acknowledgements remain uncertain and are never automatically resubmitted.
 
-The bridge explicitly returns terminal `unverified` outcomes while expense remains unknown. The worker persists that terminal state, signed journal and estimate in `NEEDS_RECONCILIATION`, retains the hold and does not ingest media. It does not waste a CDN download for footage that cannot enter normalization. The existing privileged final-expense reconciliation releases customer credits without delivering uncertain output, and now retains original provider evidence. Customer status projections exclude all journals, estimates and provider credentials.
+Under the default final-expense policy, terminal `unverified` outcomes still enter `NEEDS_RECONCILIATION` without download or delivery. Under the explicit `account-quote-v1` policy, the authenticated signed estimate can fund bounded delivery through quarantine and normalization. The estimate is stored separately from independently reconciled actual expense; final invoicing never changes customer settlement. Unknown submissions or unverifiable results still retain the hold without resubmission. Customer status projections exclude journals, estimates and credentials.
 
 ## Remaining integration work
 
-1. Connect independently verified final expense evidence to successful media retrieval, quarantine and normalization. Do not relabel the estimate as actual supplier expense to bypass this gate. Current reconciliation deliberately does not deliver footage.
-2. Register the complete adapter behind explicit operator settings only after that gate is implemented; retain the existing single-submit, current-context and normalized-output protections.
-3. Verify actual account model access, exact rates, response/output hosts, private storage and decoder packaging, using a separately authorized live budget. Finish reference-led revisions, audio and semantic continuity evaluation separately.
+1. Verify actual account model access, exact rates, response/output hosts, private storage and decoder isolation/packaging using a separately authorized live budget. No live activation is implied by source registration.
+2. Add back-office reconciliation UI and automated supplier-ledger ingestion when an actual supported contract is available. Privileged manual evidence reconciliation is implemented; no invoice API is invented.
+3. Finish reference-led revisions, audio and semantic continuity evaluation separately.
 
 The network client and socket/DNS policies are tested with injected HTTP/media responses, plus an actual Node HTTPS request that rejects a private DNS answer before connection. No real provider-generated footage or quality improvement is claimed. Provider references and schema caveats are recorded in [integration notes](HIGGSFIELD-INTEGRATION-NOTES.md).

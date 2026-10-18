@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { AppError } from "../http";
+import { configuredHiggsfieldAdapters, higgsfieldConfigurationFingerprint } from "./higgsfield-adapter";
 const identifier = z.string().regex(/^[a-zA-Z0-9_.:-]{1,160}$/);
 export const shotRate = z.object({
   provider: identifier, accountId: identifier, adapterVersion: identifier, model: identifier,
@@ -8,6 +9,7 @@ export const shotRate = z.object({
   // All-in ceiling for one silent generation at this fixed duration/resolution.
   ceilingMicros: z.number().int().positive().max(80000000),
   verifiedUntil: z.iso.datetime(),
+  expensePolicy: z.enum(["final", "account-quote-v1"]).default("final"),
 }).strict();
 export const shotRoute = shotRate.extend({ credits: z.number().int().positive().max(8000) }).strict();
 export type ShotRoute = z.infer<typeof shotRoute>;
@@ -17,10 +19,11 @@ export function shotRates() {
   catch { throw new AppError(503, "Video rates need operator verification."); }
 }
 export function shotConfigurationHash() {
-  return createHash("sha256").update(JSON.stringify({ rates: shotRates(), harness: SHOT_HARNESS, protocol: "shot-jobs-v1" })).digest("hex");
+  return createHash("sha256").update(JSON.stringify({ rates: shotRates(), provider: higgsfieldConfigurationFingerprint(), harness: SHOT_HARNESS, protocol: "shot-jobs-v2" })).digest("hex");
 }
 export type ShotAdapter = {
   id: string; accountId: string; version: string;
+  supports?(route: z.infer<typeof shotRate>): boolean;
   // Optional read-only estimate. It cannot submit a generation. The worker
   // rechecks the lease, approvals and execution gates after this returns.
   prepare?(input: { requestId: string; prompt: string; route: ShotRoute; signal: AbortSignal }): Promise<string>;
@@ -37,16 +40,20 @@ export const pollReceipt = z.discriminatedUnion("status", [
   boundReceipt.extend({ status: z.literal("unverified"), providerState: z.enum(["completed", "failed", "nsfw", "canceled"]) }).strict(),
   boundReceipt.extend({ status: z.literal("failed"), costMicros: z.number().int().nonnegative().max(80000000) }).strict(),
   boundReceipt.extend({ status: z.literal("succeeded"), costMicros: z.number().int().nonnegative().max(80000000), bytes: z.instanceof(Uint8Array) }).strict(),
+  boundReceipt.extend({ status: z.literal("provisional-failed"), estimatedCostMicros: z.literal(0), providerState: z.enum(["failed", "nsfw", "canceled"]) }).strict(),
+  boundReceipt.extend({ status: z.literal("provisional-succeeded"), estimatedCostMicros: z.number().int().nonnegative().max(80000000), bytes: z.instanceof(Uint8Array) }).strict(),
 ]);
-// No placeholder network transport. A verified real adapter must be registered here.
-export function configuredShotAdapters(): ShotAdapter[] { return []; }
+export function configuredShotAdapters(): ShotAdapter[] {
+  try { return configuredHiggsfieldAdapters(); }
+  catch { throw new AppError(503, "Generated video needs operator configuration verification."); }
+}
 export function shotAdapter(route: ShotRoute, adapters: ShotAdapter[]) {
-  const matches = adapters.filter(a => a.id === route.provider && a.accountId === route.accountId && a.version === route.adapterVersion);
+  const matches = adapters.filter(a => a.id === route.provider && a.accountId === route.accountId && a.version === route.adapterVersion && (!a.supports || a.supports(route)));
   if (matches.length !== 1) throw new AppError(503, "Generated video is awaiting a verified provider integration.");
   return matches[0];
 }
 export function selectShotRoute(durationMs: number, adapters: ShotAdapter[]) {
-  const options = shotRates().filter(r => new Date(r.verifiedUntil).getTime() > Date.now() && r.durationMs >= durationMs && adapters.filter(a => a.id === r.provider && a.accountId === r.accountId && a.version === r.adapterVersion).length === 1)
+  const options = shotRates().filter(r => new Date(r.verifiedUntil).getTime() > Date.now() && r.durationMs >= durationMs && adapters.filter(a => a.id === r.provider && a.accountId === r.accountId && a.version === r.adapterVersion && (!a.supports || a.supports(r))).length === 1)
     .sort((a, b) => a.ceilingMicros - b.ceilingMicros || a.durationMs - b.durationMs || a.model.localeCompare(b.model));
   if (!options[0]) throw new AppError(503, "Generated video is awaiting a verified provider and rate card. No credits were reserved.");
   return shotRoute.parse({ ...options[0], credits: Math.max(1, Math.ceil(options[0].ceilingMicros / 10000)) });

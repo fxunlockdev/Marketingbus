@@ -70,6 +70,8 @@ async function main() {
     await source.$transaction(tx => finishReservationInTransaction(tx, a.id, settled.id, 60));
     const held = await source.$transaction(tx => reserveCreditsInTransaction(tx, a.id, "uncertain-copy", 40));
     await source.$transaction(tx => reserveCreditsInTransaction(tx, a.id, "revision-hold", 20, true));
+    const videoHold = await source.$transaction(tx => reserveCreditsInTransaction(tx, a.id, "synthetic-provisional-video", 7));
+    await source.$transaction(tx => finishReservationInTransaction(tx, a.id, videoHold.id, 0));
     await source.wallet.update({ where: { organizationId: a.id }, data: { debt: 5, revisionDebt: 2 } });
     await source.job.create({ data: { organizationId: a.id, businessId: business.id, key: "restore-uncertain-job", kind: "COPY", status: "NEEDS_RECONCILIATION", submittedAt: new Date(), payload: { fixture: true }, reservationId: held.id, providerTaskId: "synthetic-provider-task" } });
     phase = "billing fixtures";
@@ -89,6 +91,16 @@ async function main() {
     await source.session.create({ data: { id: "synthetic-session-hash", userId: user.id, expiresAt: new Date(Date.now() + 60000) } });
     await source.socialOAuthFlow.create({ data: { id: "synthetic-meta-flow", organizationId: a.id, businessId: business.id, actorId: user.id, sessionId: "synthetic-session-hash", provider: "Facebook", authentication: "META_CONFIDENTIAL", stateHash: "synthetic-meta-state", configurationHash: "synthetic-config", expiresAt: new Date(Date.now() + 60000) } });
     await source.emailOutbox.create({ data: { id: "synthetic-email", userId: user.id, kind: "VERIFY_EMAIL", encryptedPayload: sealSecret("synthetic message", `email:synthetic-email:${user.id}`), expiresAt: new Date(Date.now() + 60000) } });
+    phase = "provisional video accounting fixture";
+    await source.supplierAuthorization.create({ data: { key: "synthetic-provisional-video", ceilingMicros: 70000 } });
+    await source.videoGeneration.create({ data: {
+      id: "synthetic-provisional-video", businessId: business.id, organizationId: a.id, actorId: user.id,
+      storyboardId: "synthetic-board", itemId: "synthetic-item", brandVersion: 3, shotId: "synthetic-shot", shotLabel: "Restore fixture",
+      documentHash: "synthetic-hash", prompt: "Synthetic fixture; never submitted", route: { expensePolicy: "account-quote-v1" }, configurationHash: "synthetic-config",
+      durationMs: 5000, status: "FAILED", credits: 7, supplierCeilingMicros: 70000, supplierEstimateMicros: 60000, expenseBasis: "ACCOUNT_QUOTE_V1",
+      reservationId: videoHold.id, settledAt: new Date(), expiresAt: new Date(), errorCode: "NORMALIZATION_FAILED",
+      receipt: { submission: { journal: "synthetic-private-journal" }, estimatedCostMicros: 60000, expenseBasis: "ACCOUNT_QUOTE_V1" },
+    } });
     phase = "backup checkpoint";
     const before = await recoverySnapshot(source), dumpStarted = Date.now();
     const archive = await pg("pg_dump", names.source, ["--format=custom", "--no-owner", "--no-privileges"], undefined, MAX_ARCHIVE_BYTES);
@@ -105,6 +117,9 @@ async function main() {
     const restoreMs = Date.now() - restoreStarted;
     phase = "schema and row verification";
     assertSnapshot(before, await recoverySnapshot(target));
+    const video = await target.videoGeneration.findUniqueOrThrow({ where: { id: "synthetic-provisional-video" } });
+    check(video.status === "FAILED" && video.supplierEstimateMicros === 60000 && video.expenseBasis === "ACCOUNT_QUOTE_V1" && video.supplierCostMicros === null && video.supplierReconciledAt === null, "Provisional expense was misrepresented as a final invoice.");
+    await mustReject(() => target.videoGeneration.update({ where: { id: video.id }, data: { expenseBasis: null } }));
     check((await target.socialOAuthFlow.findUniqueOrThrow({ where: { id: "synthetic-meta-flow" } })).authentication === "META_CONFIDENTIAL", "Meta authorization mode not preserved.");
     check((await target.socialConnection.findUniqueOrThrow({ where: { id: connectionId } })).dataSnapshot !== null, "Saved account data not preserved.");
     const restoredPublication = await target.socialPublication.findUniqueOrThrow({ where: { id: "synthetic-publication" } });
@@ -145,7 +160,7 @@ async function main() {
       migrationsVerified: before.tables.find(t => t.name === "_prisma_migrations")?.count,
       schemaHash: before.schemaHash, backupMs, restoreMs, elapsedMs: Date.now() - started,
       checks: ["schema-and-all-row-fingerprints", "post-backup-change-excluded", "corrupt-archive-rejected", "tenant-foreign-keys", "ledger-and-payment-uniqueness", "settlement-replay", "refund-debt", "uncertain-job-and-refund-preservation", "uncertain-publication-journal-and-constraint", "retained-key-decryption", "missing-key-and-cross-tenant-decryption-denial", "unchanged-email-outbox"],
-      productionRecoveryVerified: false, objectStorageVerified: false, workersStarted: 0, providerCalls: 0 };
+      provisionalVideoExpenseVerified: true, productionRecoveryVerified: false, objectStorageVerified: false, workersStarted: 0, providerCalls: 0 };
   } finally {
     if (oldKeys === undefined) delete process.env.SECRET_ENCRYPTION_KEYS_JSON; else process.env.SECRET_ENCRYPTION_KEYS_JSON = oldKeys;
     if (oldActive === undefined) delete process.env.SECRET_ENCRYPTION_ACTIVE_KEY; else process.env.SECRET_ENCRYPTION_ACTIVE_KEY = oldActive;

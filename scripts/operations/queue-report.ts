@@ -29,8 +29,9 @@ export type QueueReportOptions = z.input<typeof optionsSchema>;
 const cursorSchema = z.object({ version: z.literal(1), scope: scopeSchema, overdueMinutes: z.number().int(), asOf: z.iso.datetime(), createdAt: z.iso.datetime(), queue: z.string().max(30), id: identifier }).strict();
 const attentionStatuses = ["NEEDS_RECONCILIATION", "NEEDS_REVIEW", "REQUIRES_ACTION", "UNKNOWN", "RECONCILE"];
 const failureStatuses = ["FAILED", "DELETE_FAILED", "PURGE_FAILED", "BLOCKED"];
-const knownStatuses = new Set([...attentionStatuses, ...failureStatuses, ...definitions.flatMap(d => [...d.waiting, ...d.active])]);
+const knownStatuses = new Set(["READY", ...attentionStatuses, ...failureStatuses, ...definitions.flatMap(d => [...d.waiting, ...d.active])]);
 const guidance = {
+  SUPPLIER_INVOICE_DUE: "Reconcile provisional video expense against independent supplier evidence. Preserve customer settlement and output; do not retry generation or reprice the customer.",
   UNCERTAIN_OUTCOME: "Verify provider/storage evidence using the module recovery procedure. Do not resubmit, publish, refund or release holds from this report.",
   FAILED: "Inspect the module's failure evidence and current permissions. A failed record is not authorization to retry or refund.",
   EXPIRED_LEASE: "Check worker health and the module lease-recovery procedure. A lost lease does not prove a supplier operation failed.",
@@ -63,8 +64,10 @@ export async function readQueueReport(client: PrismaClient, raw: QueueReportOpti
     const due = d.name === "video" ? Prisma.sql`COALESCE("nextPollAt", "acceptedAt", "createdAt")`
       : d.due ? Prisma.sql`COALESCE(${column(d.due)}, "createdAt")` : column("createdAt");
     const scope = options.scope.kind === "all" ? Prisma.sql`TRUE` : Prisma.sql`${org} = ${options.scope.organizationId} ${options.scope.businessId ? Prisma.sql`AND ${business} = ${options.scope.businessId}` : Prisma.empty}`;
+    const provisional = d.name === "video" ? Prisma.sql`"expenseBasis" = 'ACCOUNT_QUOTE_V1' AND "supplierCostMicros" IS NULL AND "status" IN ('READY', 'FAILED')` : Prisma.sql`FALSE`;
     return Prisma.sql`SELECT ${d.name}::text AS queue, "id", ${org} AS "organizationId", ${business} AS "businessId", "status", "createdAt", ${lease} AS "leaseUntil",
       CASE WHEN ${inValues(status, attentionStatuses)} THEN 'UNCERTAIN_OUTCOME'
+        WHEN ${provisional} THEN 'SUPPLIER_INVOICE_DUE'
         WHEN ${inValues(status, failureStatuses)} THEN 'FAILED'
         WHEN ${inValues(status, d.active)} AND ${lease} <= ${asOf} THEN 'EXPIRED_LEASE'
         WHEN (${inValues(status, d.waiting)} OR (${inValues(status, d.active)} AND ${lease} IS NULL))

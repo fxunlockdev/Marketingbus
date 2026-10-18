@@ -3,6 +3,7 @@ import { AppError } from "../http";
 import { motionHash } from "./limits";
 import { storyboardDocument } from "./document";
 import { finishReservationInTransaction } from "../billing/wallet";
+import { shotRoute } from "./generation-contracts";
 export type ShotContextClient = Pick<Prisma.TransactionClient, "business" | "productionItem" | "reviewComment" | "videoStoryboard" | "videoGeneration">;
 export const generationScope = (r: VideoGeneration) => ({ businessId: r.businessId, organizationId: r.organizationId, actorId: r.actorId });
 export async function assertShotContext(client: ShotContextClient, row: VideoGeneration, requireStoryboard = true) {
@@ -20,19 +21,28 @@ export async function assertGeneratedClip(client: ShotContextClient, clip: Pick<
   await assertShotContext(client, row, row.status !== "READY");
 }
 // Runs in the same transaction as normalized clip readiness. Never charge for raw bytes.
+function deliveryCredits(row: VideoGeneration) {
+  const route = shotRoute.parse(row.route);
+  const quoted = row.expenseBasis === "ACCOUNT_QUOTE_V1";
+  if (quoted !== (route.expensePolicy === "account-quote-v1")) throw Error("Generated footage expense policy differs.");
+  const amount = quoted ? row.supplierEstimateMicros : row.supplierCostMicros;
+  if (amount === null || amount < 0 || amount > row.supplierCeilingMicros || Math.ceil(amount / 10000) > row.credits) throw Error("Generated footage accounting is incomplete.");
+  return Math.ceil(amount / 10000);
+}
 export async function finishGeneratedClip(tx: Prisma.TransactionClient, clip: VideoClip, durationMs: number) {
   if (!clip.generationId) return;
   const row = await tx.videoGeneration.findUniqueOrThrow({ where: { id: clip.generationId } });
-  if (row.status !== "INGESTING" || !row.reservationId || row.supplierCostMicros === null || durationMs < row.durationMs || durationMs > 8100) throw Error("Generated footage settlement is unavailable or duration differs.");
+  if (row.status !== "INGESTING" || !row.reservationId || durationMs < row.durationMs || durationMs > 8100) throw Error("Generated footage settlement is unavailable or duration differs.");
   await assertShotContext(tx, row);
-  await finishReservationInTransaction(tx, row.organizationId, row.reservationId, Math.ceil(row.supplierCostMicros / 10000));
+  await finishReservationInTransaction(tx, row.organizationId, row.reservationId, deliveryCredits(row));
   await tx.videoGeneration.update({ where: { id: row.id }, data: { status: "READY", leaseUntil: null, settledAt: new Date() } });
 }
 export async function failGeneratedClip(tx: Prisma.TransactionClient, generationId: string | null, errorCode: string) {
   if (!generationId) return;
   const row = await tx.videoGeneration.findUniqueOrThrow({ where: { id: generationId } });
   if (row.status !== "INGESTING") return;
-  if (!row.reservationId || row.supplierCostMicros === null) throw Error("Generated footage accounting is incomplete.");
+  if (!row.reservationId) throw Error("Generated footage accounting is incomplete.");
+  deliveryCredits(row);
   await finishReservationInTransaction(tx, row.organizationId, row.reservationId, 0);
   await tx.videoGeneration.update({ where: { id: row.id }, data: { status: "FAILED", errorCode, leaseUntil: null, settledAt: new Date() } });
 }

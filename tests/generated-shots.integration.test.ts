@@ -1,6 +1,12 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { db } from "../src/lib/db";
-import { manageVideo, storyboardContext } from "../src/lib/video/service";
+import { manageVideo, storyboardContext, readMotion } from "../src/lib/video/service";
+import { runOneMotion } from "../src/lib/video/worker";
 import { manageShotGeneration, listShotGenerations } from "../src/lib/video/generation-service";
 import { runOneShotGeneration, recoverShotGenerations } from "../src/lib/video/generation-worker";
 import { reconcileShotGeneration } from "../src/lib/video/generation-reconcile";
@@ -25,11 +31,11 @@ suite("generated-shot authorization, asynchronous receipts and delivery", () => 
     vi.stubEnv("VIDEO_RATE_CARD_JSON", JSON.stringify([rate])); await worker();
   });
   afterEach(async () => {
-    const jobs = await db.videoGeneration.findMany({ where: { organizationId: { in: orgs } } }), clips = await db.videoClip.findMany({ where: { organizationId: { in: orgs } } });
-    await db.motionAuthorization.deleteMany({ where: { key: { in: clips.map(c => c.id) } } });
+    const jobs = await db.videoGeneration.findMany({ where: { organizationId: { in: orgs } } }), clips = await db.videoClip.findMany({ where: { organizationId: { in: orgs } } }), renders = await db.motionRender.findMany({ where: { organizationId: { in: orgs } } });
+    await db.motionAuthorization.deleteMany({ where: { key: { in: [...clips, ...renders].map(c => c.id) } } });
     await db.supplierAuthorization.deleteMany({ where: { key: { in: [...jobs.map(j => j.id), ...extras] } } });
     await db.videoClip.deleteMany({ where: { organizationId: { in: orgs } } }); await db.videoGeneration.deleteMany({ where: { organizationId: { in: orgs } } });
-    await db.videoStoryboard.deleteMany({ where: { organizationId: { in: orgs } } }); await db.organization.deleteMany({ where: { id: { in: orgs } } }); await db.user.deleteMany({ where: { id: { in: users } } });
+    await db.motionRender.deleteMany({ where: { organizationId: { in: orgs } } }); await db.videoStoryboard.deleteMany({ where: { organizationId: { in: orgs } } }); await db.organization.deleteMany({ where: { id: { in: orgs } } }); await db.user.deleteMany({ where: { id: { in: users } } });
     orgs.length = users.length = extras.length = 0; objects.clear(); vi.unstubAllEnvs();
   });
   afterAll(async () => { await db.workerHeartbeat.deleteMany({ where: { id: workerId } }); await db.$disconnect(); });
@@ -199,15 +205,15 @@ suite("generated-shot authorization, asynchronous receipts and delivery", () => 
     await manageVideo(f.scope, { action: "review-shot", storyboardId: f.boardId, shotId: f.shotId, approved: false }, () => store);
     expect((await listClips(f.scope)).find(c => c.id === clip.id)?.usable).toBe(false); await expect(readClip(f.scope, clip.id, store)).rejects.toThrow("storyboard changed");
   });
-  async function higgsfield(f: Fixture) {
+  async function higgsfield(f: Fixture, policy: "final" | "account-quote-v1" = "final") {
     const settings = { keyId: "fixture-key-id", secret: "fixture-not-real-secret", verifiedUntil: new Date(Date.now() + 86400000).toISOString(), outputHosts: ["cdn.example.com"] };
     const providerJobId = crypto.randomUUID();
     const replies: unknown[] = [{ usd: "0.06", credits: "1" }, { request_id: providerJobId, status: "queued", status_url: `https://api.higgsfield.ai/requests/${providerJobId}/status` }];
     const fetcher = vi.fn<typeof fetch>(async () => { const value = replies.shift(); if (!value) throw Error("Unexpected provider HTTP"); return Response.json(value); });
     const download = vi.fn(async () => source);
-    const make = () => createHiggsfieldShotAdapter(settings, fetcher, download);
+    const make = () => createHiggsfieldShotAdapter(settings, fetcher, download, policy);
     const adapter = make(); f.adapters = [adapter];
-    vi.stubEnv("VIDEO_RATE_CARD_JSON", JSON.stringify([{ ...rate, provider: adapter.id, accountId: adapter.accountId, adapterVersion: adapter.version, model: "seedance-2.5-text", verifiedUntil: settings.verifiedUntil }]));
+    vi.stubEnv("VIDEO_RATE_CARD_JSON", JSON.stringify([{ ...rate, provider: adapter.id, accountId: adapter.accountId, adapterVersion: adapter.version, model: "seedance-2.5-text", verifiedUntil: settings.verifiedUntil, expensePolicy: policy }]));
     await worker();
     return { providerJobId, replies, fetcher, download, make, settings };
   }
@@ -268,4 +274,114 @@ suite("generated-shot authorization, asynchronous receipts and delivery", () => 
     const current = await row(id); expect(current).toMatchObject({ status: "NEEDS_RECONCILIATION", providerJobId: null }); expect(current.receipt).toHaveProperty("preparation");
     expect(h.fetcher).toHaveBeenCalledTimes(2); expect((await wallet(f)).held).toBe(10);
   });
+  async function provisional() {
+    const f = await setup(), h = await higgsfield(f, "account-quote-v1"), id = await accept(f);
+    await runOneShotGeneration(f.adapters, () => store);
+    h.replies.push({ request_id: h.providerJobId, status: "completed", video: { url: "https://cdn.example.com/output.mp4" } });
+    f.adapters = [h.make()]; await due(id); await runOneShotGeneration(f.adapters, () => store);
+    return { f, h, id };
+  }
+  it.each([0, 40000, 60000, 150000])("delivers account-quoted footage once then reconciles final expense %s without customer repricing", async actual => {
+    const { f, h, id } = await provisional();
+    expect(await row(id)).toMatchObject({ status: "INGESTING", supplierEstimateMicros: 60000, expenseBasis: "ACCOUNT_QUOTE_V1", supplierCostMicros: null, supplierReconciledAt: null });
+    expect((await wallet(f)).held).toBe(10); expect(h.download).toHaveBeenCalledTimes(1);
+    await runOneClip(async () => processed, () => store); await runOneClip(async () => processed, () => store);
+    const ready = await row(id); expect(ready).toMatchObject({ status: "READY", supplierCostMicros: null, output: { status: "READY", approvedBy: null } });
+    expect(await wallet(f)).toMatchObject({ available: 94, held: 0 });
+    await reviewClip(f.scope, ready.output!.id, { action: "approve", watched: true });
+    const input = { generationId: id, supplierCostMicros: actual, evidence: "Independent test-only invoice evidence", operatorId: "test-operator" };
+    await Promise.all([reconcileShotGeneration(input), reconcileShotGeneration(input)]);
+    const reconciled = await row(id);
+    expect(reconciled).toMatchObject({ status: "READY", supplierCostMicros: actual, supplierEstimateMicros: 60000, expenseBasis: "ACCOUNT_QUOTE_V1", settledAt: ready.settledAt, output: { approvedBy: f.scope.actorId } });
+    expect(reconciled.supplierReconciledAt).toBeInstanceOf(Date);
+    expect((await db.supplierAuthorization.findUniqueOrThrow({ where: { key: id } })).ceilingMicros).toBe(Math.max(100000, actual));
+    expect(await wallet(f)).toMatchObject({ available: 94, held: 0 });
+    expect(await db.auditEvent.count({ where: { businessId: f.scope.businessId, action: "SHOT_EXPENSE_RECONCILED" } })).toBe(1);
+    expect(await readClip(f.scope, ready.output!.id, store)).toEqual(processed.bytes);
+    for (const changed of [{ ...input, supplierCostMicros: actual + 1 }, { ...input, evidence: "Changed invoice evidence" }, { ...input, operatorId: "another-operator" }]) await expect(reconcileShotGeneration(changed)).rejects.toThrow("replay changed");
+    expect(h.fetcher).toHaveBeenCalledTimes(3);
+    const publicJobs = JSON.stringify(await listShotGenerations(f.scope));
+    for (const privateField of ["supplierEstimateMicros", "supplierCostMicros", "expenseBasis", "receipt", "operatorId", "evidence"]) expect(publicJobs).not.toContain(privateField);
+  });
+  it.each(["failed", "nsfw", "canceled"])("releases customer credits for provisional %s without claiming a final zero invoice", async status => {
+    const f = await setup(), h = await higgsfield(f, "account-quote-v1"), id = await accept(f); await runOneShotGeneration(f.adapters, () => store);
+    h.replies.push({ request_id: h.providerJobId, status }); await due(id); await runOneShotGeneration(f.adapters, () => store);
+    expect(await row(id)).toMatchObject({ status: "FAILED", supplierEstimateMicros: 0, supplierCostMicros: null, expenseBasis: "ACCOUNT_QUOTE_V1", output: { status: "FAILED" } });
+    expect(await wallet(f)).toMatchObject({ available: 100, held: 0 }); expect(h.download).not.toHaveBeenCalled();
+    await reconcileShotGeneration({ generationId: id, supplierCostMicros: 0, evidence: "Independent refund ledger fixture", operatorId: "test-operator" });
+    expect(await row(id)).toMatchObject({ status: "FAILED", supplierCostMicros: 0, supplierEstimateMicros: 0 });
+  });
+  it.each(["decoder", "duration", "context", "permission", "storage", "lease"])("refunds provisional footage after %s failure but preserves supplier exposure", async reason => {
+    const { f, id } = await provisional(), current = await row(id);
+    if (reason === "context") await db.videoStoryboard.update({ where: { id: f.boardId }, data: { status: "DRAFT" } });
+    if (reason === "permission") await db.membership.update({ where: { organizationId_userId: { organizationId: f.scope.organizationId, userId: f.scope.actorId } }, data: { role: "VIEWER" } });
+    if (reason === "lease") { await db.videoClip.update({ where: { id: current.output!.id }, data: { status: "RUNNING", leaseUntil: new Date(0) } }); await recoverClipLeases(); }
+    else await runOneClip(async () => { if (reason === "decoder") throw Error("bad decoder"); return { ...processed, durationMs: reason === "duration" ? 4000 : 5000 }; }, () => reason === "storage" ? { ...store, put: async () => { throw Error("storage failure"); } } : store);
+    expect(await row(id)).toMatchObject({ status: "FAILED", supplierEstimateMicros: 60000, supplierCostMicros: null });
+    expect(await wallet(f)).toMatchObject({ available: 100, held: 0 });
+    await reconcileShotGeneration({ generationId: id, supplierCostMicros: 60000, evidence: "Independent failed output invoice fixture", operatorId: "test-operator" });
+    expect(await wallet(f)).toMatchObject({ available: 100, held: 0 });
+  });
+  it("refuses provisional reconciliation before normalization has settled customer credits", async () => {
+    const { f, id } = await provisional();
+    await expect(reconcileShotGeneration({ generationId: id, supplierCostMicros: 60000, evidence: "Independent premature invoice fixture", operatorId: "test-operator" })).rejects.toThrow("Only uncertain");
+    expect((await wallet(f)).held).toBe(10); expect((await row(id)).supplierCostMicros).toBeNull();
+  });
+  it.each(["READY", "FAILED"])("counts older provisional %s exposure until independent reconciliation and through reconciliation day", async status => {
+    const { f, id } = await provisional();
+    await runOneClip(async () => { if (status === "FAILED") throw Error("bad media"); return processed; }, () => store);
+    const old = new Date(Date.now() - 3 * 86400000);
+    await db.supplierAuthorization.update({ where: { key: id }, data: { createdAt: old } });
+    await db.videoGeneration.update({ where: { id }, data: { acceptedAt: old, submittedAt: old, settledAt: old } });
+    vi.stubEnv("DAILY_SUPPLIER_BUDGET_MICROS", "100000");
+    const key = crypto.randomUUID(); extras.push(key);
+    await expect(db.$transaction(tx => authorizeSupplier(tx, key, 1))).rejects.toThrow("supplier-spend limit");
+    await reconcileShotGeneration({ generationId: id, supplierCostMicros: 60000, evidence: "Independent dated invoice fixture", operatorId: "test-operator" });
+    await expect(db.$transaction(tx => authorizeSupplier(tx, key, 1))).rejects.toThrow("supplier-spend limit");
+    await db.videoGeneration.update({ where: { id }, data: { supplierReconciledAt: old } });
+    await db.$transaction(tx => authorizeSupplier(tx, key, 1));
+    expect((await wallet(f)).held).toBe(0);
+  });
+  it.each(["basis", "amount", "negative", "ceiling", "reconciled"])("database rejects malformed provisional %s independently of application code", async reason => {
+    const f = await setup(), id = await quote(f);
+    const invalid = reason === "basis" ? { supplierEstimateMicros: 1 } : reason === "amount" ? { expenseBasis: "ACCOUNT_QUOTE_V1" } : reason === "reconciled" ? { supplierReconciledAt: new Date() } : { expenseBasis: "ACCOUNT_QUOTE_V1", supplierEstimateMicros: reason === "negative" ? -1 : 100001 };
+    await expect(db.videoGeneration.update({ where: { id }, data: invalid })).rejects.toThrow();
+  });
+  it("refuses a provisional result from a final-expense route without releasing a hold or storing media", async () => {
+    const f = await setup(), id = await accept(f); await runOneShotGeneration(f.adapters, () => store); await due(id);
+    f.poll.mockImplementationOnce(async x => ({ requestId: x.requestId, providerJobId: x.providerJobId, accountId: rate.accountId, model: rate.model, status: "provisional-succeeded", estimatedCostMicros: 60000, bytes: source }));
+    await runOneShotGeneration(f.adapters, () => store);
+    expect(await row(id)).toMatchObject({ status: "NEEDS_RECONCILIATION", supplierEstimateMicros: null }); expect((await wallet(f)).held).toBe(10); expect(objects.size).toBe(0);
+  });
+  it.skipIf(!process.env.TEST_FFMPEG_PATH || !process.env.TEST_FFPROBE_PATH)("assembles a genuine downloaded shot through real normalization, reviewed motion export and unchanged invoice reconciliation", async () => {
+    const exec = promisify(execFile), dir = await mkdtemp(join(tmpdir(), "generated-delivery-fixture-"));
+    try {
+      vi.stubEnv("FFMPEG_PATH", process.env.TEST_FFMPEG_PATH!); vi.stubEnv("FFPROBE_PATH", process.env.TEST_FFPROBE_PATH!);
+      await exec(process.env.TEST_FFMPEG_PATH!, ["-nostdin", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=24", "-f", "lavfi", "-i", "sine=frequency=440", "-t", "5", "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart", join(dir, "source.mp4")], { timeout: 10000 });
+      const f = await setup(), h = await higgsfield(f, "account-quote-v1"), id = await accept(f);
+      h.download.mockResolvedValue(await readFile(join(dir, "source.mp4")));
+      await runOneShotGeneration(f.adapters, () => store);
+      h.replies.push({ request_id: h.providerJobId, status: "completed", video: { url: "https://cdn.example.com/output.mp4" } });
+      await due(id); await runOneShotGeneration([h.make()], () => store); await runOneClip(undefined, () => store);
+      const ready = await row(id); expect(ready).toMatchObject({ status: "READY", supplierCostMicros: null, output: { status: "READY", durationMs: 5000 } });
+      await reviewClip(f.scope, ready.output!.id, { action: "approve", watched: true });
+      const doc = storyboardDocument.parse((await db.videoStoryboard.findUniqueOrThrow({ where: { id: f.boardId } })).document);
+      doc.shots = [{ ...doc.shots[0], clip: { id: ready.output!.id, sha256: ready.output!.sha256 } }];
+      const next = (await manageVideo(f.scope, { action: "save", storyboardId: f.boardId, document: doc }, () => store)).storyboardId!;
+      await manageVideo(f.scope, { action: "review-shot", storyboardId: next, shotId: doc.shots[0].id, approved: true }, () => store);
+      await manageVideo(f.scope, { action: "approve-storyboard", storyboardId: next }, () => store);
+      const renderId = (await manageVideo(f.scope, { action: "render", storyboardId: next }, () => store)).renderId!;
+      await runOneMotion(undefined, () => store);
+      expect((await db.motionRender.findUniqueOrThrow({ where: { id: renderId } })).status).toBe("READY");
+      await expect(readMotion(f.scope, renderId, true, store)).rejects.toThrow("awaiting approval");
+      await manageVideo(f.scope, { action: "approve-render", renderId, continuityReviewed: true }, () => store);
+      const output = await readMotion(f.scope, renderId, true, store);
+      await writeFile(join(dir, "final.mp4"), output.bytes);
+      const probe = JSON.parse((await exec(process.env.TEST_FFPROBE_PATH!, ["-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height:format=duration", "-of", "json", join(dir, "final.mp4")], { timeout: 10000 })).stdout);
+      expect(probe.streams).toEqual([{ codec_name: "h264", codec_type: "video", width: 720, height: 1280 }]); expect(Number(probe.format.duration)).toBe(5);
+      await reconcileShotGeneration({ generationId: id, supplierCostMicros: 80000, evidence: "Independent synthetic invoice, no live provider calls", operatorId: "test-operator" });
+      expect((await readMotion(f.scope, renderId, true, store)).bytes).toEqual(output.bytes);
+      expect(await wallet(f)).toMatchObject({ available: 94, held: 0 }); expect(h.fetcher).toHaveBeenCalledTimes(3);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  }, 60000);
 });

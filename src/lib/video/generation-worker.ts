@@ -19,16 +19,16 @@ async function bounded<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
   finally { clearTimeout(timer); abort.abort(); }
 }
 // Only the owner of the current lease may change accounting. Unknown expense retains the hold.
-async function stopShot(claimed: VideoGeneration, code: string, cost: number | null, submitted: boolean, receipt?: Prisma.InputJsonValue) {
+async function stopShot(claimed: VideoGeneration, code: string, cost: number | null, submitted: boolean, receipt?: Prisma.InputJsonValue, estimate: number | null = null) {
   await db.$transaction(async tx => {
     const scope = generationScope(claimed); await lockBusiness(tx, scope);
     const row = await tx.videoGeneration.findUniqueOrThrow({ where: { id: claimed.id } });
     if (!["RUNNING", "SUBMITTING", "POLLING", "INGESTING"].includes(row.status) || row.leaseUntil?.getTime() !== claimed.leaseUntil?.getTime()) return;
-    const uncertain = submitted && cost === null;
+    const uncertain = submitted && cost === null && estimate === null;
     if (!uncertain) await finishReservationInTransaction(tx, row.organizationId, row.reservationId!, 0);
-    await tx.videoGeneration.update({ where: { id: row.id }, data: { status: uncertain ? "NEEDS_RECONCILIATION" : "FAILED", errorCode: code, leaseUntil: null, nextPollAt: null, ...(cost !== null ? { supplierCostMicros: cost, settledAt: new Date() } : {}), ...(receipt ? { receipt } : {}) } });
+    await tx.videoGeneration.update({ where: { id: row.id }, data: { status: uncertain ? "NEEDS_RECONCILIATION" : "FAILED", errorCode: code, leaseUntil: null, nextPollAt: null, ...(cost !== null ? { supplierCostMicros: cost, settledAt: new Date() } : {}), ...(estimate !== null ? { supplierEstimateMicros: estimate, expenseBasis: "ACCOUNT_QUOTE_V1", settledAt: new Date() } : {}), ...(receipt ? { receipt } : {}) } });
     if (!uncertain) await tx.videoClip.updateMany({ where: { generationId: row.id }, data: { status: submitted ? "FAILED" : "DELETED", leaseUntil: null, purgeAfter: cleanupAt(), errorCode: code } });
-    await tx.auditEvent.create({ data: { ...scope, action: "SHOT_STOPPED", detail: uncertain ? "Supplier expense is uncertain. Customer hold retained for operator review; no automatic resubmission." : "No usable footage delivered. Customer hold released; known supplier expense retained and private files scheduled for cleanup." } });
+    await tx.auditEvent.create({ data: { ...scope, action: "SHOT_STOPPED", detail: uncertain ? "Supplier expense is uncertain. Customer hold retained for operator review; no automatic resubmission." : "No usable footage delivered. Customer hold released; supplier expense basis retained separately and private files scheduled for cleanup." } });
   });
 }
 export async function runOneShotGeneration(adapters: ShotAdapter[] = configuredShotAdapters(), storage: () => AssetStore = videoStore) {
@@ -39,7 +39,7 @@ export async function runOneShotGeneration(adapters: ShotAdapter[] = configuredS
     return tx.videoGeneration.update({ where: { id: row.id }, data: { status: row.status === "QUEUED" ? "RUNNING" : "POLLING", leaseUntil: new Date(Date.now() + 120000), ...(row.status === "POLLING" ? { pollCount: { increment: 1 } } : {}) } });
   });
   if (!claimed) return false;
-  const scope = generationScope(claimed); let submitted = claimed.status === "POLLING", cost: number | null = null, receipt: Prisma.InputJsonValue | undefined;
+  const scope = generationScope(claimed); let submitted = claimed.status === "POLLING", cost: number | null = null, estimate: number | null = null, receipt: Prisma.InputJsonValue | undefined;
   const owned = async (tx: Prisma.TransactionClient, status: string) => {
     await lockBusiness(tx, scope);
     const row = await tx.videoGeneration.findUniqueOrThrow({ where: { id: claimed.id }, include: { output: true } });
@@ -87,16 +87,20 @@ export async function runOneShotGeneration(adapters: ShotAdapter[] = configuredS
       await stopShot(claimed, "SUPPLIER_EXPENSE_UNVERIFIED", null, true, { ...journal, result });
       return true;
     }
-    if (result.costMicros > claimed.supplierCeilingMicros) throw Error("Supplier expense exceeds authorization");
-    cost = result.costMicros;
-    receipt = { ...journal, requestId: result.requestId, providerJobId: result.providerJobId, accountId: result.accountId, model: result.model, status: result.status, costMicros: cost };
-    if (result.status === "failed") { await stopShot(claimed, "SUPPLIER_FAILED", cost, true, receipt); return true; }
+    const provisional = "estimatedCostMicros" in result;
+    if (provisional !== (route.expensePolicy === "account-quote-v1")) throw Error("Supplier expense policy differs");
+    const amount = provisional ? result.estimatedCostMicros : result.costMicros;
+    if (amount > claimed.supplierCeilingMicros) throw Error("Supplier expense exceeds authorization");
+    if (provisional) estimate = amount; else cost = amount;
+    receipt = { ...journal, requestId: result.requestId, providerJobId: result.providerJobId, accountId: result.accountId, model: result.model, status: result.status,
+      ...(provisional ? { estimatedCostMicros: amount, expenseBasis: "ACCOUNT_QUOTE_V1", ...("providerState" in result ? { providerState: result.providerState } : {}) } : { costMicros: amount }) };
+    if (result.status === "failed" || result.status === "provisional-failed") { await stopShot(claimed, "SUPPLIER_FAILED", cost, true, receipt, estimate); return true; }
     if (!result.bytes.byteLength || result.bytes.byteLength > MAX_VIDEO_BYTES) throw Error("Generated footage exceeds its allowance");
     const bytes = Buffer.from(result.bytes); assertClipSignature(bytes);
     const clip = await db.$transaction(async tx => {
       const row = await owned(tx, "POLLING"); await assertBrandEditor(tx, scope); await assertShotContext(tx, row);
       if (row.output?.status !== "AWAITING_GENERATION") throw Error("Reserved footage changed");
-      await tx.videoGeneration.update({ where: { id: row.id }, data: { status: "INGESTING", supplierCostMicros: cost, receipt, nextPollAt: null } });
+      await tx.videoGeneration.update({ where: { id: row.id }, data: { status: "INGESTING", supplierCostMicros: cost, ...(estimate !== null ? { supplierEstimateMicros: estimate, expenseBasis: "ACCOUNT_QUOTE_V1" } : {}), receipt, nextPollAt: null } });
       return tx.videoClip.update({ where: { id: row.output.id }, data: { status: "UPLOADING", sourceHash: hash(bytes), sourceBytes: bytes.length, leaseUntil: claimed.leaseUntil } });
     });
     const store = storage(); await store.put(clip.sourceKey, bytes, "video/mp4", true);
@@ -108,7 +112,7 @@ export async function runOneShotGeneration(adapters: ShotAdapter[] = configuredS
       await tx.videoGeneration.update({ where: { id: row.id }, data: { leaseUntil: null } });
       await tx.auditEvent.create({ data: { ...scope, action: "SHOT_QUARANTINED", detail: "Supplier receipt and private original verified. Credits remain held until silent normalization; human review follows." } });
     });
-  } catch { await stopShot(claimed, submitted ? "SUPPLIER_OR_OUTPUT_UNVERIFIED" : "PREFLIGHT_FAILED", cost, submitted, receipt); }
+  } catch { await stopShot(claimed, submitted ? "SUPPLIER_OR_OUTPUT_UNVERIFIED" : "PREFLIGHT_FAILED", cost, submitted, receipt, estimate); }
   return true;
 }
 export async function recoverShotGenerations() {

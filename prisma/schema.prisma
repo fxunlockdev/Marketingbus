@@ -563,6 +563,10 @@ model VideoGeneration {
   credits Int
   supplierCeilingMicros Int
   supplierCostMicros Int?
+  // Account quote is provisional expense, never a verified invoice amount.
+  supplierEstimateMicros Int?
+  expenseBasis String?
+  supplierReconciledAt DateTime?
   reservationId String? @unique
   providerJobId String?
   providerJobKey String? @unique

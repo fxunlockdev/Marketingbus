@@ -1,6 +1,6 @@
 # Generated shot operations
 
-The generated-shot lifecycle produces supporting footage from an approved, saved, empty storyboard scene. It is implemented and locally tested using injected adapters; the production adapter registry is empty. A concrete [Higgsfield network client and durable job bridge](HIGGSFIELD-TRANSPORT.md) are now implemented, but still need verified final-expense integration before registration and successful delivery. Adding Higgsfield credentials does not enable generation. Uploaded footage and app-owned motion rendering remain separate workflows.
+The generated-shot lifecycle produces supporting footage from an approved, saved, empty storyboard scene. A concrete [Higgsfield network client and durable job bridge](HIGGSFIELD-TRANSPORT.md) now supports explicit, disabled-by-default registration and [provisional account-quote delivery](VIDEO-DELIVERY-ACCOUNTING.md), with independent final-expense reconciliation. Adding credentials alone does not enable generation. Live provider and production-renderer/storage acceptance remain required. Uploaded footage and app-owned motion rendering remain available as separate workflows.
 
 ## Customer workflow
 
@@ -15,11 +15,11 @@ The source storyboard, brand and latest approved copy remain provenance requirem
 
 ## Operator configuration
 
-`VIDEO_RATE_CARD_JSON` is an array with at most 24 strict entries: `provider`, `accountId`, `adapterVersion`, `model`, `durationMs`, `ceilingMicros` and `verifiedUntil`. Duration is 1–8 seconds in quarter-second increments. A rate describes the all-in maximum expense for one silent generation at the adapter's fixed output configuration. An expired or unmatched rate cannot be selected. Among eligible registered adapters, the server selects the lowest total verified ceiling that covers the scene duration, not the cheapest per-second headline.
+`VIDEO_RATE_CARD_JSON` is an array with at most 24 strict entries: `provider`, `accountId`, `adapterVersion`, `model`, `durationMs`, `ceilingMicros`, `verifiedUntil` and optional `expensePolicy` (defaults to `final`). Duration is 1–8 seconds in quarter-second increments at the contract level; concrete adapters further restrict supported values. A rate describes the all-in maximum expense for one silent generation at the adapter's fixed output configuration. An expired, unsupported or unmatched rate cannot be selected. Among eligible registered adapters, the server selects the lowest total verified ceiling that covers the scene duration, not the cheapest per-second headline.
 
 The current internal conversion is one credit per 10,000 micro-USD of supplier expense, rounded up. This is an accounting conversion, not a validated subscription margin or a promise of $500–$600 net profit. Quote ceilings and realized supplier costs are retained separately. Customer settlement cannot exceed its reservation.
 
-Paid execution, matching worker runtime/configuration, private asset storage, motion rendering and a positive daily normalization allowance must all be ready before acceptance. The generated-shot lifecycle was introduced in `studio-v18-shot-jobs`; the durable journal update uses `studio-v28-video-journal` (deployment status is recorded in BUILD-STATUS.md). Shared daily and lifetime supplier limits include generated video; unresolved older jobs and jobs settled today continue to consume daily capacity. Cancellation and unusable output release customer holds without replenishing the lifetime supplier authorization. Reconciled overruns increase the recorded authorization so they reduce future capacity.
+Paid execution, matching worker runtime/configuration, private asset storage, motion rendering and a positive daily normalization allowance must all be ready before acceptance. The delivery update uses `studio-v29-video-delivery` (actual deployment status is recorded in BUILD-STATUS.md). Shared daily and lifetime supplier limits include generated video; unresolved older provisional invoices and jobs settled or reconciled today continue to consume daily capacity. Cancellation and unusable output release customer holds without replenishing lifetime supplier authorization. Reconciled overruns increase recorded authorization so they reduce future capacity.
 
 The existing retention limits also apply: five retained clips per business, six uploaded/generated clips per day, source and normalized output limited to 20 MB each, thirty-day retention and seven-day deletion grace for failed private media. Quote creation is limited to 24 per business per day. These are conservative pilot bounds, not proven capacity limits.
 
@@ -27,7 +27,7 @@ The existing retention limits also apply: five retained clips per business, six 
 
 Implement `ShotAdapter` with server-only authenticated HTTP, a pinned model/output schema, bounded response bodies, abortable requests and allowlisted media downloads. Never follow arbitrary customer URLs or forward supplier credentials to storage/CDN requests. Return independently verified request, account, job and model binding plus final expense. Two internal authorizations cannot share a provider job ID within the same provider/account.
 
-The contracts deliberately do not translate arbitrary Higgsfield responses into trusted receipts. Before registering a transport, verify the actual account's endpoint, credential form, model parameters, price/usage evidence, terminal statuses, cancellation behavior and output URL policy. A provider success response is not automatically a financial receipt. Missing final expense must remain uncertain rather than being invented from a displayed starting price.
+The contracts do not translate arbitrary provider responses into trusted receipts. Verify the actual account's endpoint, credential form, model parameters, price/usage evidence, terminal statuses, cancellation behavior and output URL policy. A success response is not a financial receipt. The explicit account-quote policy stores provisional expense separately and never invents a final invoice from a displayed starting price.
 
 Production keys, rate values and paid test authorization remain operator-managed. Test adapters are injected into local tests only; there is no HTTP endpoint for registering a fake provider or marking a job complete.
 
@@ -35,7 +35,7 @@ Production keys, rate values and paid test authorization remain operator-managed
 
 Before submission, cancellation releases the customer hold. A crashed pre-submit worker can safely requeue. After submission, unknown expense moves to `NEEDS_RECONCILIATION`, retains the hold and blocks another active shot for that business. Interrupted read-only polling may resume within its existing allowance. Known-cost failures or unusable normalized footage release customer credits while preserving supplier expense and cleaning private bytes.
 
-An operator must independently verify final expense before using the privileged command below. It never submits again or delivers uncertain media. Identical reconciliation is idempotent; changed replay evidence is rejected.
+An operator must independently verify final expense before using the privileged command below. It never submits again or delivers uncertain media. For completed provisional jobs it preserves output and customer settlement; for uncertain undelivered jobs it releases the hold without delivery. Identical reconciliation is idempotent; changed replay evidence is rejected.
 
 ```sh
 npx tsx scripts/reconcile-shot.ts --shot '<generation-id>' --supplier-cost-micros '<verified-expense>' --evidence '<supplier-ledger-reference>' --operator '<operator-id>'

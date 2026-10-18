@@ -27,7 +27,9 @@ export async function authorizeSupplier(tx: Prisma.TransactionClient, key: strin
         OR i."acceptedAt" >= ${day} OR i."submittedAt" >= ${day}))
     OR EXISTS (SELECT 1 FROM "VideoGeneration" v WHERE v.id = s.key
       AND (v.status IN ('QUEUED', 'RUNNING', 'SUBMITTING', 'POLLING', 'INGESTING', 'NEEDS_RECONCILIATION')
-        OR v."acceptedAt" >= ${day} OR v."submittedAt" >= ${day} OR v."settledAt" >= ${day}))`;
+        OR (v."expenseBasis" = 'ACCOUNT_QUOTE_V1' AND v."supplierCostMicros" IS NULL)
+        OR v."acceptedAt" >= ${day} OR v."submittedAt" >= ${day} OR v."settledAt" >= ${day}
+        OR v."supplierReconciledAt" >= ${day}))`;
   const reserved = Number(totals[0].total);
   if (reserved + ceiling > budget) throw new AppError(409, "Production has reached its safe supplier-spend limit. Try later.");
   await tx.supplierAuthorization.create({ data: { key, ceilingMicros: ceiling } });
