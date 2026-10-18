@@ -9,6 +9,7 @@ import { configuredShotAdapters, selectShotRoute, shotConfigurationHash, type Sh
 import { storyboardDocument } from "../src/lib/video/document";
 import { WORKER_RUNTIME, workerConfigurationHash } from "../src/lib/production/readiness";
 import { authorizeSupplier } from "../src/lib/production/budget";
+import { createHiggsfieldShotAdapter } from "../src/lib/video/higgsfield-adapter";
 import type { AssetStore } from "../src/lib/assets/storage";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (process.env.TEST_DATABASE_URL && (process.env.DATABASE_URL !== process.env.TEST_DATABASE_URL || !["localhost", "127.0.0.1"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Local test DB required");
@@ -197,5 +198,74 @@ suite("generated-shot authorization, asynchronous receipts and delivery", () => 
     const clip = (await row(id)).output!; await reviewClip(f.scope, clip.id, { action: "approve", watched: true });
     await manageVideo(f.scope, { action: "review-shot", storyboardId: f.boardId, shotId: f.shotId, approved: false }, () => store);
     expect((await listClips(f.scope)).find(c => c.id === clip.id)?.usable).toBe(false); await expect(readClip(f.scope, clip.id, store)).rejects.toThrow("storyboard changed");
+  });
+  async function higgsfield(f: Fixture) {
+    const settings = { keyId: "fixture-key-id", secret: "fixture-not-real-secret", verifiedUntil: new Date(Date.now() + 86400000).toISOString(), outputHosts: ["cdn.example.com"] };
+    const providerJobId = crypto.randomUUID();
+    const replies: unknown[] = [{ usd: "0.06", credits: "1" }, { request_id: providerJobId, status: "queued", status_url: `https://api.higgsfield.ai/requests/${providerJobId}/status` }];
+    const fetcher = vi.fn<typeof fetch>(async () => { const value = replies.shift(); if (!value) throw Error("Unexpected provider HTTP"); return Response.json(value); });
+    const download = vi.fn(async () => source);
+    const make = () => createHiggsfieldShotAdapter(settings, fetcher, download);
+    const adapter = make(); f.adapters = [adapter];
+    vi.stubEnv("VIDEO_RATE_CARD_JSON", JSON.stringify([{ ...rate, provider: adapter.id, accountId: adapter.accountId, adapterVersion: adapter.version, model: "seedance-2.5-text", verifiedUntil: settings.verifiedUntil }]));
+    await worker();
+    return { providerJobId, replies, fetcher, download, make, settings };
+  }
+  it.each(["completed", "failed", "nsfw", "canceled"])("journals real transport identity across restart and holds unverified %s expense", async state => {
+    const f = await setup(), h = await higgsfield(f), id = await accept(f);
+    await runOneShotGeneration(f.adapters, () => store);
+    const accepted = await row(id), saved = accepted.receipt as { preparation: string; submission: { journal: string } };
+    expect(accepted).toMatchObject({ status: "POLLING", providerJobId: h.providerJobId });
+    expect(JSON.parse(saved.preparation)).toMatchObject({ estimatedUsdMicros: 60000 });
+    expect(JSON.parse(saved.submission.journal)).toMatchObject({ operationId: id, providerJobId: h.providerJobId });
+    expect(JSON.stringify(saved)).not.toContain(h.settings.secret);
+    f.adapters = [h.make()];
+    h.replies.push({ request_id: h.providerJobId, status: "in_progress" }); await due(id); await runOneShotGeneration(f.adapters, () => store);
+    expect((await row(id)).receipt).toEqual(saved);
+    h.replies.push({ request_id: h.providerJobId, status: state, ...(state === "completed" ? { video: { url: "https://cdn.example.com/private.mp4" } } : {}) });
+    await due(id); await runOneShotGeneration(f.adapters, () => store); await runOneShotGeneration(f.adapters, () => store);
+    const stopped = await row(id);
+    expect(stopped).toMatchObject({ status: "NEEDS_RECONCILIATION", errorCode: "SUPPLIER_EXPENSE_UNVERIFIED", supplierCostMicros: null, settledAt: null });
+    expect(stopped.receipt).toMatchObject({ submission: saved.submission, preparation: saved.preparation, result: { status: "unverified", providerState: state } });
+    expect(await wallet(f)).toMatchObject({ available: 90, held: 10 }); expect(objects.size).toBe(0); expect(h.download).not.toHaveBeenCalled();
+    expect(h.fetcher).toHaveBeenCalledTimes(4);
+    expect(h.fetcher.mock.calls.filter(([url]) => String(url).endsWith("/text-to-video") && !String(url).includes("/estimate/"))).toHaveLength(1);
+    expect(JSON.stringify(await listShotGenerations(f.scope))).not.toContain("journal");
+    await reconcileShotGeneration({ generationId: id, supplierCostMicros: state === "completed" ? 60000 : 0, evidence: "Test-only verified ledger entry, not a live supplier bill", operatorId: "fixture-operator" });
+    expect((await row(id)).receipt).toMatchObject({ submission: saved.submission, preparation: saved.preparation });
+    expect(await wallet(f)).toMatchObject({ available: 100, held: 0 });
+  });
+  it.each(["brand", "permission", "execution", "configuration", "lease", "price"])("rechecks %s after read-only estimate before the submission fence", async reason => {
+    const f = await setup(), h = await higgsfield(f), id = await accept(f);
+    h.fetcher.mockImplementationOnce(async () => {
+      if (reason === "brand") await db.business.update({ where: { id: f.scope.businessId }, data: { version: { increment: 1 } } });
+      if (reason === "permission") await db.membership.update({ where: { organizationId_userId: { organizationId: f.scope.organizationId, userId: f.scope.actorId } }, data: { role: "VIEWER" } });
+      if (reason === "execution") vi.stubEnv("PAID_EXECUTION_ENABLED", "false");
+      if (reason === "configuration") vi.stubEnv("VIDEO_RATE_CARD_JSON", "[]");
+      if (reason === "lease") { await db.videoGeneration.update({ where: { id }, data: { leaseUntil: new Date(0) } }); await recoverShotGenerations(); }
+      return Response.json({ usd: reason === "price" ? "1" : "0.06", credits: "1" });
+    });
+    await runOneShotGeneration(f.adapters, () => store);
+    const current = await row(id); expect(h.fetcher).toHaveBeenCalledTimes(1); expect(current.submittedAt).toBeNull(); expect(current.providerJobId).toBeNull();
+    if (reason === "lease") { expect(current.status).toBe("QUEUED"); expect((await wallet(f)).held).toBe(10); }
+    else { expect(current.status).toBe("FAILED"); expect(await wallet(f)).toMatchObject({ available: 100, held: 0 }); }
+  });
+  it.each(["missing", "signature", "operation", "prompt", "credentials"])("never polls a %s or rebound journal", async reason => {
+    const f = await setup(), h = await higgsfield(f), id = await accept(f); await runOneShotGeneration(f.adapters, () => store);
+    const current = await row(id), saved = current.receipt as { preparation: string; submission: { journal?: string } };
+    if (reason === "missing") delete saved.submission.journal;
+    if (reason === "signature" || reason === "operation") { const journal = JSON.parse(saved.submission.journal!); journal[reason === "signature" ? "signature" : "operationId"] = reason === "signature" ? "0".repeat(64) : "other-operation"; saved.submission.journal = JSON.stringify(journal); }
+    if (reason === "prompt") await db.videoGeneration.update({ where: { id }, data: { prompt: "Changed after acceptance" } });
+    if (reason === "credentials") f.adapters = [createHiggsfieldShotAdapter({ ...h.settings, secret: "different-private-credential" }, h.fetcher, h.download)];
+    await db.videoGeneration.update({ where: { id }, data: { receipt: saved, nextPollAt: new Date(0) } });
+    await runOneShotGeneration(f.adapters, () => store);
+    expect((await row(id)).status).toBe("NEEDS_RECONCILIATION"); expect(h.fetcher).toHaveBeenCalledTimes(2); expect((await wallet(f)).held).toBe(10);
+  });
+  it("preserves the estimate but never resubmits after an ambiguous real transport submission", async () => {
+    const f = await setup(), h = await higgsfield(f), id = await accept(f);
+    h.fetcher.mockImplementationOnce(async () => Response.json(h.replies.shift())).mockRejectedValueOnce(Error("lost acknowledgement"));
+    await runOneShotGeneration(f.adapters, () => store); await recoverShotGenerations(); await runOneShotGeneration(f.adapters, () => store);
+    const current = await row(id); expect(current).toMatchObject({ status: "NEEDS_RECONCILIATION", providerJobId: null }); expect(current.receipt).toHaveProperty("preparation");
+    expect(h.fetcher).toHaveBeenCalledTimes(2); expect((await wallet(f)).held).toBe(10);
   });
 });

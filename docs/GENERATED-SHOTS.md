@@ -1,13 +1,13 @@
 # Generated shot operations
 
-The generated-shot lifecycle produces supporting footage from an approved, saved, empty storyboard scene. It is implemented and locally tested using injected adapters; the production adapter registry is empty. Adding Higgsfield credentials does not enable generation. Uploaded footage and app-owned motion rendering remain separate workflows.
+The generated-shot lifecycle produces supporting footage from an approved, saved, empty storyboard scene. It is implemented and locally tested using injected adapters; the production adapter registry is empty. A concrete [Higgsfield network client and durable job bridge](HIGGSFIELD-TRANSPORT.md) are now implemented, but still need verified final-expense integration before registration and successful delivery. Adding Higgsfield credentials does not enable generation. Uploaded footage and app-owned motion rendering remain separate workflows.
 
 ## Customer workflow
 
 1. Confirm the business, approve the source copy, then save and approve the exact storyboard and scene. Scenes already containing an image or clip cannot use this initial-generation lane.
 2. Request a quote. The server builds the prompt from the confirmed business and approved scene, without a free-form customer prompt. Quotes expire after ten minutes and make no supplier call or credit reservation.
 3. Confirm rights and accept the credit ceiling. Admission atomically reserves customer credits, supplier budget, private storage capacity and normalization capacity. Repeated acceptance does not create another job.
-4. The worker submits once and records the supplier job. Status checks are read-only, with persisted backoff, at most twenty polls and a one-hour polling window. An ambiguous submission is never automatically resubmitted.
+4. The worker can obtain a read-only estimate, recheck current authority, then persist it at the submission fence. It submits once and records the supplier job and signed journal. Status checks are read-only, with persisted backoff, at most twenty polls and a one-hour polling window. An ambiguous submission is never automatically resubmitted.
 5. A successful, bound receipt enters private MP4 quarantine. Source bytes must satisfy size/signature checks and immutable storage read-back. Credits remain held while the existing clip worker normalizes the footage.
 6. Only usable normalized media settles customer credits. The clip still needs explicit human rights, accuracy and continuity review before it can be attached to a new storyboard version, rendered and approved for export.
 
@@ -19,7 +19,7 @@ The source storyboard, brand and latest approved copy remain provenance requirem
 
 The current internal conversion is one credit per 10,000 micro-USD of supplier expense, rounded up. This is an accounting conversion, not a validated subscription margin or a promise of $500–$600 net profit. Quote ceilings and realized supplier costs are retained separately. Customer settlement cannot exceed its reservation.
 
-Paid execution, matching worker runtime/configuration, private asset storage, motion rendering and a positive daily normalization allowance must all be ready before acceptance. The generated-shot lifecycle was introduced in `studio-v18-shot-jobs`; the current runtime is `studio-v19-video-formats`. Shared daily and lifetime supplier limits include generated video; unresolved older jobs and jobs settled today continue to consume daily capacity. Cancellation and unusable output release customer holds without replenishing the lifetime supplier authorization. Reconciled overruns increase the recorded authorization so they reduce future capacity.
+Paid execution, matching worker runtime/configuration, private asset storage, motion rendering and a positive daily normalization allowance must all be ready before acceptance. The generated-shot lifecycle was introduced in `studio-v18-shot-jobs`; the durable journal update uses `studio-v28-video-journal` (deployment status is recorded in BUILD-STATUS.md). Shared daily and lifetime supplier limits include generated video; unresolved older jobs and jobs settled today continue to consume daily capacity. Cancellation and unusable output release customer holds without replenishing the lifetime supplier authorization. Reconciled overruns increase the recorded authorization so they reduce future capacity.
 
 The existing retention limits also apply: five retained clips per business, six uploaded/generated clips per day, source and normalized output limited to 20 MB each, thirty-day retention and seven-day deletion grace for failed private media. Quote creation is limited to 24 per business per day. These are conservative pilot bounds, not proven capacity limits.
 

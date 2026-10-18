@@ -1,6 +1,6 @@
 # Higgsfield transport research — 18 October 2026
 
-These verified public contracts support the next implementation step. They are not an adapter, account-acceptance result or authorization to spend. The generated-shot registry remains empty.
+These verified public contracts support the implemented [low-level network transport](HIGGSFIELD-TRANSPORT.md). They are not a registered job adapter, account-acceptance result or authorization to spend. The generated-shot registry remains empty.
 
 ## Verified contracts
 
@@ -16,4 +16,4 @@ These verified public contracts support the next implementation step. They are n
 
 Current model identifiers in `shotRate` disallow `/`; use a reviewed alias-to-fixed-endpoint mapping or a deliberate schema/migration update, never an arbitrary endpoint from tenant input. Persist exact request parameters/hash, account credential identity, provider job ID and cost evidence. Bind polling to that record across credential/configuration changes. Downloads need an explicit trusted-host policy, public-network controls, byte/time limits and no credential forwarding. Do not infer download allowlists from documentation example CDNs.
 
-The first transport still needs implementation, tests and a verified expense policy; these notes do not close that gap. Live testing additionally needs the user's private credentials, account-specific model/rate access, explicit new spending budget and storage/decoder readiness. No authenticated provider call was made for this research.
+The fixed-model network client, signed estimates/receipts, bounded polling, public-DNS-pinned downloads and durable job receipt bridge are implemented and tested. The bridge persists estimate/submission evidence and resumes only bound read-only polling; terminal unverified expense stops at reconciliation without media delivery. A verified final-expense policy and its successful delivery integration still remain. Live testing additionally needs the user's private credentials, account-specific model/rate access, explicit new spending budget and storage/decoder readiness. No authenticated provider call was made for this research.

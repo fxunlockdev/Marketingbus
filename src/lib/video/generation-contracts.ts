@@ -21,15 +21,20 @@ export function shotConfigurationHash() {
 }
 export type ShotAdapter = {
   id: string; accountId: string; version: string;
+  // Optional read-only estimate. It cannot submit a generation. The worker
+  // rechecks the lease, approvals and execution gates after this returns.
+  prepare?(input: { requestId: string; prompt: string; route: ShotRoute; signal: AbortSignal }): Promise<string>;
   // Adapter owns authenticated, allowlisted supplier HTTP and bounded downloads.
   // It must verify account/model/request binding before returning these receipts.
-  submit(input: { requestId: string; prompt: string; route: ShotRoute; signal: AbortSignal }): Promise<unknown>;
-  poll(input: { requestId: string; providerJobId: string; route: ShotRoute; signal: AbortSignal }): Promise<unknown>;
+  submit(input: { requestId: string; prompt: string; route: ShotRoute; signal: AbortSignal; preparation?: string }): Promise<unknown>;
+  poll(input: { requestId: string; prompt: string; providerJobId: string; route: ShotRoute; signal: AbortSignal; journal?: string }): Promise<unknown>;
 };
-export const submissionReceipt = z.object({ requestId: identifier, providerJobId: identifier, accountId: identifier }).strict();
-const boundReceipt = submissionReceipt.extend({ model: identifier });
+export const adapterJournal = z.string().min(1).max(8192);
+export const submissionReceipt = z.object({ requestId: identifier, providerJobId: identifier, accountId: identifier, journal: adapterJournal.optional() }).strict();
+const boundReceipt = submissionReceipt.omit({ journal: true }).extend({ model: identifier });
 export const pollReceipt = z.discriminatedUnion("status", [
   boundReceipt.extend({ status: z.literal("pending") }).strict(),
+  boundReceipt.extend({ status: z.literal("unverified"), providerState: z.enum(["completed", "failed", "nsfw", "canceled"]) }).strict(),
   boundReceipt.extend({ status: z.literal("failed"), costMicros: z.number().int().nonnegative().max(80000000) }).strict(),
   boundReceipt.extend({ status: z.literal("succeeded"), costMicros: z.number().int().nonnegative().max(80000000), bytes: z.instanceof(Uint8Array) }).strict(),
 ]);

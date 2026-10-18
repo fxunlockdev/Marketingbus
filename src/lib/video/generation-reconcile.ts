@@ -23,7 +23,7 @@ export async function reconcileShotGeneration(raw: unknown) {
     await tx.$queryRaw`SELECT pg_advisory_xact_lock(71403218)::text`;
     await tx.supplierAuthorization.update({ where: { key: row.id }, data: { ceilingMicros: Math.max(row.supplierCeilingMicros, input.supplierCostMicros) } });
     await finishReservationInTransaction(tx, row.organizationId, row.reservationId!, 0);
-    await tx.videoGeneration.update({ where: { id: row.id }, data: { status: "FAILED", errorCode: "RECONCILED_NO_DELIVERABLE", supplierCostMicros: input.supplierCostMicros, settledAt: new Date(), leaseUntil: null, nextPollAt: null, receipt: { evidence: input.evidence, operatorId: input.operatorId, reconciledAt: new Date().toISOString() } } });
+    await tx.videoGeneration.update({ where: { id: row.id }, data: { status: "FAILED", errorCode: "RECONCILED_NO_DELIVERABLE", supplierCostMicros: input.supplierCostMicros, settledAt: new Date(), leaseUntil: null, nextPollAt: null, receipt: { ...(row.receipt && typeof row.receipt === "object" && !Array.isArray(row.receipt) ? row.receipt : {}), evidence: input.evidence, operatorId: input.operatorId, reconciledAt: new Date().toISOString() } } });
     await tx.videoClip.updateMany({ where: { generationId: row.id }, data: { status: "FAILED", approvedBy: null, leaseUntil: null, purgeAfter: new Date(Date.now() + 7 * 86400000) } });
     await tx.auditEvent.create({ data: { ...scope, action: "SHOT_RECONCILED", detail: "Operator verified final expense; customer hold released. No uncertain footage delivered or supplier resubmission authorized." } });
     return { ok: true };

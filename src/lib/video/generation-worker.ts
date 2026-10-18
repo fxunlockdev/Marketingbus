@@ -10,7 +10,7 @@ import { videoStore } from "./service";
 import { assertClipSignature } from "./clip-normalizer";
 import { MAX_VIDEO_BYTES } from "./limits";
 import { assertShotContext, generationScope, failGeneratedClip } from "./generation-context";
-import { configuredShotAdapters, shotAdapter, shotRoute, shotConfigurationHash, submissionReceipt, pollReceipt, MAX_SHOT_POLLS, type ShotAdapter } from "./generation-contracts";
+import { configuredShotAdapters, shotAdapter, shotRoute, shotConfigurationHash, submissionReceipt, pollReceipt, adapterJournal, MAX_SHOT_POLLS, type ShotAdapter } from "./generation-contracts";
 const hash = (v: Uint8Array | string) => createHash("sha256").update(v).digest("hex");
 const cleanupAt = () => new Date(Date.now() + 7 * 86400000);
 async function bounded<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -50,32 +50,46 @@ export async function runOneShotGeneration(adapters: ShotAdapter[] = configuredS
     const route = shotRoute.parse(claimed.route), adapter = shotAdapter(route, adapters);
     if (claimed.configurationHash !== shotConfigurationHash()) throw Error("Shot configuration changed");
     if (claimed.status === "RUNNING") {
-      await db.$transaction(async tx => {
+      const preflight = async (tx: Prisma.TransactionClient) => {
         const row = await owned(tx, "RUNNING"); assertExecutionEnabled(); await assertBrandEditor(tx, scope); await assertShotContext(tx, row);
-        if (new Date(route.verifiedUntil) <= new Date() || row.output?.status !== "AWAITING_GENERATION") throw Error("Shot authorization changed");
+        if (claimed.configurationHash !== shotConfigurationHash() || new Date(route.verifiedUntil) <= new Date() || row.output?.status !== "AWAITING_GENERATION") throw Error("Shot authorization changed");
         storage();
-        await tx.videoGeneration.update({ where: { id: row.id }, data: { status: "SUBMITTING", submittedAt: new Date() } });
+        return row;
+      };
+      await db.$transaction(preflight);
+      const preparation = adapter.prepare ? adapterJournal.parse(await bounded(signal => adapter.prepare!({ requestId: claimed.id, prompt: claimed.prompt, route, signal }))) : undefined;
+      await db.$transaction(async tx => {
+        const row = await preflight(tx);
+        await tx.videoGeneration.update({ where: { id: row.id }, data: { status: "SUBMITTING", submittedAt: new Date(), ...(preparation ? { receipt: { preparation } } : {}) } });
       });
       submitted = true;
-      const accepted = submissionReceipt.parse(await bounded(signal => adapter.submit({ requestId: claimed.id, prompt: claimed.prompt, route, signal })));
+      const accepted = submissionReceipt.parse(await bounded(signal => adapter.submit({ requestId: claimed.id, prompt: claimed.prompt, route, signal, preparation })));
       if (accepted.requestId !== claimed.id || accepted.accountId !== route.accountId) throw Error("Supplier receipt binding differs");
       await db.$transaction(async tx => {
         await owned(tx, "SUBMITTING");
-        await tx.videoGeneration.update({ where: { id: claimed.id }, data: { status: "POLLING", providerJobId: accepted.providerJobId, providerJobKey: hash(JSON.stringify([route.provider, route.accountId, accepted.providerJobId])), leaseUntil: null, nextPollAt: new Date(Date.now() + 30000) } });
+        await tx.videoGeneration.update({ where: { id: claimed.id }, data: { status: "POLLING", providerJobId: accepted.providerJobId, providerJobKey: hash(JSON.stringify([route.provider, route.accountId, accepted.providerJobId])), receipt: { submission: accepted, ...(preparation ? { preparation } : {}) }, leaseUntil: null, nextPollAt: new Date(Date.now() + 30000) } });
       });
       return true;
     }
     if (!claimed.providerJobId || claimed.pollCount > MAX_SHOT_POLLS || !claimed.submittedAt || Date.now() - claimed.submittedAt.getTime() > 3600000) throw Error("Polling allowance exhausted");
-    const result = pollReceipt.parse(await bounded(signal => adapter.poll({ requestId: claimed.id, providerJobId: claimed.providerJobId!, route, signal })));
+    const saved = claimed.receipt as { submission?: unknown; preparation?: string } | null;
+    const submission = saved?.submission ? submissionReceipt.parse(saved.submission) : undefined;
+    if (submission && (submission.requestId !== claimed.id || submission.accountId !== route.accountId || submission.providerJobId !== claimed.providerJobId)) throw Error("Saved supplier receipt binding differs");
+    const result = pollReceipt.parse(await bounded(signal => adapter.poll({ requestId: claimed.id, prompt: claimed.prompt, providerJobId: claimed.providerJobId!, route, signal, journal: submission?.journal })));
     if (result.requestId !== claimed.id || result.providerJobId !== claimed.providerJobId || result.accountId !== route.accountId || result.model !== route.model) throw Error("Supplier result binding differs");
     if (result.status === "pending") {
       if (claimed.pollCount >= MAX_SHOT_POLLS) throw Error("Polling allowance exhausted");
       await db.$transaction(async tx => { await owned(tx, "POLLING"); await tx.videoGeneration.update({ where: { id: claimed.id }, data: { leaseUntil: null, nextPollAt: new Date(Date.now() + Math.min(300000, 30000 * 2 ** Math.min(4, claimed.pollCount))) } }); });
       return true;
     }
+    const journal = { ...(submission ? { submission } : {}), ...(saved?.preparation ? { preparation: adapterJournal.parse(saved.preparation) } : {}) };
+    if (result.status === "unverified") {
+      await stopShot(claimed, "SUPPLIER_EXPENSE_UNVERIFIED", null, true, { ...journal, result });
+      return true;
+    }
     if (result.costMicros > claimed.supplierCeilingMicros) throw Error("Supplier expense exceeds authorization");
     cost = result.costMicros;
-    receipt = { requestId: result.requestId, providerJobId: result.providerJobId, accountId: result.accountId, model: result.model, status: result.status, costMicros: cost };
+    receipt = { ...journal, requestId: result.requestId, providerJobId: result.providerJobId, accountId: result.accountId, model: result.model, status: result.status, costMicros: cost };
     if (result.status === "failed") { await stopShot(claimed, "SUPPLIER_FAILED", cost, true, receipt); return true; }
     if (!result.bytes.byteLength || result.bytes.byteLength > MAX_VIDEO_BYTES) throw Error("Generated footage exceeds its allowance");
     const bytes = Buffer.from(result.bytes); assertClipSignature(bytes);
