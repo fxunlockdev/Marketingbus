@@ -46,9 +46,9 @@ export async function GET() {
     await db.$queryRaw`SELECT "independentApproval" FROM "Business" LIMIT 0`;
     await db.$queryRaw`SELECT "authorId", "approvedBy" FROM "CreativeRevision" LIMIT 0`;
     await db.$queryRaw`SELECT "blocking" FROM "ReviewComment" LIMIT 0`;
-    await db.$queryRaw`SELECT "creditsPerWeek" FROM "WeeklyPolicy" LIMIT 0`;
-    await db.$queryRaw`SELECT "creditsAuthorized" FROM "WeeklyCycle" LIMIT 0`;
-    await db.$queryRaw`SELECT "quoteId" FROM "WeeklyTask" LIMIT 0`;
+    await db.$queryRaw`SELECT "creditsPerWeek", "imagesAfterApproval" FROM "WeeklyPolicy" LIMIT 0`;
+    await db.$queryRaw`SELECT "creditsAuthorized", "mediaStatus", "mediaLeaseUntil", "nextMediaAt" FROM "WeeklyCycle" LIMIT 0`;
+    await db.$queryRaw`SELECT "quoteId", "imageStatus", "imageGenerationId" FROM "WeeklyTask" LIMIT 0`;
     return Response.json({status:"ok"},{headers:{"Cache-Control":"no-store"}});
   }
   catch { return Response.json({status:"unavailable"},{status:503,headers:{"Cache-Control":"no-store"}}); }

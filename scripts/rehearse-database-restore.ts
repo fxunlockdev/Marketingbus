@@ -85,6 +85,8 @@ async function main() {
     const publicationConnection = await source.socialConnection.create({ data: { organizationId: a.id, businessId: business.id, provider: "LinkedIn", status: "DISCONNECTED", authorizationVersion: 2, externalAccountId: "urn:li:organization:123", label: "Synthetic publishing fixture", encryptedToken: "", permissions: [] } });
     const publicationPlan = await source.productionPlan.create({ data: { organizationId: a.id, businessId: business.id, brandVersion: 3, title: "Synthetic journal recovery", creditCeiling: 0, items: { create: { title: "Synthetic post", channel: "LinkedIn", format: "static", brief: {}, revisions: { create: { version: 1, status: "APPROVED", content: { caption: "Synthetic restoration fixture." } } } } } }, include: { items: { include: { revisions: true } } } });
     const frozenPayload = { caption: "Synthetic restoration fixture.", channel: "LinkedIn", format: "static", mediaExportId: null };
+    await source.weeklyPolicy.create({ data: { businessId: business.id, organizationId: a.id, actorId: user.id, brandVersion: 3, enabled: true, mode: "DRAFTS", imagesAfterApproval: true, maxItems: 1, creditsPerWeek: 100, weekday: 1, hourUTC: 9, version: 1, nextRunAt: new Date("2099-01-01T00:00:00Z") } });
+    await source.weeklyCycle.create({ data: { id: "synthetic-weekly-images", businessId: business.id, organizationId: a.id, periodKey: "2026-10-12", policyVersion: 1, brandVersion: 3, planId: publicationPlan.id, status: "COMPLETE", mediaStatus: "OPEN", mediaLeaseUntil: new Date("2026-10-18T12:00:00Z"), nextMediaAt: new Date("2026-10-18T12:03:00Z"), creditsAuthorized: 40, tasks: { create: { id: "synthetic-weekly-image-task", itemId: publicationPlan.items[0].id, status: "AUTHORIZED", imageStatus: "WAITING" } } } });
     await source.socialPublication.create({ data: { id: "synthetic-publication", organizationId: a.id, businessId: business.id, connectionId: publicationConnection.id, revisionId: publicationPlan.items[0].revisions[0].id, brandVersion: 3, payload: frozenPayload, payloadHash: payloadHash(frozenPayload), scheduledFor: new Date(), timezone: "UTC", status: "NEEDS_RECONCILIATION", submissionAdapterVersion: "synthetic:publish-v1", candidatePostId: "urn:li:share:456" } });
     await source.socialPublication.update({ where: { id: "synthetic-publication" }, data: { errorCode: "ACCOUNT_DISCONNECTED" } });
     const imagePayload = { ...frozenPayload, mediaExportId: "synthetic-export-reference", image: { sha256: "a".repeat(64), bytes: 1024, width: 1080, height: 1080, altText: "Synthetic image" } };
@@ -133,6 +135,11 @@ async function main() {
     const restoreMs = Date.now() - restoreStarted;
     phase = "schema and row verification";
     assertSnapshot(before, await recoverySnapshot(target));
+    const weekly = await target.weeklyCycle.findUniqueOrThrow({ where: { id: "synthetic-weekly-images" }, include: { tasks: true } });
+    check(weekly.status === "COMPLETE" && weekly.mediaStatus === "OPEN" && weekly.creditsAuthorized === 40 && weekly.mediaLeaseUntil?.toISOString() === "2026-10-18T12:00:00.000Z" && weekly.nextMediaAt?.toISOString() === "2026-10-18T12:03:00.000Z" && weekly.tasks[0].imageStatus === "WAITING", "Weekly image authorization, budget or lease not preserved.");
+    check((await target.weeklyPolicy.findUniqueOrThrow({ where: { businessId: business.id } })).imagesAfterApproval, "Weekly image consent lost.");
+    await mustReject(() => target.weeklyPolicy.update({ where: { businessId: business.id }, data: { mode: "PLAN" } }));
+    await mustReject(() => target.weeklyTask.update({ where: { id: "synthetic-weekly-image-task" }, data: { imageStatus: "AUTHORIZED" } }));
     const audio = await target.videoClip.findUniqueOrThrow({ where: { id: "synthetic-audio" } });
     check(audio.mediaKind === "AUDIO" && audio.instrumentalConfirmedAt !== null && audio.status === "READY" && audio.approvedBy === null && audio.durationMs === 3000, "Audio rights or review state not preserved.");
     await mustReject(() => target.videoClip.update({ where: { id: audio.id }, data: { instrumentalConfirmedAt: null } }));

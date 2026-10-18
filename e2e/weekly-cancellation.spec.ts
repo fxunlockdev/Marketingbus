@@ -31,6 +31,13 @@ test("inspect and stop a weekly run without touching authorized work or credits"
     await expect(runs.getByText("Authorized creative", { exact: true })).toBeVisible();
     await expect(runs.getByText(/Outcome uncertain — operator review required/)).toBeVisible();
     await expect(runs.getByText(/1 credit held/)).toBeVisible();
+    const imageOptIn = page.getByRole("checkbox", { name: "Generate one image after I approve each weekly copy draft" });
+    await expect(imageOptIn).not.toBeChecked(); await expect(imageOptIn).toBeEnabled();
+    await imageOptIn.focus(); await page.keyboard.press("Space"); await expect(imageOptIn).toBeChecked();
+    await page.getByRole("combobox", { name: "Weekly mode", exact: true }).selectOption("PLAN");
+    await expect(imageOptIn).not.toBeChecked(); await expect(imageOptIn).toBeDisabled();
+    await page.getByRole("combobox", { name: "Weekly mode", exact: true }).selectOption("DRAFTS");
+    await expect(imageOptIn).toBeEnabled();
     await expect(page.getByText("fixture-private-error", { exact: false })).toHaveCount(0);
     const stop = runs.getByRole("button", { name: "Stop run for 2026-10-12", exact: true });
     await stop.focus(); await page.keyboard.press("Enter");
@@ -58,5 +65,34 @@ test("inspect and stop a weekly run without touching authorized work or credits"
     expect((await page.request.post(`/api/businesses/${id}/planning`, { headers, data: { action: "cancelCycle", cycleId: cycle.id, policyVersion: 1 } })).status()).toBe(404);
     expect((await page.request.post("/api/auth/logout", { headers, data: {} })).ok()).toBe(true);
     expect((await page.request.get(`/api/businesses/${id}/planning`)).status()).toBe(401);
+  } finally { if (organizationId) await db.organization.delete({ where: { id: organizationId } }); await db.user.deleteMany({ where: { email } }); }
+});
+
+test("weekly image opt-in saves explicitly and pending media remains stoppable after copy authorization", async ({ page }) => {
+  const email = `weekly-image-${crypto.randomUUID()}@example.test`, headers = { Origin: "http://127.0.0.1:3000" };
+  let organizationId: string | undefined;
+  try {
+    expect((await page.request.post("/api/auth/register", { headers, data: { name: "Media Fixture", email, password: "Test-only-password-2026!" } })).ok()).toBe(true);
+    const created = await page.request.post("/api/businesses", { headers, data: { name: "Media Studio", offering: "Design consultations", audience: "Homeowners", goal: "Book consultations", channels: ["Facebook"] } });
+    expect(created.ok()).toBe(true); const { id } = await created.json();
+    const business = await db.business.update({ where: { id }, data: { confirmedAt: new Date() } }); organizationId = business.organizationId;
+    await page.goto("/studio"); await page.getByRole("button", { name: "Workflows", exact: true }).click();
+    await page.getByRole("checkbox", { name: "Enable recurring work for this business" }).check();
+    await page.getByRole("combobox", { name: "Weekly mode", exact: true }).selectOption("DRAFTS");
+    await page.getByRole("checkbox", { name: "Generate one image after I approve each weekly copy draft" }).check();
+    await page.getByLabel("Weekly credit ceiling", { exact: true }).fill("20");
+    await page.getByRole("button", { name: "Save recurring authorization" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Workflow settings saved" })).toBeVisible();
+    expect(await db.weeklyPolicy.findUniqueOrThrow({ where: { businessId: id } })).toMatchObject({ imagesAfterApproval: true, creditsPerWeek: 20 });
+    const plan = await db.productionPlan.create({ data: { organizationId, businessId: id, brandVersion: business.version, title: "Synthetic media phase", creditCeiling: 20, items: { create: { title: "Awaiting approved copy", format: "static", channel: "Facebook", brief: {} } } }, include: { items: true } });
+    const cycle = await db.weeklyCycle.create({ data: { organizationId, businessId: id, planId: plan.id, brandVersion: business.version, policyVersion: 1, periodKey: "2026-10-12", status: "COMPLETE", mediaStatus: "OPEN", creditsAuthorized: 1, tasks: { create: { itemId: plan.items[0].id, status: "AUTHORIZED", imageStatus: "WAITING" } } } });
+    await page.getByRole("button", { name: "Refresh weekly runs" }).click();
+    await expect(page.getByText("Image: Waiting for approved copy", { exact: false })).toBeVisible();
+    await page.getByRole("button", { name: "Stop run for 2026-10-12", exact: true }).click();
+    await page.getByRole("button", { name: "Confirm stop for 2026-10-12" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Weekly run stopped" })).toBeVisible();
+    expect(await db.weeklyCycle.findUniqueOrThrow({ where: { id: cycle.id } })).toMatchObject({ status: "CANCELLED", mediaStatus: "CANCELLED", creditsAuthorized: 1 });
+    expect(await db.imageGeneration.count({ where: { businessId: id } })).toBe(0);
+    expect((await new AxeBuilder({ page }).include("main").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
   } finally { if (organizationId) await db.organization.delete({ where: { id: organizationId } }); await db.user.deleteMany({ where: { email } }); }
 });

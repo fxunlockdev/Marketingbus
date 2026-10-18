@@ -59,6 +59,19 @@ suite("read-only operator queue inventory", () => {
     await job(scope, "NEEDS_RECONCILIATION", { leaseUntil: future });
     expect((await report(scope)).items[0]).toMatchObject({ reason: "UNCERTAIN_OUTCOME", leaseActiveAtReportTime: true });
   });
+  it("reports the independent weekly-image phase without confusing completed copy or active review backoff", async () => {
+    const scope = await setup();
+    const cycle = await db.weeklyCycle.create({ data: { ...scope, periodKey: "2026-10-12", planId: "fixture-plan", brandVersion: 1, policyVersion: 1, status: "COMPLETE", mediaStatus: "OPEN", createdAt: old, nextMediaAt: future } });
+    expect((await report(scope)).items).toEqual([]);
+    await db.weeklyCycle.update({ where: { id: cycle.id }, data: { nextMediaAt: old } });
+    expect((await report(scope)).items).toEqual([expect.objectContaining({ queue: "weekly-images", id: cycle.id, status: "OPEN", reason: "OVERDUE" })]);
+    await db.weeklyCycle.update({ where: { id: cycle.id }, data: { mediaLeaseUntil: old } });
+    expect((await report(scope)).items[0].reason).toBe("EXPIRED_LEASE");
+    await db.weeklyCycle.update({ where: { id: cycle.id }, data: { mediaStatus: "BLOCKED", mediaLeaseUntil: null } });
+    expect((await report(scope)).items[0].reason).toBe("FAILED");
+    await db.weeklyCycle.update({ where: { id: cycle.id }, data: { mediaStatus: "COMPLETE" } });
+    expect((await report(scope)).items).toEqual([]);
+  });
   it("paginates equal timestamps without duplicates, freezes cutoff and rejects cross-scope cursors", async () => {
     const scope = await setup(); for (let i = 0; i < 5; i++) await job(scope, "FAILED");
     const first = await report(scope, { limit: 2 });

@@ -3,6 +3,7 @@ import { runOneShotGeneration, recoverShotGenerations } from "../src/lib/video/g
 import { processOnePayment } from "../src/lib/billing/payments";
 import { db } from "../src/lib/db";
 import { createDuePlan, runOneWeeklyDraft } from "../src/lib/workflows/planning";
+import { runOneWeeklyImage } from "../src/lib/workflows/weekly-images";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { heartbeat, HEARTBEAT_TTL_MS } from "../src/lib/production/readiness";
@@ -37,6 +38,7 @@ const steps: WorkerStep[] = [
   { name: "payments", run: processOnePayment },
   { name: "weekly-plan", run: createDuePlan },
   { name: "weekly-draft", enabled: paid => paid, run: runOneWeeklyDraft },
+  { name: "weekly-image", enabled: paid => paid, run: runOneWeeklyImage },
   { name: "retention", run: async () => {
     if (Date.now() - lastRetentionCheck <= 300000) return;
     lastRetentionCheck = Date.now();

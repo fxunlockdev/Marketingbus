@@ -838,6 +838,7 @@ model WeeklyPolicy {
   organizationId String
   enabled Boolean @default(false)
   mode String @default("PLAN")
+  imagesAfterApproval Boolean @default(false)
   maxItems Int @default(4)
   creditsPerWeek Int @default(0)
   weekday Int @default(1)
@@ -863,11 +864,15 @@ model WeeklyCycle {
   creditsAuthorized Int @default(0)
   errorCode String?
   leaseUntil DateTime?
+  mediaStatus String @default("NONE")
+  mediaLeaseUntil DateTime?
+  nextMediaAt DateTime?
   createdAt DateTime @default(now())
   business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
   tasks WeeklyTask[]
   @@unique([businessId, periodKey])
   @@index([status, leaseUntil])
+  @@index([mediaStatus, nextMediaAt])
 }
 
 model WeeklyTask {
@@ -877,6 +882,8 @@ model WeeklyTask {
   quoteId String?
   status String @default("PENDING")
   errorCode String?
+  imageStatus String @default("SKIPPED")
+  imageGenerationId String? @unique
   cycle WeeklyCycle @relation(fields: [cycleId], references: [id], onDelete: Cascade)
   @@unique([cycleId, itemId])
 }

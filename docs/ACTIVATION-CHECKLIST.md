@@ -98,7 +98,7 @@ Latest implementation update: LinkedIn single-PNG transfer is implemented with i
 
 - Instagram publishing, Facebook/Instagram immutable image transfer, all social video transfer and Facebook/Instagram per-post metrics; token renewal/revocation handling and richer reconciliation operations. Facebook/LinkedIn text and LinkedIn approved-PNG publishers are implemented but not live-accepted.
 - Reference-led video revisions, generated voiceover/transcription, continuity evaluation and back-office/automated supplier reconciliation. Supporting-footage delivery and uploaded instrumental music are implemented but remain inactive pending production renderer/storage checks and applicable live provider acceptance.
-- Mixed-media weekly automation and stronger measured quality/learning evaluation. No automatic training on another tenant's brand or private feedback.
+- Weekly video automation and stronger measured quality/learning evaluation. Opt-in copy-to-image orchestration is implemented: one initial image after approved weekly static copy, shared credit ceiling, preserved manual imagery and separate visual/final-layout review. See BUILD-STATUS.md for deployment and acceptance evidence. No automatic training on another tenant's brand or private feedback.
 - Stronger semantic fact/visual checks, production isolation and operational alerts; realistic load/chaos and independent security/manual accessibility acceptance; production database/object recovery.
 - Billing commercial/tax/dispute handling, operator settlement experience and actual Stripe lifecycle acceptance.
 

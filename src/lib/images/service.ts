@@ -15,6 +15,7 @@ import { assetStore, type AssetStore } from "../assets/storage";
 import { BUSINESS_ASSET_BYTES, MAX_IMAGE_BYTES } from "../assets/images";
 import { creativeSchema } from "../production/content";
 import { IMAGE_HARNESS, imageConfigurationHash, imageReferences, selectImageRoute } from "./contracts";
+import { weeklyImageContext, reserveWeeklyImage, type WeeklyImageAuthorization } from "../workflows/weekly-image-policy";
 
 const action = z.discriminatedUnion("action", [
   z.object({ action: z.literal("quote"), itemId: z.string().min(1), parentId: z.string().min(1).optional(), feedback: z.string().trim().max(1000).default("") }).strict(),
@@ -45,7 +46,7 @@ export async function listImages(scope: Scope) {
     output: { select: { id: true, status: true, approvedForGeneration: true } },
   } }) };
 }
-export async function manageImage(scope: Scope, raw: unknown, storage: () => AssetStore = assetStore) {
+export async function manageImage(scope: Scope, raw: unknown, storage: () => AssetStore = assetStore, internal?: WeeklyImageAuthorization) {
   const input = action.parse(raw);
   return db.$transaction(async tx => {
     const business = await lockBusiness(tx, scope); await assertBrandEditor(tx, scope);
@@ -53,6 +54,11 @@ export async function manageImage(scope: Scope, raw: unknown, storage: () => Ass
     if (input.action === "quote") {
       assertExecutionEnabled(); await assertWorkerReady(tx); storage();
       const item = await currentItem(tx, scope, input.itemId), revision = item.revisions[0];
+      if (internal) {
+        const { task } = await weeklyImageContext(tx, scope, item.id, internal);
+        if (task.imageStatus !== "WAITING" || task.imageGenerationId || input.parentId || input.feedback || await tx.imageGeneration.count({ where: { itemId: item.id } }))
+          throw new AppError(409, "Manual image work or a previous weekly image already exists. It will not be replaced.");
+      }
       if (!business.confirmedAt || item.plan.brandVersion !== business.version || item.plan.status !== "PROPOSED" || item.format !== "static" || revision?.status !== "APPROVED") throw new AppError(409, "Confirm the brand and approve current static copy before generating an image.");
       if (await tx.imageGeneration.count({ where: { businessId: scope.businessId, status: { in: pendingImages } } })) throw new AppError(409, "Resolve the current image job before requesting another.");
       if (await tx.imageGeneration.count({ where: { businessId: scope.businessId, createdAt: { gt: new Date(Date.now() - 86400000) } } }) >= 24) throw new AppError(429, "Image quotes are limited to 24 per business per day.");
@@ -75,6 +81,7 @@ export async function manageImage(scope: Scope, raw: unknown, storage: () => Ass
       const route = selectImageRoute(!!input.parentId, prompt, refs.length);
       await tx.imageGeneration.updateMany({ where: { itemId: item.id, status: "OFFERED" }, data: { status: "CANCELLED" } });
       const row = await tx.imageGeneration.create({ data: { ...scope, itemId: item.id, revisionId: revision.id, brandVersion: business.version, version: (previous?.version || 0) + 1, parentId: input.parentId, feedback: input.feedback, prompt, references: refs, route, configurationHash: imageConfigurationHash(), credits: route.credits, supplierCeilingMicros: route.supplierCeilingMicros, expiresAt: new Date(Date.now() + 600000) } });
+      if (internal) await tx.weeklyTask.update({ where: { id: internal.taskId }, data: { imageGenerationId: row.id, imageStatus: "QUOTED" } });
       await audit("IMAGE_QUOTED", "Supporting artwork quoted against approved copy and immutable reference hashes. No charge or provider call.");
       return { ok: true, generationId: row.id };
     }
@@ -90,6 +97,8 @@ export async function manageImage(scope: Scope, raw: unknown, storage: () => Ass
       return { ok: true };
     }
     if (input.action === "accept") {
+      if (!internal && await tx.weeklyTask.count({ where: { imageGenerationId: row.id, imageStatus: "QUOTED" } }))
+        throw new AppError(409, "This image offer belongs to an automatic weekly run. Stop that run before requesting a separate manual offer.");
       if (row.acceptedAt) return { ok: true };
       assertExecutionEnabled(); await assertWorkerReady(tx); storage();
       if (row.status !== "OFFERED" || row.expiresAt.getTime() <= Date.now() || row.configurationHash !== imageConfigurationHash()) throw new AppError(409, "Image quote expired or settings changed.");
@@ -97,6 +106,7 @@ export async function manageImage(scope: Scope, raw: unknown, storage: () => Ass
       if (await tx.imageGeneration.count({ where: { businessId: scope.businessId, status: { in: pendingImages } } })) throw new AppError(409, "Resolve the current image job first.");
       const quota = await tx.brandAsset.aggregate({ where: { businessId: scope.businessId, status: { not: "DELETED" } }, _sum: { bytes: true }, _count: true });
       if (quota._count >= 100 || (quota._sum.bytes || 0) + MAX_IMAGE_BYTES > BUSINESS_ASSET_BYTES) throw new AppError(409, "Allow 5 MB of free private image storage before generation.");
+      if (internal) await reserveWeeklyImage(tx, scope, row, internal);
       await authorizeSupplier(tx, row.id, row.supplierCeilingMicros);
       const hold = await reserveCreditsInTransaction(tx, scope.organizationId, row.id, row.credits, !!row.parentId);
       await tx.brandAsset.create({ data: { organizationId: scope.organizationId, businessId: scope.businessId, generationId: row.id, purpose: "generated", label: `Artwork v${row.version}`, objectKey: `${scope.organizationId}/${scope.businessId}/${randomUUID()}.webp`, sha256: "", bytes: MAX_IMAGE_BYTES, width: 1, height: 1, uploadedBy: scope.actorId, rightsConfirmedAt: new Date() } });

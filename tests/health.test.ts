@@ -12,6 +12,7 @@ describe("deployment readiness", () => {
     expect(query).toHaveBeenCalledTimes(44);
     const sql = query.mock.calls.map(call => String(call[0])).join("\n");
     expect(sql).toContain("requireMfa");
+    for (const column of ["imagesAfterApproval", "mediaStatus", "mediaLeaseUntil", "nextMediaAt", "imageStatus", "imageGenerationId"]) expect(sql).toContain(column);
     expect(sql).toContain("metricsInvalidatedAt");
     expect(sql).toContain("metricsRequestedAt");
     expect(sql).toContain("authorizationVersion");

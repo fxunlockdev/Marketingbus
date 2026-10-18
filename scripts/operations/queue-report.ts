@@ -12,13 +12,14 @@ const definitions = [
   { name: "exports", table: "CompositionExport", scope: "business", lease: true, waiting: [], active: ["STORING", "DELETING"] },
   { name: "social", table: "SocialPublication", scope: "business", lease: true, due: "scheduledFor", waiting: ["SCHEDULED"], active: ["SUBMITTING"] },
   { name: "weekly", table: "WeeklyCycle", scope: "business", lease: true, waiting: ["OPEN"], active: ["RUNNING"] },
+  { name: "weekly-images", table: "WeeklyCycle", scope: "business", lease: true, statusColumn: "mediaStatus", leaseColumn: "mediaLeaseUntil", due: "nextMediaAt", waiting: ["OPEN"], active: ["OPEN"] },
   { name: "checkout", table: "BillingCheckout", scope: "organization", waiting: [], active: [] },
   { name: "refunds", table: "BillingRefundOperation", scope: "organization", due: "updatedAt", waiting: ["PENDING"], active: ["SUBMITTING"] },
   // These records have no authoritative tenant column. Never infer ownership from payloads or user memberships.
   { name: "payments", table: "BillingEvent", scope: "global", due: "availableAt", waiting: ["PENDING", "WAITING"], active: [] },
   { name: "email", table: "EmailOutbox", scope: "global", lease: true, due: "availableAt", waiting: ["QUEUED"], active: ["SENDING"] },
 ] as const;
-type Definition = { name: string; table: string; scope: string; lease?: boolean; due?: string; waiting: readonly string[]; active: readonly string[] };
+type Definition = { name: string; table: string; scope: string; lease?: boolean; statusColumn?: string; leaseColumn?: string; due?: string; waiting: readonly string[]; active: readonly string[] };
 const identifier = z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/);
 const scopeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("all") }).strict(),
@@ -58,14 +59,14 @@ export async function readQueueReport(client: PrismaClient, raw: QueueReportOpti
   const overdue = new Date(asOf.getTime() - options.overdueMinutes * 60000);
   const eligible = definitions.filter(d => options.scope.kind === "all" || (d.scope !== "global" && (!options.scope.businessId || d.scope === "business")));
   const parts = eligible.map((d: Definition) => {
-    const status = column("status"), lease = d.lease ? column("leaseUntil") : Prisma.sql`NULL::timestamp`;
+    const status = column(d.statusColumn ?? "status"), lease = d.lease ? column(d.leaseColumn ?? "leaseUntil") : Prisma.sql`NULL::timestamp`;
     const org = d.scope === "global" ? Prisma.sql`NULL::text` : column("organizationId");
     const business = d.scope === "business" ? column("businessId") : Prisma.sql`NULL::text`;
     const due = d.name === "video" ? Prisma.sql`COALESCE("nextPollAt", "acceptedAt", "createdAt")`
       : d.due ? Prisma.sql`COALESCE(${column(d.due)}, "createdAt")` : column("createdAt");
     const scope = options.scope.kind === "all" ? Prisma.sql`TRUE` : Prisma.sql`${org} = ${options.scope.organizationId} ${options.scope.businessId ? Prisma.sql`AND ${business} = ${options.scope.businessId}` : Prisma.empty}`;
     const provisional = d.name === "video" ? Prisma.sql`"expenseBasis" = 'ACCOUNT_QUOTE_V1' AND "supplierCostMicros" IS NULL AND "status" IN ('READY', 'FAILED')` : Prisma.sql`FALSE`;
-    return Prisma.sql`SELECT ${d.name}::text AS queue, "id", ${org} AS "organizationId", ${business} AS "businessId", "status", "createdAt", ${lease} AS "leaseUntil",
+    return Prisma.sql`SELECT ${d.name}::text AS queue, "id", ${org} AS "organizationId", ${business} AS "businessId", ${status} AS "status", "createdAt", ${lease} AS "leaseUntil",
       CASE WHEN ${inValues(status, attentionStatuses)} THEN 'UNCERTAIN_OUTCOME'
         WHEN ${provisional} THEN 'SUPPLIER_INVOICE_DUE'
         WHEN ${inValues(status, failureStatuses)} THEN 'FAILED'
