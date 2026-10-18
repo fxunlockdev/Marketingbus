@@ -13,6 +13,7 @@ import { submissionJournal } from "../src/lib/social/submission-journal";
 import { publicationPayload } from "../src/lib/social/contracts";
 import { payloadHash } from "../src/lib/social/integrity";
 import { readSocialDashboard } from "../src/lib/social/analytics";
+import { stopUnsubmittedImage } from "../src/lib/social/prepost-recovery";
 import sharp from "sharp";
 
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
@@ -141,5 +142,77 @@ suite("approved image to LinkedIn publication and metrics", () => {
     await expect(db.socialPublication.update({ where: { id: post.id }, data: { payload: text, payloadHash: payloadHash(text), mediaTransferVersion: "fixture" } })).rejects.toThrow();
     const { mediaExportId: _id, ...withoutImage } = f.action;
     await expect(manageSocial(f.scope, withoutImage, { LinkedIn: f.adapter })).rejects.toThrow("different content");
+  });
+  async function interruptedImage() {
+    const f = await setup(), post = await queue(f);
+    const stopped = await db.socialPublication.update({ where: { id: post.id }, data: {
+      status: "NEEDS_RECONCILIATION", mediaTransferVersion: "fixture-image-v1", mediaExternalId: f.imageId,
+      mediaUploaded: false, leaseUntil: new Date(Date.now() - 1000), errorCode: "IMAGE_UPLOAD_UNKNOWN",
+    } });
+    const input = { organizationId: f.scope.organizationId, businessId: f.scope.businessId,
+      publicationId: post.id, operatorId: "local-fixture-operator" };
+    return { ...f, stopped, input };
+  }
+  it("previews without writes, closes only the local pre-post attempt and releases local retention", async () => {
+    const f = await interruptedImage();
+    const preview = await stopUnsubmittedImage(f.input);
+    expect(preview).toMatchObject({ applied: false, status: "NEEDS_RECONCILIATION", imageRegistered: true, uploadAcknowledged: false });
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: f.stopped.id } })).toEqual(f.stopped);
+    expect(JSON.stringify(preview)).not.toContain(f.imageId);
+    const result = await stopUnsubmittedImage({ ...f.input, apply: true, expectedStateHash: preview.stateHash, evidence: "Reviewed the journal; post submission never began." });
+    expect(result).toMatchObject({ applied: true, status: "FAILED" });
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: f.stopped.id } })).toMatchObject({
+      status: "FAILED", errorCode: "PREPOST_IMAGE_STOPPED", mediaExternalId: f.imageId,
+      mediaTransferVersion: "fixture-image-v1", payloadHash: f.stopped.payloadHash, leaseUntil: null,
+      submissionAdapterVersion: null, nextReconciliationAt: null,
+    });
+    expect(await db.auditEvent.count({ where: { businessId: f.scope.businessId, action: "SOCIAL_PREPOST_IMAGE_STOPPED" } })).toBe(1);
+    expect(await runOneReconciliation({ LinkedIn: f.adapter })).toBe(false);
+    const ctx = { requestId: f.stopped.id, account: { ...f.account, id: f.connection.id }, payload: publicationPayload.parse(f.stopped.payload), adapterVersion: "fixture-image-v1" };
+    await expect(submissionJournal.begin(ctx)).rejects.toThrow("context changed");
+    await expect(f.transfer.record(ctx, f.imageId)).rejects.toThrow("context changed");
+    await expect(manageSocial(f.scope, f.action, { LinkedIn: f.adapter })).rejects.toThrow("already been submitted");
+    await archiveCompositionExport(f.scope, f.exported.id);
+    expect(f.fetcher).not.toHaveBeenCalled();
+  });
+  it.each(["submission fence", "candidate", "receipt", "publication time", "permalink", "active lease", "queued", "submitting", "published", "cancelled", "invalid hash", "text payload"])("refuses unsafe pre-post recovery: %s", async kind => {
+    const f = await interruptedImage();
+    const data = kind === "submission fence" ? { submissionAdapterVersion: "fixture-image-v1" }
+      : kind === "candidate" ? { candidatePostId: f.id, submissionAdapterVersion: "fixture-image-v1" } : kind === "receipt" ? { externalPostId: f.id }
+      : kind === "publication time" ? { publishedAt: new Date() } : kind === "permalink" ? { permalink: "https://www.linkedin.com/feed/update/urn:li:share:123" }
+      : kind === "active lease" ? { leaseUntil: new Date(Date.now() + 60000) }
+      : kind === "invalid hash" ? { payloadHash: "0".repeat(64) }
+      : kind === "text payload" ? { payload: f.payload, payloadHash: payloadHash(f.payload), mediaTransferVersion: null, mediaExternalId: null, mediaUploaded: false }
+      : kind === "published" ? { status: "PUBLISHED", externalPostId: f.id, publishedAt: new Date() }
+      : { status: ({ queued: "SCHEDULED", submitting: "SUBMITTING", published: "PUBLISHED", cancelled: "CANCELLED" } as Record<string, string>)[kind] };
+    await db.socialPublication.update({ where: { id: f.stopped.id }, data });
+    await expect(stopUnsubmittedImage(f.input)).rejects.toThrow();
+    expect(await db.auditEvent.count({ where: { businessId: f.scope.businessId, action: "SOCIAL_PREPOST_IMAGE_STOPPED" } })).toBe(0);
+    expect(f.fetcher).not.toHaveBeenCalled();
+  });
+  it("refuses wrong scopes, missing evidence, changed previews and replay", async () => {
+    const f = await interruptedImage(), other = await setup(), preview = await stopUnsubmittedImage(f.input);
+    await expect(stopUnsubmittedImage({ ...f.input, organizationId: other.scope.organizationId })).rejects.toThrow();
+    await expect(stopUnsubmittedImage({ ...f.input, organizationId: other.scope.organizationId, businessId: other.scope.businessId })).rejects.toThrow();
+    await expect(stopUnsubmittedImage({ ...f.input, apply: true, expectedStateHash: preview.stateHash })).rejects.toThrow();
+    await db.socialPublication.update({ where: { id: f.stopped.id }, data: { reconciliationAttempts: 1 } });
+    await expect(stopUnsubmittedImage({ ...f.input, apply: true, expectedStateHash: preview.stateHash, evidence: "The operator reviewed this synthetic test." })).rejects.toThrow("changed after review");
+    const next = await stopUnsubmittedImage(f.input), apply = { ...f.input, apply: true, expectedStateHash: next.stateHash, evidence: "The operator reviewed this synthetic test." };
+    const results = await Promise.allSettled([stopUnsubmittedImage(apply), stopUnsubmittedImage(apply)]);
+    expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    expect(await db.auditEvent.count({ where: { businessId: f.scope.businessId, action: "SOCIAL_PREPOST_IMAGE_STOPPED" } })).toBe(1);
+  });
+  it.each(["no media registration", "acknowledged upload"])("can stop %s without a current credential and without erasing media evidence", async kind => {
+    const f = await interruptedImage();
+    await db.socialPublication.update({ where: { id: f.stopped.id }, data: kind === "no media registration"
+      ? { mediaTransferVersion: null, mediaExternalId: null, mediaUploaded: false }
+      : { mediaUploaded: true } });
+    await db.socialConnection.update({ where: { id: f.connection.id }, data: { status: "DISCONNECTED", encryptedToken: "" } });
+    const preview = await stopUnsubmittedImage(f.input);
+    await stopUnsubmittedImage({ ...f.input, apply: true, expectedStateHash: preview.stateHash, evidence: "No post fence; disconnected synthetic account, reviewed by operator." });
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: f.stopped.id } })).toMatchObject({
+      status: "FAILED", mediaUploaded: kind === "acknowledged upload", mediaExternalId: kind === "acknowledged upload" ? f.imageId : null,
+    });
+    expect(f.fetcher).not.toHaveBeenCalled();
   });
 });

@@ -2,6 +2,18 @@
 
 Updated 18 October 2026. This is a setup and acceptance checklist, not a declaration that the complete product is finished. Credentials cannot fill missing implementation. The current module-by-module boundary is in [MODULE-PLAN.md](MODULE-PLAN.md).
 
+## Testing today
+
+Open the private pilot at `https://marketingbus-web-production.up.railway.app/studio` using your own account and existing pilot invitation. Use a fictional business or authorized test data, not customer secrets. The 18 October hosted check passed signup, brand confirmation, free planning, scoped image/video/source/export reads, Design studio, Publishing & analytics, Team and account-security navigation. It created one labelled **Product Readiness — Fictional Test** fixture (`cmvdw8gwc0003mi0pxzyfnlis`), then logged out; no customer records were altered. No paid calls, emails or publications occurred.
+
+1. Create a business; enter its audience, offering, approved facts, restrictions and design preferences. Confirm only accurate evidence.
+2. Create the planning outline; inspect the content, design, publishing and team screens. A planning outline is not generated copy or imagery.
+3. Check the scoped empty states: absent connections, media and metrics must stay empty rather than display demo output. Connections must contain publishing destinations only.
+4. Keep external acceptance separate. Gemini/Higgsfield, Meta/LinkedIn, Resend and Stripe credentials are still absent from the latest web-service presence check. Hosted MFA reports unavailable. Private storage/decoder acceptance, email delivery, live payment, media generation and actual social posting are **not passed** by this smoke test.
+5. New accounts have no funded creative credits by default. Do not bypass credit authorization or claim generation succeeded because a quote/outline exists. Arrange an explicitly authorized test credit allocation or accepted Stripe test-mode purchase before a paid workflow.
+
+The provider-independent local/browser suite exercises more than this hosted smoke. Synthetic provider replies are not live platform acceptance. The full product still has engineering gaps listed below; today's test is a private-pilot review, not public go-live approval.
+
 ## What the owner needs to provide
 
 Do not send secrets in chat, screenshots, source files or the customer Connections screen. Add them privately in Railway. Use separate test and production credentials. Connections is for publishing destinations only; AI, scraping, storage, email and billing are operator-managed.
@@ -38,7 +50,7 @@ The authoritative list is [`.env.example`](../.env.example). Key names below are
 - Meta: `META_APP_ID`, `META_APP_SECRET`, verified `META_API_VERSION` and `META_API_VERIFIED_UNTIL`; separate `FACEBOOK_CONNECTIONS_ENABLED`, `INSTAGRAM_CONNECTIONS_ENABLED`, `FACEBOOK_PUBLISHING_ENABLED`.
 - LinkedIn: `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`, verified `LINKEDIN_API_VERSION` and `LINKEDIN_API_VERIFIED_UNTIL`; separate `LINKEDIN_CONNECTIONS_ENABLED`, `LINKEDIN_PUBLISHING_ENABLED`, and disabled-by-default `LINKEDIN_IMAGE_PUBLISHING_ENABLED`. The image lane uploads one exact approved PNG without exposing bucket URLs; it requires its own designated-account acceptance. See [image-transfer boundaries](LINKEDIN-PUBLISHING.md).
 - Account reads: `SOCIAL_DATA_ENABLED`. This permits explicit bounded refresh; it does not enable publishing.
-- Publication worker: `SOCIAL_EXECUTION_ENABLED`. Registered publishers support LinkedIn company and Facebook Page **text-only** posts. Configure credentials and provider publishing switches consistently on web and worker. Instagram publishing, Facebook per-post metrics and image/video transfer still need implementation and acceptance. See [Facebook publishing](FACEBOOK-PUBLISHING.md).
+- Publication worker: `SOCIAL_EXECUTION_ENABLED`. Registered publishers support LinkedIn company and Facebook Page text posts, plus the separately gated LinkedIn approved-image lane above. Configure credentials and provider publishing switches consistently on web and worker. Instagram publishing, Facebook per-post metrics, Facebook/Instagram image transfer and all video transfer still need implementation and acceptance. See [Facebook publishing](FACEBOOK-PUBLISHING.md).
 - Billing: `STRIPE_MODE=test`, `STRIPE_ACCOUNT_ID`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PORTAL_CONFIGURATION_ID`, approved `BILLING_OFFERS_JSON`; separately gated `BILLING_EXECUTION_ENABLED` and operator-only `STRIPE_REFUNDS_ENABLED`. Follow [billing operations](BILLING.md); do not activate live charges for testing.
 
 ## Social application setup
@@ -84,7 +96,7 @@ We still need to deploy and measure the self-hosted stack with private dependenc
 
 Latest implementation update: LinkedIn single-PNG transfer is implemented with immutable export binding, durable registration/upload/post fences and image-bound metric checks; it is not activated or live-accepted. Remaining cross-platform media work below now excludes that specific PNG transport. Web variable-name checks on 18 October still show no Gemini, Higgsfield, Meta, LinkedIn, Resend or Stripe credentials; OpenAI and storage names are present. Presence alone does not verify working credentials or storage. No values were disclosed or changed.
 
-- Instagram publishing, immutable image/video transfer and Facebook/Instagram per-post metrics; token renewal/revocation handling and richer reconciliation operations. Facebook and LinkedIn text publishers are implemented but not live-accepted.
+- Instagram publishing, Facebook/Instagram immutable image transfer, all social video transfer and Facebook/Instagram per-post metrics; token renewal/revocation handling and richer reconciliation operations. Facebook/LinkedIn text and LinkedIn approved-PNG publishers are implemented but not live-accepted.
 - Reference-led video revisions, generated voiceover/transcription, continuity evaluation and back-office/automated supplier reconciliation. Supporting-footage delivery and uploaded instrumental music are implemented but remain inactive pending production renderer/storage checks and applicable live provider acceptance.
 - Mixed-media weekly automation and stronger measured quality/learning evaluation. No automatic training on another tenant's brand or private feedback.
 - Stronger semantic fact/visual checks, production isolation and operational alerts; realistic load/chaos and independent security/manual accessibility acceptance; production database/object recovery.
@@ -96,6 +108,6 @@ The $800/month plan's $500–$600 **net** profit target and top-1% agency-qualit
 
 - [Higgsfield key ID and secret](https://docs.higgsfield.ai/docs/authentication)
 - [Higgsfield account-specific estimate and output retention](https://docs.higgsfield.ai/docs/concepts/billing-and-retention): estimate with exact model parameters; archive usable output privately rather than relying on temporary supplier retention. An estimate is not a final reconciled expense ledger.
-- [Higgsfield request status contract](https://docs.higgsfield.ai/docs/api-reference/requests/get-request-status): asynchronous status and output fields do not implement our missing transport or accounting validation.
+- [Higgsfield request status contract](https://docs.higgsfield.ai/docs/api-reference/requests/get-request-status): validate the implemented asynchronous transport against an actual authorized account; response fields alone do not establish final supplier accounting or complete provider acceptance.
 - [LinkedIn Posts API](https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api?view=li-lms-2026-07)
 - [LinkedIn organic share statistics](https://learn.microsoft.com/en-us/linkedin/marketing/community-management/organizations/share-statistics?view=li-lms-2026-07)

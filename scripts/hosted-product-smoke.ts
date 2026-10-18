@@ -3,10 +3,12 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { chromium } from "@playwright/test";
+let phase = "preflight", fixtureBusinessId: string | null = null;
 
 async function main() {
   assert.equal(process.env.CONFIRM_HOSTED_PRODUCT_SMOKE, "product-readiness-20261015");
   assert.ok(process.env.PILOT_INVITE_CODE);
+  assert.notEqual(process.env.EMAIL_DELIVERY_ENABLED, "true", "This no-email check requires email delivery to remain disabled.");
   const origin = "https://marketingbus-web-production.up.railway.app";
   const browser = await chromium.launch({ channel: "chrome" });
   const context = await browser.newContext({ baseURL: origin });
@@ -18,6 +20,7 @@ async function main() {
     assert.equal(health.status(), 200);
     assert.equal(health.headers()["cache-control"], "no-store");
     assert.equal((await context.request.get("/api/mfa")).status(), 401);
+    phase = "synthetic signup";
     const registered = await context.request.post("/api/auth/register", { headers, data: {
       name: "Product Readiness Fixture",
       email: `product-readiness-${Date.now()}@example.invalid`,
@@ -25,6 +28,7 @@ async function main() {
       invitationCode: process.env.PILOT_INVITE_CODE,
     } });
     assert.equal(registered.status(), 200);
+    phase = "synthetic brand onboarding";
     const created = await context.request.post("/api/businesses", { headers, data: {
       name: "Product Readiness — Fictional Test",
       offering: "Synthetic architecture consultation fixture, not a real business",
@@ -32,9 +36,11 @@ async function main() {
     } });
     assert.equal(created.status(), 200);
     const { id } = await created.json();
+    fixtureBusinessId = id;
     for (const action of ["confirm", "plan"]) {
       assert.equal((await context.request.post(`/api/businesses/${id}`, { headers, data: { action, version: 1 } })).status(), 200);
     }
+    phase = "scoped publishing reads";
     const social = await context.request.get(`/api/businesses/${id}/social`);
     assert.equal(social.status(), 200);
     assert.equal(social.headers()["cache-control"], "no-store");
@@ -42,12 +48,19 @@ async function main() {
     assert.equal(dashboard.connections.length, 0);
     assert.equal(dashboard.publications.length, 0);
     assert.equal(dashboard.summary.length, 0);
+    assert.equal(dashboard.mediaChoices.length, 0);
+    for (const path of ["images", "video-generations", "planning", "sources", "exports"]) {
+      phase = `scoped ${path} read`;
+      const result = await context.request.get(`/api/businesses/${id}/${path}`);
+      assert.equal(result.status(), 200); assert.equal(result.headers()["cache-control"], "no-store");
+    }
     const composition = await context.request.get(`/api/businesses/${id}/compositions`);
     assert.equal(composition.status(), 200);
     const mfa = await context.request.get("/api/mfa");
     assert.equal(mfa.status(), 200);
     const security = await mfa.json();
     assert.equal(security.enabled, false);
+    phase = "hosted browser navigation";
     await page.goto("/studio");
     for (const name of ["Design studio", "Publishing & analytics", "Team"]) {
       await page.getByRole("button", { name, exact: true }).click();
@@ -62,4 +75,4 @@ async function main() {
     await browser.close();
   }
 }
-void main().catch(() => { console.error("Hosted product smoke failed. No paid model, email or publication actions are included in this script."); process.exitCode = 1; });
+void main().catch(() => { console.error(JSON.stringify({ status: "failed", phase, fixtureBusinessId, paidCalls: 0, emails: 0, publications: 0, note: "Do not blindly rerun signup; inspect the existing labelled fixture. No secret or raw response is logged." })); process.exitCode = 1; });
