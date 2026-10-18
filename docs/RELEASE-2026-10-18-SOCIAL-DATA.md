@@ -18,7 +18,18 @@
 
 ## Delivery
 
-Source commit, CI and exact worker/web deployment evidence are recorded after verification. Upload alone is not deployment success. No application credentials, execution switches, spending limits or customer policy will be changed by this release.
+Verified source: `bc6a54cd14faa81d20c1955dbe4ed0a565ff750b` (feature commit `5e42506` plus an explicit expiry-versus-background-retention wording clarification). Source is pushed to main. [Final GitHub CI run 39106015886](https://github.com/fxunlockdev/Marketingbus/actions/runs/39106015886) passed in 3m53s: 669 tests/48 suites, 31 browser journeys with one explicit private-storage skip, the 35-migration/52-table/62-row restore rehearsal, build and audit. The initial feature run `39105854072` also passed. The final wording change passed a fresh local build and focused browser journey. CI still reports non-blocking action-runtime/ubuntu-latest migration warnings, which belong to a separately verified toolchain-hardening change.
+
+Both services were uploaded from a fresh tracked-source archive of that exact final commit, excluding local credentials, dependencies and test artifacts. The worker was released first; its logs confirm migration 35 applied successfully before web deployment.
+
+| Service | Exact deployment | Observed result |
+|---|---|---|
+| Worker | `99e7a2d9-241a-4e75-8dd0-7025731528d2` | SUCCESS |
+| Web | `365d91ff-973f-4916-b893-956042e2bc81` | SUCCESS |
+
+Hosted smoke checks after web SUCCESS: health 200/no-store with `status: ok`; signed-out studio 307 to login; anonymous connections and account-data reads 401/no-store; Facebook, Instagram and LinkedIn callback errors 303 to the fixed `/social-connect?failed=1` recovery page, with no-store/no-referrer and empty bodies. No production fixture account was created. Web logs confirm 35 migrations and no pending migration.
+
+No application credentials, execution switches, spending limits or customer policy were changed. New flags remain absent/disabled by default; deployment does not establish live consent, working provider data or authenticated production acceptance.
 
 ## Remaining boundary
 
