@@ -15,6 +15,7 @@ describe("deployment readiness", () => {
     expect(sql).toContain("metricsInvalidatedAt");
     expect(sql).toContain("metricsRequestedAt");
     expect(sql).toContain("authorizationVersion");
+    for (const column of ["mediaTransferVersion", "mediaExternalId", "mediaUploaded"]) expect(sql).toContain(column);
     expect(sql).toContain("creativeBrief"); expect(sql).toContain("revisionOfId");
     expect(sql).toContain("reconciliationAttempts"); expect(sql).toContain("nextReconciliationAt");
     expect(sql).toContain("VideoGeneration"); expect(sql).toContain("providerJobKey"); expect(sql).toContain("settledAt");

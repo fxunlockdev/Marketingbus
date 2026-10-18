@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { db } from "../src/lib/db";
 import {
   manageSocial,
@@ -781,7 +781,8 @@ suite("social publishing and analytics isolation", () => {
     const ctx = await setup(), provider = adapter(), post = await queue(ctx, provider);
     const valid = { caption: creative.caption, channel: "Facebook", format: "static", mediaExportId: null };
     const payload = kind === "shape" ? { bad: true } : kind === "media" ? { ...valid, mediaExportId: "unverified" } : kind === "format" ? { ...valid, format: "video" } : valid;
-    await db.socialPublication.update({ where: { id: post.id }, data: { payload, payloadHash: kind === "shape" || kind === "hash" ? "invalid" : payloadHash(payload) } });
+    // Corrupt persisted input bypasses the now-stricter public payload constructor deliberately.
+    await db.socialPublication.update({ where: { id: post.id }, data: { payload, payloadHash: kind === "shape" || kind === "hash" ? "invalid" : createHash("sha256").update(JSON.stringify(payload)).digest("hex") } });
     expect(await runOnePublication({ Facebook: provider })).toBe(true);
     expect(provider.publish).not.toHaveBeenCalled();
     expect(await db.socialPublication.findUnique({ where: { id: post.id } })).toMatchObject({ status: "CANCELLED", errorCode: "PAYLOAD_INVALID", attempts: 0 });

@@ -2,6 +2,7 @@ import { db } from "../db";
 import { openSecret } from "../secrets";
 import { lockBusiness } from "../production/service";
 import { frozenCopy, payloadHash, validCandidateId } from "./integrity";
+import { assertPublicationImage } from "./image-transfer";
 import type { Account, PublicationPayload } from "./contracts";
 export type SubmissionContext = { requestId: string; account: Account; payload: PublicationPayload; adapterVersion: string };
 export interface SubmissionJournal {
@@ -11,7 +12,7 @@ export interface SubmissionJournal {
 }
 // A durable local write fence is not provider idempotency. Lost remote IDs remain uncertain.
 import type { Prisma, SocialPublication, SocialConnection } from "@prisma/client";
-async function transact<T>(context: SubmissionContext, run: (tx: Prisma.TransactionClient, post: SocialPublication & { connection: SocialConnection }) => Promise<T>) {
+export async function withSubmissionContext<T>(context: SubmissionContext, run: (tx: Prisma.TransactionClient, post: SocialPublication & { connection: SocialConnection }) => Promise<T>) {
   return db.$transaction(async tx => {
     const initial = await tx.socialPublication.findUniqueOrThrow({ where: { id: context.requestId } });
     await lockBusiness(tx, { organizationId: initial.organizationId, businessId: initial.businessId, actorId: "social-transport" });
@@ -22,9 +23,14 @@ async function transact<T>(context: SubmissionContext, run: (tx: Prisma.Transact
     return run(tx, post);
   });
 }
+const transact = withSubmissionContext;
 export const submissionJournal: SubmissionJournal = {
   begin: context => transact(context, async (tx, post) => {
     if (post.submissionAdapterVersion || post.status !== "SUBMITTING" || !post.leaseUntil || post.leaseUntil <= new Date()) return false;
+    if (context.payload.mediaExportId) {
+      if (post.mediaTransferVersion !== context.adapterVersion || !post.mediaExternalId || !post.mediaUploaded) return false;
+      await assertPublicationImage(tx, { businessId: post.businessId, organizationId: post.organizationId, actorId: "social-transport" }, post.revisionId, context.payload);
+    }
     await tx.socialPublication.update({ where: { id: post.id }, data: { submissionAdapterVersion: context.adapterVersion } });
     return true;
   }),

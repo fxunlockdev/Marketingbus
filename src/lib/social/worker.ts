@@ -4,6 +4,7 @@ import { db } from "../db";
 import { openSecret } from "../secrets";
 import { lockBusiness } from "../production/service";
 import { creativeSchema } from "../production/content";
+import { assertPublicationImage } from "./image-transfer";
 import { approvedFactText, evaluateCreative } from "../production/quality";
 import {
   metricReading,
@@ -122,6 +123,10 @@ export async function runOnePublication(adapters: SocialAdapters) {
       const creative = creativeSchema.parse(post.revision.content);
       if (payload.caption !== creative.caption || payload.channel !== post.revision.item.channel || payload.format !== post.revision.item.format) reason = "PAYLOAD_CHANGED";
       if (!evaluateCreative(creative, { facts: approvedFactText(business) }).eligible) reason = "FACT_CHECK_FAILED";
+      if (payload.mediaExportId) {
+        if (!adapters[socialProvider.parse(post.connection.provider)]?.imagePublishingAvailable) reason = "MEDIA_INTEGRATION_DISABLED";
+        await assertPublicationImage(tx, scope, post.revisionId, payload);
+      }
     } catch { reason = "PAYLOAD_INVALID"; }
     if (reason || !payload) {
       await tx.socialPublication.update({
@@ -402,7 +407,7 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
         account(connection),
         candidate.externalPostId!,
         AbortSignal.timeout(30000),
-        { payload, publishedAt: candidate.publishedAt }
+        { payload, publishedAt: candidate.publishedAt, ...(payload.image ? { mediaExternalId: candidate.mediaExternalId ?? undefined } : {}) }
       )
     );
     if (
@@ -423,7 +428,7 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
       )
         return;
       const validPayload = (() => { try { frozenCopy(post.payload, post.payloadHash, observedConnection.provider); return post.payloadHash === candidate.payloadHash && post.connectionId === candidate.connectionId && post.revisionId === candidate.revisionId && post.brandVersion === candidate.brandVersion && post.businessId === candidate.businessId && post.organizationId === candidate.organizationId; } catch { return false; } })();
-      if (!validPayload || post.metricsInvalidatedAt || freshConnection.status !== "CONNECTED" || freshConnection.encryptedToken !== observedConnection.encryptedToken || freshConnection.externalAccountId !== observedConnection.externalAccountId || freshConnection.provider !== observedConnection.provider || freshConnection.expiresAt && freshConnection.expiresAt <= new Date() || post.status !== "PUBLISHED" || post.externalPostId !== candidate.externalPostId || post.publishedAt?.getTime() !== candidate.publishedAt?.getTime()) {
+      if (!validPayload || post.mediaExternalId !== candidate.mediaExternalId || post.mediaTransferVersion !== candidate.mediaTransferVersion || post.mediaUploaded !== candidate.mediaUploaded || post.metricsInvalidatedAt || freshConnection.status !== "CONNECTED" || freshConnection.encryptedToken !== observedConnection.encryptedToken || freshConnection.externalAccountId !== observedConnection.externalAccountId || freshConnection.provider !== observedConnection.provider || freshConnection.expiresAt && freshConnection.expiresAt <= new Date() || post.status !== "PUBLISHED" || post.externalPostId !== candidate.externalPostId || post.publishedAt?.getTime() !== candidate.publishedAt?.getTime()) {
         await tx.socialPublication.update({ where: { id: post.id }, data: { metricsLeaseUntil: null, nextMetricsAt: null, errorCode: "METRICS_CONTEXT_CHANGED" } });
         return;
       }
@@ -466,7 +471,7 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
         if (post.metricsLeaseUntil?.getTime() !== leaseUntil.getTime()) return;
         const fresh = await tx.socialConnection.findUniqueOrThrow({ where: { id: observedConnection.id } });
         const validPayload = (() => { try { frozenCopy(post.payload, post.payloadHash, fresh.provider); return post.payloadHash === candidate.payloadHash && post.connectionId === candidate.connectionId && post.revisionId === candidate.revisionId && post.brandVersion === candidate.brandVersion && post.businessId === candidate.businessId && post.organizationId === candidate.organizationId; } catch { return false; } })();
-        const sameContext = validPayload && post.status === "PUBLISHED" && post.externalPostId === candidate.externalPostId && post.publishedAt?.getTime() === candidate.publishedAt?.getTime() && fresh.status === "CONNECTED" && fresh.encryptedToken === observedConnection.encryptedToken && fresh.externalAccountId === observedConnection.externalAccountId && fresh.provider === observedConnection.provider && (!fresh.expiresAt || fresh.expiresAt > new Date());
+        const sameContext = validPayload && post.mediaExternalId === candidate.mediaExternalId && post.mediaTransferVersion === candidate.mediaTransferVersion && post.mediaUploaded === candidate.mediaUploaded && post.status === "PUBLISHED" && post.externalPostId === candidate.externalPostId && post.publishedAt?.getTime() === candidate.publishedAt?.getTime() && fresh.status === "CONNECTED" && fresh.encryptedToken === observedConnection.encryptedToken && fresh.externalAccountId === observedConnection.externalAccountId && fresh.provider === observedConnection.provider && (!fresh.expiresAt || fresh.expiresAt > new Date());
         await tx.socialPublication.update({ where: { id: post.id }, data: {
           metricsLeaseUntil: null, nextMetricsAt: null,
           ...(sameContext ? { metricsInvalidatedAt: new Date(), errorCode: "METRICS_SOURCE_CHANGED" } : { errorCode: "METRICS_CONTEXT_CHANGED" }),

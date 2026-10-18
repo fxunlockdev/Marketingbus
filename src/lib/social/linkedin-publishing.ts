@@ -3,19 +3,22 @@ import { createLinkedInOAuthAdapter, LINKEDIN_SCOPES, type LinkedInOAuthSettings
 import { socialJson, SocialReadError } from "./provider-http";
 import { publicationPayload, metricReading, metricSubject, MetricSourceChangedError, type MetricSubject, type Account, type SocialAdapter, type PublicationPayload, type PublishedReceipt } from "./contracts";
 import { submissionJournal, type SubmissionJournal, type SubmissionContext } from "./submission-journal";
+import { createImageTransfer, linkedInImageId, type SocialImageTransfer } from "./image-transfer";
+import { prepareLinkedInImage } from "./linkedin-image-upload";
 const company = z.string().regex(/^urn:li:organization:[1-9][0-9]{0,15}$/);
 const postId = z.string().regex(/^urn:li:(share|ugcPost):[1-9][0-9]{0,30}$/);
 const count = z.number().int().min(0).max(2147483647);
 const likes = z.number().int().min(-2147483647).max(2147483647);
 const failure = () => Error("LinkedIn publication or metrics could not be verified.");
-export function createLinkedInPublishingAdapter(config: LinkedInOAuthSettings, fetcher: typeof fetch = fetch, journal: SubmissionJournal = submissionJournal): SocialAdapter {
+export function createLinkedInPublishingAdapter(config: LinkedInOAuthSettings, fetcher: typeof fetch = fetch, journal: SubmissionJournal = submissionJournal, images: { enabled: boolean; transfer?: SocialImageTransfer } = { enabled: process.env.LINKEDIN_IMAGE_PUBLISHING_ENABLED === "true" }): SocialAdapter {
   const version = `${createLinkedInOAuthAdapter(config).config.version}:publish-v1`;
   const headers = (token: string) => ({ Authorization: `Bearer ${token}`, Accept: "application/json", "LinkedIn-Version": config.apiVersion, "X-Restli-Protocol-Version": "2.0.0" });
   const get = (account: Account, path: string, signal: AbortSignal) => socialJson(fetcher, `https://api.linkedin.com/rest/${path}`, { headers: headers(account.token) }, signal);
-  const context = (account: Account, payload: PublicationPayload, requestId: string): SubmissionContext => ({ account, payload, requestId, adapterVersion: version });
+  const transfer = images.transfer ?? createImageTransfer();
+  const context = (account: Account, payload: PublicationPayload, requestId: string): SubmissionContext => ({ account, payload, requestId, adapterVersion: payload.mediaExportId ? `${version}:image-v1` : version });
   const validatePayload = (account: Account, payload: PublicationPayload) => {
     publicationPayload.parse(payload); company.parse(account.externalAccountId);
-    if (account.provider !== "LinkedIn" || payload.channel !== "LinkedIn" || payload.format !== "static" || payload.mediaExportId !== null) throw failure();
+    if (account.provider !== "LinkedIn" || payload.channel !== "LinkedIn" || payload.format !== "static" || (payload.mediaExportId !== null && !images.enabled)) throw failure();
   };
   async function authorize(account: Account, signal: AbortSignal) {
     createLinkedInOAuthAdapter(config); company.parse(account.externalAccountId);
@@ -31,16 +34,19 @@ export function createLinkedInPublishingAdapter(config: LinkedInOAuthSettings, f
     }
     throw failure();
   }
-  async function readPost(account: Account, id: string, signal: AbortSignal, caption?: string, subject?: MetricSubject): Promise<PublishedReceipt> {
+  async function readPost(account: Account, id: string, signal: AbortSignal, caption?: string, subject?: MetricSubject, image?: { id: string; altText: string }): Promise<PublishedReceipt> {
     postId.parse(id);
     const result = z.object({ id: z.literal(id), author: z.literal(account.externalAccountId), lifecycleState: z.string().max(100), commentary: z.string().max(64000), publishedAt: z.number().int().positive().safe(), visibility: z.string().max(100), distribution: z.object({ feedDistribution: z.string().max(100) }), content: z.record(z.string(), z.unknown()).optional(), reshareContext: z.record(z.string(), z.unknown()).optional(), adContext: z.record(z.string(), z.unknown()).optional() }).parse(await get(account, `posts/${encodeURIComponent(id)}?viewContext=READER`, signal));
-    const eligible = result.lifecycleState === "PUBLISHED" && result.visibility === "PUBLIC" && result.distribution.feedDistribution === "MAIN_FEED" && Object.keys(result.content ?? {}).length === 0 && result.reshareContext === undefined && result.adContext === undefined;
+    const expectedImage = image ?? (subject?.payload.image && subject.mediaExternalId ? { id: subject.mediaExternalId, altText: subject.payload.image.altText } : undefined);
+    const imageContent = expectedImage && z.object({ media: z.object({ id: z.literal(expectedImage.id), altText: z.literal(expectedImage.altText), taggedEntities: z.array(z.unknown()).length(0).optional() }).strict() }).strict().safeParse(result.content).success;
+    const eligible = result.lifecycleState === "PUBLISHED" && result.visibility === "PUBLIC" && result.distribution.feedDistribution === "MAIN_FEED" && (expectedImage ? imageContent : Object.keys(result.content ?? {}).length === 0) && result.reshareContext === undefined && result.adContext === undefined;
     if (subject && (!eligible || result.commentary !== subject.payload.caption || result.publishedAt !== subject.publishedAt.getTime())) throw new MetricSourceChangedError();
     if (!eligible) throw failure();
     if (caption !== undefined && result.commentary !== caption || result.publishedAt > Date.now() + 60000) throw failure();
     return { externalPostId: id, publishedAt: new Date(result.publishedAt), permalink: null };
   }
   return {
+    imagePublishingAvailable: images.enabled,
     async publish(account, payload, requestId, signal) {
       try { validatePayload(account, payload); } catch { return { state: "failed", code: "INVALID_MEDIA" }; }
       try { await authorize(account, signal); }
@@ -52,16 +58,22 @@ export function createLinkedInPublishingAdapter(config: LinkedInOAuthSettings, f
       // Commit the fence before ANY publish request; a lost response must never cause a retry.
       const ctx = context(account, payload, requestId);
       try {
+        let image: { id: string; altText: string } | undefined;
+        if (payload.image) {
+          const prepared = await prepareLinkedInImage(ctx, signal, fetcher, transfer, headers(account.token));
+          if ("outcome" in prepared) return prepared.outcome;
+          image = { id: prepared.id, altText: payload.image.altText };
+        }
         if (!await journal.begin(ctx)) return { state: "uncertain" };
         const bounded = AbortSignal.any([signal, AbortSignal.timeout(10000)]); bounded.throwIfAborted();
-        const response = await fetcher("https://api.linkedin.com/rest/posts", { method: "POST", headers: { ...headers(account.token), "Content-Type": "application/json" }, body: JSON.stringify({ author: account.externalAccountId, commentary: payload.caption, visibility: "PUBLIC", distribution: { feedDistribution: "MAIN_FEED", targetEntities: [], thirdPartyDistributionChannels: [] }, lifecycleState: "PUBLISHED", isReshareDisabledByAuthor: false }), signal: bounded, redirect: "error", cache: "no-store", credentials: "omit" });
+        const response = await fetcher("https://api.linkedin.com/rest/posts", { method: "POST", headers: { ...headers(account.token), "Content-Type": "application/json" }, body: JSON.stringify({ author: account.externalAccountId, commentary: payload.caption, visibility: "PUBLIC", distribution: { feedDistribution: "MAIN_FEED", targetEntities: [], thirdPartyDistributionChannels: [] }, ...(image ? { content: { media: image } } : {}), lifecycleState: "PUBLISHED", isReshareDisabledByAuthor: false }), signal: bounded, redirect: "error", cache: "no-store", credentials: "omit" });
         // Discard all response bodies, including error bodies that could contain secrets.
         const id = response.status === 201 ? postId.safeParse(response.headers.get("x-restli-id")) : null;
         await response.body?.cancel().catch(() => {});
         if (!id?.success) return { state: "uncertain" };
         await journal.record(ctx, id.data);
         signal.throwIfAborted();
-        const receipt = await readPost(account, id.data, signal, payload.caption);
+        const receipt = await readPost(account, id.data, signal, payload.caption, undefined, image);
         return { state: "published", receipt };
       } catch { return { state: "uncertain" }; }
     },
@@ -70,14 +82,21 @@ export function createLinkedInPublishingAdapter(config: LinkedInOAuthSettings, f
         validatePayload(account, payload);
         const id = await journal.candidate(context(account, payload, requestId));
         if (!id) return null; // Never guess from caption matching or resend the post.
+        let image: { id: string; altText: string } | undefined;
+        if (payload.image) {
+          const state = await transfer.inspect(context(account, payload, requestId));
+          if (!state.uploaded || !state.externalId) return null;
+          image = { id: linkedInImageId.parse(state.externalId), altText: payload.image.altText };
+        }
         await authorize(account, signal);
-        return await readPost(account, id, signal, payload.caption);
+        return await readPost(account, id, signal, payload.caption, undefined, image);
       } catch { return null; }
     },
     async metrics(account, externalPostId, signal, rawSubject) {
       try {
         const subject = metricSubject.parse(rawSubject);
         validatePayload(account, subject.payload); postId.parse(externalPostId);
+        if (!!subject.payload.image !== !!subject.mediaExternalId) throw failure();
         if (subject.publishedAt.getTime() <= 0 || subject.publishedAt > new Date()) throw failure();
         await authorize(account, signal); await readPost(account, externalPostId, signal, undefined, subject);
         const kind = externalPostId.startsWith("urn:li:ugcPost:") ? "ugcPost" : "share";

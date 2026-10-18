@@ -1,6 +1,22 @@
-# LinkedIn company text publishing and post metrics
+# LinkedIn company publishing and post metrics
 
-This release implements the HTTP transport behind the existing approval/scheduling/worker workflow. It supports organic **text-only company posts** for approved administrators. It does not upload images/video, publish personal-profile posts, enable Facebook/Instagram publishing, or establish live platform acceptance.
+The transport supports organic company text posts and, behind a separate disabled-by-default gate, one approved PNG export. It does not upload video, publish personal-profile posts, enable Instagram publishing, or establish live platform acceptance. Facebook has its own text-only adapter.
+
+## Approved image transfer
+
+`LINKEDIN_IMAGE_PUBLISHING_ENABLED=true` on web and worker additionally enables single-image selection. This is not enabled by adding an API key. The user selects a retained export of the exact approved copy/composition in Publishing & analytics. Scheduling freezes its local ID, SHA-256, byte count, dimensions and approved headline as alt text; no client URL, object key, replacement copy or invented description is accepted. Scheduling must precede the export's expiry. The private bucket remains private.
+
+The worker verifies the source manifest, renderer, copy/brand/asset permissions and blocking comments before reading the object, again after reading and before each transfer boundary. Stored bytes must match the fingerprint. A separate durable fence precedes `POST /rest/images?action=initializeUpload`. The returned image URN is recorded before the sole binary `PUT`. Only HTTPS `www.linkedin.com/dms-uploads/{matching-image-key}/uploaded-image/0` is accepted, with no redirects, credentials in URL, alternate ports or fragments. Upload URLs and raw responses are never stored or sent to the browser. Other upstream URL shapes deliberately fail closed until reviewed and tested.
+
+An acknowledged upload is followed by a fixed-endpoint image read requiring exact URN, owner and AVAILABLE status. Pending processing returns a bounded safe retry **before any post submission**; the same saved URN is reused without another registration/upload. Three worker attempts bound this path. Unknown registration/upload outcomes remain held without repeating a write. An orphaned provider upload is possible after interruption; remote media deletion and operator abandonment tooling are not implemented. Operator inspection must not clear fences or pretend a post exists.
+
+The existing publication fence then permits one post attempt containing that image URN and approved alt text. Read-back verifies exact caption, image and description; lost post confirmation uses candidate-ID reads only. Metric reads require the saved image identity/description both before and after reading statistics. A changed image is excluded just like changed copy. This proves ID/description binding, not perceptual equality of LinkedIn's resized rendition or upstream image history. No visual fidelity score is fabricated. The metric count definitions remain v2; the text-only description below refers to the older transport lane.
+
+Removing an export cancels its queued posts. In-flight/uncertain posts block removal and defer physical expiry cleanup until investigated; ordinary download expiry still applies. A published network copy survives local deletion and must be managed on LinkedIn. Processing retries or rescheduling cannot replace a saved image with another fingerprint. No generation credits or AI calls are involved in transferring an existing PNG.
+
+Migration `20261019000000_social_image_transfer` adds media-transfer version, external image ID and acknowledged-upload fields, a binding constraint and per-account image-ID uniqueness. Synthetic restore tests preserve these alongside uncertain post receipts. UI checks cover exact-version selection, disabled capability, keyboard submission, focus on rejection, retained selection, mobile width and automated accessibility. Real rendered PNGs flow through the adapter/worker/database in local tests; provider responses remain fixtures.
+
+Official contracts checked 18 October 2026: [Images API](https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/images-api?view=li-lms-2026-07), its linked [binary upload instructions](https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/vector-asset-api?view=li-lms-2026-07#upload-the-image), and [Posts API](https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api?view=li-lms-2026-07). Live acceptance must verify the actual upload URL shape, permissions, asynchronous processing and read-back fields for the configured API version before activation. Text-only behavior below remains unchanged.
 
 ## Configuration
 

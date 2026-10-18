@@ -2,6 +2,8 @@
 import { useEffect, useRef, useState } from "react";
 type Dashboard = {
   enabledProviders: string[];
+  imageProviders?: string[];
+  mediaChoices?: { id: string; itemId: string; revisionVersion: number; placement: string; expiresAt: string; bytes: number }[];
   enabledMetricProviders: string[];
   canManageMetrics: boolean;
   window: string;
@@ -20,6 +22,8 @@ type Dashboard = {
     permalink: string | null;
     externalPostId: string | null;
     errorCode: string | null;
+    includesImage?: boolean;
+    imageUploadAcknowledged?: boolean;
     reconciliationAttempts: number;
     nextReconciliationAt: string | null;
     metricsFailures: number;
@@ -63,9 +67,12 @@ export function SocialDashboard({
     [refresh, setRefresh] = useState(0),
     [message, setMessage] = useState("");
   const [itemId, setItem] = useState(""),
+    [mediaExportId, setMediaExportId] = useState(""),
     [connectionId, setConnection] = useState(""),
     [when, setWhen] = useState("");
   const resultRef = useRef<HTMLParagraphElement>(null);
+  const errorRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
   useEffect(() => { if (message.startsWith("Metric checks queued.")) resultRef.current?.focus(); }, [message]);
   useEffect(() => {
     const controller = new AbortController();
@@ -111,7 +118,7 @@ export function SocialDashboard({
     selected = approved.find((i) => i.id === itemId);
   return (
     <div className="production-list" aria-busy={busy}>
-      <p role="alert" className="form-error">
+      <p role="alert" className="form-error" ref={errorRef} tabIndex={-1}>
         {error}
       </p>
       <p role="status" tabIndex={-1} ref={resultRef}>{message}</p>
@@ -169,6 +176,7 @@ export function SocialDashboard({
                     connectionId,
                     scheduledFor: new Date(when).toISOString(),
                     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                    ...(mediaExportId ? { mediaExportId } : {}),
                   });
               }}
             >
@@ -180,6 +188,7 @@ export function SocialDashboard({
                 onChange={(e) => {
                   setItem(e.target.value);
                   setConnection("");
+                  setMediaExportId("");
                 }}
               >
                 <option value="">Choose a creative</option>
@@ -189,6 +198,15 @@ export function SocialDashboard({
                   </option>
                 ))}
               </select>
+              {selected && <div>
+                <label htmlFor="social-image">Approved image export</label>
+                <select id="social-image" aria-describedby="social-image-help" value={mediaExportId} disabled={!data.imageProviders?.includes(selected.channel)} onChange={e => setMediaExportId(e.target.value)}>
+                  <option value="">Text only</option>
+                  {(data.mediaChoices ?? []).filter(image => image.itemId === selected.id && image.revisionVersion === selected.revisions[0].version).map(image => <option key={image.id} value={image.id}>{image.placement} · {image.id.slice(-6)} · expires {new Date(image.expiresAt).toLocaleDateString()}</option>)}
+                </select>
+                <p id="social-image-help">{data.imageProviders?.includes(selected.channel) ? "Only saved exports of this exact approved version are listed. The approved headline is used as image alt text. Schedule before the export expires. The image is uploaded privately to the destination; it does not make your storage bucket public." : "Image publishing is not activated for this destination. No image will be sent."} Changing or removing the approved artwork cancels queued publication; published copies must be managed on the network.</p>
+                {mediaExportId && <a href={`/api/businesses/${businessId}/exports/${encodeURIComponent(mediaExportId)}`} target="_blank" rel="noopener noreferrer">Download selected approved image</a>}
+              </div>}
               <label htmlFor="social-account">Destination account</label>
               <select
                 id="social-account"
@@ -243,6 +261,7 @@ export function SocialDashboard({
                   {new Date(p.scheduledFor).toLocaleString()}
                 </p>
                 {p.errorCode && <p>{p.errorCode.replaceAll("_", " ")}</p>}
+                {p.includesImage && <p>Includes an approved image. {p.imageUploadAcknowledged ? "Image upload acknowledged by the destination; publication is confirmed only when a provider post ID is shown below." : "Image upload has not been acknowledged. No completed post is implied."}</p>}
                 {p.status === "NEEDS_RECONCILIATION" && <div>
                   <p>Publication is unconfirmed. This post will not be sent again automatically.</p>
                   <p>Lookup checks: {p.reconciliationAttempts}. {p.nextReconciliationAt

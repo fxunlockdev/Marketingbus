@@ -110,6 +110,8 @@ export async function readSocialDashboard(scope: Scope) {
       select: {
         id: true,
         status: true,
+        payload: true,
+        mediaUploaded: true,
         scheduledFor: true,
         publishedAt: true,
         permalink: true,
@@ -139,7 +141,7 @@ export async function readSocialDashboard(scope: Scope) {
   ]);
   return {
     connections,
-    publications,
+    publications: publications.map(({ payload, mediaUploaded, ...post }) => ({ ...post, includesImage: !!(payload && typeof payload === "object" && !Array.isArray(payload) && typeof payload.mediaExportId === "string"), imageUploadAcknowledged: mediaUploaded })),
     proposals,
     summary: summarizePerformance(rows),
     window:

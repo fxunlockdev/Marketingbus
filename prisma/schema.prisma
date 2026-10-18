@@ -678,6 +678,9 @@ model SocialPublication {
   externalPostId String?
   submissionAdapterVersion String?
   candidatePostId String?
+  mediaTransferVersion String?
+  mediaExternalId String?
+  mediaUploaded Boolean @default(false)
   reconciliationAttempts Int @default(0)
   nextReconciliationAt DateTime?
   permalink String?
@@ -696,6 +699,7 @@ model SocialPublication {
   @@unique([revisionId, connectionId])
   @@unique([connectionId, externalPostId])
   @@unique([connectionId, candidatePostId])
+  @@unique([connectionId, mediaExternalId])
   @@unique([id, businessId, organizationId])
   @@index([status, scheduledFor])
   @@index([status, nextMetricsAt])

@@ -5,6 +5,13 @@ import { metaEnvironment } from "./meta-oauth";
 
 export const socialProvider = z.enum(["Facebook", "Instagram", "LinkedIn"]);
 export type SocialProvider = z.infer<typeof socialProvider>;
+export const publicationImage = z.object({
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  bytes: z.number().int().min(1).max(5 * 1024 * 1024),
+  width: z.number().int().min(1).max(4096), height: z.number().int().min(1).max(4096),
+  // Derived from the approved headline, not unreviewed new claims.
+  altText: z.string().min(1).max(160),
+}).strict();
 export const publicationPayload = z
   .object({
     caption: z.string().min(1).max(3000),
@@ -12,8 +19,9 @@ export const publicationPayload = z
     format: z.string().min(1).max(40),
     // A private, immutable export ID, never a customer-supplied remote URL.
     mediaExportId: z.string().min(1).max(100).nullable(),
+    image: publicationImage.optional(),
   })
-  .strict();
+  .strict().refine(p => p.mediaExportId === null ? p.image === undefined : !!p.image && p.channel === "LinkedIn" && p.format === "static", "Unsupported media binding");
 export type PublicationPayload = z.infer<typeof publicationPayload>;
 export const publishedReceipt = z
   .object({
@@ -37,7 +45,7 @@ export const metricReading = z
   .strict();
 export type MetricReading = z.infer<typeof metricReading>;
 // Metrics describe this immutable creative, not whichever text happens to be at its URL now.
-export const metricSubject = z.object({ payload: publicationPayload, publishedAt: z.date() }).strict();
+export const metricSubject = z.object({ payload: publicationPayload, publishedAt: z.date(), mediaExternalId: z.string().regex(/^urn:li:image:[A-Za-z0-9_-]{1,200}$/).optional() }).strict();
 export type MetricSubject = z.infer<typeof metricSubject>;
 export class MetricSourceChangedError extends Error {
   constructor() { super("Published creative changed; metrics cannot be attributed to the approved version."); }
@@ -61,6 +69,7 @@ export type PublishOutcome =
     }
   | { state: "uncertain" };
 export interface SocialAdapter {
+  imagePublishingAvailable?: boolean;
   // False means no certified mapping: do not schedule polling or fabricate empty observations.
   metricsAvailable?: boolean;
   // Must honor aborts and bound response size. Retryable means definitively NOT submitted.

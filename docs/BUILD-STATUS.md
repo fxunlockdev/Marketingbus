@@ -1,6 +1,12 @@
 # Acceptance ledger — 18 October 2026
 
-## Current release — shot direction and feedback-driven takes
+## Image-transfer release candidate — verification in progress
+
+Current local work adds LinkedIn single-image publishing from immutable approved PNG exports, separate media/post write fences, asynchronous processing without re-upload, exact image/alt-text read-back and image-bound metrics. The production gate remains off. Local regression passes 1,117 tests/60 suites; production build/type checking and isolated restoration (43 migrations, 52 tables, 86 synthetic rows) pass; dependency audit finds zero known vulnerabilities. Browser/CI/deployment results are recorded only after completion. The initial regression failure was an old corruption fixture using the newly strict valid-payload constructor; it now deliberately hashes raw invalid fixture data and the full suite passes. See [implementation and limits](LINKEDIN-PUBLISHING.md).
+
+No paid calls, real posts, emails, payments, new infrastructure or configuration changes. Web-service variable-name inspection still finds no Gemini/Higgsfield, Meta/LinkedIn, Resend or Stripe credentials. OpenAI/storage names are present, not proven usable. The full seven-module product is not complete; this is one implemented cross-module path, not a claim that API keys are the only remaining work.
+
+## Previous deployed release — shot direction and feedback-driven takes
 
 Web and worker run source `8c825a4` (feature commit `75d0140`), runtime `studio-v34-shot-direction`. Worker deployment `db4887cc-1bc0-45c9-a574-4bcf3b1e15b2` and web deployment `3c49b39b-36d7-4a49-946e-6decabbc6ec2` both reported SUCCESS from the same tracked source archive. All 42 migrations are applied; worker `/health` passed, and the web service started successfully. The app health endpoint returns 200/no-store; studio redirects signed-out visitors to login; anonymous generation reads and new-take requests return 401/no-store; all three social callback-denial checks return fixed 303/no-store/no-referrer responses.
 

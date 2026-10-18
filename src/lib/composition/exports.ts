@@ -24,12 +24,13 @@ function manifest(ctx: Awaited<ReturnType<typeof compositionContext>>, placement
 async function assertReader(scope: Scope, client: Pick<Prisma.TransactionClient, "membership"> = db) {
   if (!await client.membership.findUnique({ where: { organizationId_userId: { organizationId: scope.organizationId, userId: scope.actorId } } })) throw new AppError(404, "Workspace not found.");
 }
-async function assertCurrent(scope: Scope, row: CompositionExport, client: Prisma.TransactionClient | typeof db = db) {
+export async function assertCurrentExport(scope: Scope, row: CompositionExport, client: Prisma.TransactionClient | typeof db = db) {
   const ctx = await compositionContext(scope, row.compositionId, false, client);
   if (row.rendererVersion !== EXPORT_RENDERER_VERSION) throw new AppError(409, "Create an export with the current renderer.");
   // PostgreSQL JSONB may reorder keys; compare canonical values, not insertion order.
   if (canonical(row.manifest) !== canonical(manifest(ctx, row.placement as Placement))) throw new AppError(409, "The export no longer matches the approved brand, copy or assets.");
 }
+const assertCurrent = assertCurrentExport;
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value && typeof value === "object") return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`;
@@ -132,6 +133,9 @@ export async function archiveCompositionExport(scope: Scope, id: string) {
     const row = await tx.compositionExport.findFirst({ where: { id, businessId: scope.businessId, organizationId: scope.organizationId } });
     if (!row || row.status === "DELETED") throw new AppError(404, "Export not found.");
     if (row.status === "DELETING" || row.leaseUntil && row.leaseUntil > new Date()) throw new AppError(409, "Wait for the current storage operation to finish.");
+    const publications = { businessId: row.businessId, organizationId: row.organizationId, payload: { path: ["mediaExportId"], equals: row.id } };
+    if (await tx.socialPublication.count({ where: { ...publications, status: { in: ["SUBMITTING", "NEEDS_RECONCILIATION"] } } })) throw new AppError(409, "An image publication is submitting or has an uncertain outcome. Resolve it before removing this export.");
+    await tx.socialPublication.updateMany({ where: { ...publications, status: "SCHEDULED" }, data: { status: "CANCELLED", errorCode: "MEDIA_REMOVED" } });
     if (row.status !== "ARCHIVED") await tx.compositionExport.update({ where: { id }, data: { status: "ARCHIVED", leaseUntil: null, purgeAfter: new Date(Date.now() + 7 * 86400000) } });
     await tx.auditEvent.create({ data: { ...scope, action: "COMPOSITION_EXPORT_ARCHIVED", detail: `Export ${id} is no longer downloadable; physical cleanup is scheduled after seven days. Previously downloaded copies are separate.` } });
     return { ok: true };
@@ -144,6 +148,9 @@ export async function purgeCompositionExports(store: AssetStore, now = new Date(
     const lease = new Date(Math.max(now.getTime(), Date.now()) + 120000);
     const changed = await db.$transaction(async tx => {
       await lockBusiness(tx, { businessId: row.businessId, organizationId: row.organizationId, actorId: "retention-worker" });
+      const publications = { businessId: row.businessId, organizationId: row.organizationId, payload: { path: ["mediaExportId"], equals: row.id } };
+      if (await tx.socialPublication.count({ where: { ...publications, status: { in: ["SUBMITTING", "NEEDS_RECONCILIATION"] } } })) return { count: 0 };
+      await tx.socialPublication.updateMany({ where: { ...publications, status: "SCHEDULED" }, data: { status: "CANCELLED", errorCode: "MEDIA_EXPIRED" } });
       return tx.compositionExport.updateMany({ where: { id: row.id, status: row.status, purgeAfter: { lte: now }, OR: [{ leaseUntil: null }, { leaseUntil: { lte: now } }] }, data: { status: "DELETING", leaseUntil: lease } });
     });
     if (!changed.count) continue;

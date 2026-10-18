@@ -6,6 +6,8 @@ import { AppError } from "../http";
 import { sealSecret } from "../secrets";
 import { currentItem, lockBusiness, type Scope } from "../production/service";
 import { creativeSchema } from "../production/content";
+import { publicationExport } from "./image-transfer";
+import { assertBrandEditor } from "../knowledge/analysis";
 import { approvedFactText, evaluateCreative } from "../production/quality";
 import {
   publicationPayload,
@@ -22,6 +24,7 @@ export const socialAction = z.discriminatedUnion("action", [
       connectionId: z.string().min(1),
       scheduledFor: z.iso.datetime(),
       timezone: z.string().min(1).max(80),
+      mediaExportId: z.string().min(1).max(100).optional(),
     })
     .strict(),
   z
@@ -137,6 +140,7 @@ export async function manageSocial(
   const input = socialAction.parse(raw);
   return db.$transaction(async (tx) => {
     const business = await lockBusiness(tx, scope);
+    await assertBrandEditor(tx, scope);
     if (input.action === "cancel") {
       const post = await tx.socialPublication.findFirst({
         where: {
@@ -210,7 +214,8 @@ export async function manageSocial(
             .eligible
         )
           throw new AppError(409, "Resolve factual checks before publishing.");
-        // Copy-only product cannot fabricate an image export or send visual direction as an image.
+        if (input.mediaExportId && !adapters[provider]?.imagePublishingAvailable) throw new AppError(409, "Image publishing is not enabled for this destination.");
+        // Each media type needs a verified export and a corresponding platform transport.
         if (provider === "Instagram" || item.format !== "static")
           throw new AppError(
             409,
@@ -230,11 +235,14 @@ export async function manageSocial(
         } catch {
           throw new AppError(400, "Choose a valid timezone.");
         }
+        const image = input.mediaExportId ? await publicationExport(tx, scope, input.mediaExportId, revision.id) : null;
+        if (image && image.row.purgeAfter <= scheduledFor) throw new AppError(409, "Schedule before this image export expires or save a new approved version.");
         const payload = publicationPayload.parse({
           caption: creative.caption,
           channel: provider,
           format: item.format,
-          mediaExportId: null,
+          mediaExportId: input.mediaExportId ?? null,
+          ...(image ? { image: { sha256: image.row.sha256, bytes: image.row.bytes, width: image.dimensions[0], height: image.dimensions[1], altText: creative.headline } } : {}),
         });
         const hash = payloadHash(payload);
         const existing = await tx.socialPublication.findUnique({
