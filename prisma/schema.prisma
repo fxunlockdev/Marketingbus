@@ -146,6 +146,7 @@ model SocialOAuthFlow {
   provider String
   stateHash String @unique
   configurationHash String
+  authentication String @default("S256")
   status String @default("PENDING")
   encryptedVerifier String?
   encryptedCandidates String?

@@ -8,6 +8,7 @@ import { lockBusiness, type Scope } from "../production/service";
 import { socialProvider } from "./contracts";
 import { saveVerifiedConnectionInTransaction } from "./service";
 import { assertWorkspaceMfa } from "../identity/workspace-security";
+import { createLinkedInOAuthAdapter, LINKEDIN_AUTHORIZATION_ENDPOINT } from "./linkedin-oauth";
 
 type Provider = z.infer<typeof socialProvider>;
 export type OAuthScope = Scope & { sessionId: string };
@@ -26,6 +27,7 @@ const configSchema = z.object({
   // Configurations are code-owned, never submitted by a customer. No implicit grant or silent PKCE downgrade.
   version: z.string().min(1).max(80), clientId: z.string().min(1).max(200),
   authorizationEndpoint: z.url(), scopes: z.array(z.string().regex(/^[a-zA-Z0-9_.:-]{1,100}$/)).min(1).max(30),
+  authentication: z.enum(["S256", "LINKEDIN_CONFIDENTIAL"]).optional(),
 }).strict();
 export interface SocialOAuthAdapter {
   config: z.infer<typeof configSchema>;
@@ -36,7 +38,11 @@ export interface SocialOAuthAdapter {
 export type SocialOAuthAdapters = Partial<Record<Provider, SocialOAuthAdapter>>;
 export function configuredSocialOAuthAdapters(): SocialOAuthAdapters {
   // No fixture or generic arbitrary-URL adapter can be enabled through environment variables.
-  // Register each official adapter only after its endpoint, PKCE and permission behavior is verified.
+  if (process.env.LINKEDIN_CONNECTIONS_ENABLED === "true") {
+    try {
+      return { LinkedIn: createLinkedInOAuthAdapter({ clientId: process.env.LINKEDIN_CLIENT_ID || "", clientSecret: process.env.LINKEDIN_CLIENT_SECRET || "", apiVersion: process.env.LINKEDIN_API_VERSION || "", verifiedUntil: process.env.LINKEDIN_API_VERIFIED_UNTIL || "" }) };
+    } catch { /* Missing/expired operator verification must leave the destination disabled. */ }
+  }
   return {};
 }
 function configuration(provider: Provider, adapters: SocialOAuthAdapters) {
@@ -45,11 +51,13 @@ function configuration(provider: Provider, adapters: SocialOAuthAdapters) {
   const config = configSchema.parse(adapter.config), endpoint = new URL(config.authorizationEndpoint);
   if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.hash || endpoint.search)
     throw new AppError(503, "Destination authorization configuration is invalid.");
+  if (config.authentication === "LINKEDIN_CONFIDENTIAL" && (provider !== "LinkedIn" || endpoint.href !== LINKEDIN_AUTHORIZATION_ENDPOINT))
+    throw new AppError(503, "Destination authorization configuration is invalid.");
   const origin = new URL(process.env.APP_ORIGIN || "http://invalid");
   if ((origin.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(origin.hostname)) || origin.username || origin.password || origin.search || origin.hash || origin.pathname !== "/")
     throw new AppError(503, "Application origin is not configured safely.");
   const redirectUri = `${origin.origin}/api/social/${provider.toLowerCase()}/callback`;
-  return { adapter, config, redirectUri, hash: digest(JSON.stringify({ provider, config, redirectUri, pkce: "S256" })) };
+  return { adapter, config, redirectUri, hash: digest(JSON.stringify({ provider, config, redirectUri, authentication: config.authentication ?? "S256" })) };
 }
 async function authorize(tx: Prisma.TransactionClient, scope: OAuthScope, write = true) {
   // Same order as account/invitation operations; hold these locks through the final write.
@@ -75,15 +83,19 @@ export async function beginSocialOAuth(scope: OAuthScope, rawProvider: unknown, 
   return db.$transaction(async tx => {
     await authorize(tx, scope);
     const { config, redirectUri, hash } = configuration(provider, adapters);
-    const state = randomBytes(32).toString("base64url"), verifier = randomBytes(32).toString("base64url");
+    const state = randomBytes(32).toString("base64url"), verifier = config.authentication === "LINKEDIN_CONFIDENTIAL" ? null : randomBytes(32).toString("base64url");
     const id = randomUUID();
     // Replacing this session's older requests is explicit and keeps the pending-secret footprint bounded.
     await tx.socialOAuthFlow.updateMany({ where: { businessId: scope.businessId, sessionId: scope.sessionId, provider, status: { in: active } }, data: { status: "CANCELLED", ...erased } });
-    await tx.socialOAuthFlow.create({ data: { ...scope, id, provider, stateHash: digest(state), configurationHash: hash,
-      encryptedVerifier: sealSecret(verifier, `${context({ ...scope, id })}:verifier`), expiresAt: new Date(Date.now() + 600000) } });
+    await tx.socialOAuthFlow.create({ data: { ...scope, id, provider, authentication: config.authentication ?? "S256", stateHash: digest(state), configurationHash: hash,
+      encryptedVerifier: verifier ? sealSecret(verifier, `${context({ ...scope, id })}:verifier`) : null, expiresAt: new Date(Date.now() + 600000) } });
     const url = new URL(config.authorizationEndpoint);
     url.search = new URLSearchParams({ client_id: config.clientId, response_type: "code", redirect_uri: redirectUri,
-      scope: config.scopes.join(" "), state, code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256" }).toString();
+      scope: config.scopes.join(" "), state }).toString();
+    if (verifier) {
+      url.searchParams.set("code_challenge", createHash("sha256").update(verifier).digest("base64url"));
+      url.searchParams.set("code_challenge_method", "S256");
+    }
     return { authorizationUrl: url.href };
   });
 }
@@ -105,7 +117,7 @@ export async function completeSocialOAuth(sessionId: string, rawProvider: unknow
     const current = configuration(provider, adapters);
     if (current.hash !== flow.configurationHash) throw new AppError(409, "Destination settings changed. Start again.");
     const code = z.string().min(1).max(4096).parse(parameters.get("code"));
-    const verifier = openSecret(flow.encryptedVerifier!, `${context(flow)}:verifier`);
+    const verifier = current.config.authentication === "LINKEDIN_CONFIDENTIAL" ? "" : openSecret(flow.encryptedVerifier!, `${context(flow)}:verifier`);
     // Claim BEFORE network I/O. Never retry an exchange after an uncertain outcome or worker interruption.
     await tx.socialOAuthFlow.update({ where: { id: flow.id }, data: { status: "EXCHANGING", ...erased } });
     return { flow, current, code, verifier };
