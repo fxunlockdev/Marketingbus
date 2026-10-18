@@ -17,7 +17,7 @@ export async function resumePublicationLookup(raw: unknown) {
     const post = await tx.socialPublication.findUniqueOrThrow({ where: { id: initial.id }, include: { connection: true } });
     if (post.status !== "NEEDS_RECONCILIATION" || post.externalPostId || post.publishedAt || post.leaseUntil && post.leaseUntil > new Date())
       throw new AppError(409, "Only an unconfirmed publication without an active lookup can be resumed.");
-    if (!post.reconciliationAttempts || post.reconciliationAttempts < MAX_RECONCILIATION_ATTEMPTS && post.nextReconciliationAt)
+    if (post.errorCode !== "ACCOUNT_DISCONNECTED" && (!post.reconciliationAttempts || post.reconciliationAttempts < MAX_RECONCILIATION_ATTEMPTS && post.nextReconciliationAt))
       return { resumed: false }; // Already eligible or backing off: preserve its existing limit.
     try { frozenCopy(post.payload, post.payloadHash, post.connection.provider); }
     catch { throw new AppError(409, "Repair and verify the immutable publication snapshot before lookup."); }

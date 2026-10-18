@@ -22,6 +22,7 @@ import { MetricSourceChangedError, type SocialAdapter } from "../src/lib/social/
 import { payloadHash } from "../src/lib/social/integrity";
 import { resumePublicationLookup } from "../src/lib/social/recovery";
 import { resumeMetricChecks } from "../src/lib/social/metric-recovery";
+import { disconnectSocialAccount } from "../src/lib/social/disconnect";
 import { seedLearningEvidence } from "./fixtures/learning";
 import { productionMemories, validLearningEvidence } from "../src/lib/social/learning-evidence";
 import { publishingFixture } from "./helpers/linkedin-publishing";
@@ -158,6 +159,10 @@ suite("social publishing and analytics isolation", () => {
       data: { scheduledFor: new Date(Date.now() - 1000) },
     });
     return post;
+  }
+  async function disconnectFixture(ctx: Awaited<ReturnType<typeof setup>>) {
+    const session = await db.session.create({ data: { id: crypto.randomUUID(), userId: ctx.scope.actorId, expiresAt: new Date(Date.now() + 3600000) } });
+    return { scope: { ...ctx.scope, sessionId: session.id }, input: { action: "disconnect", connectionId: ctx.connection.id, authorizationVersion: 1 } };
   }
   async function linkedinQueue() {
     const ctx = await setup(), f = publishingFixture(submissionJournal);
@@ -664,11 +669,8 @@ suite("social publishing and analytics isolation", () => {
     const ctx = await setup(),
       provider = adapter(),
       post = await queue(ctx, provider);
-    await manageSocial(
-      ctx.scope,
-      { action: "disconnect", connectionId: ctx.connection.id },
-      {}
-    );
+    const f = await disconnectFixture(ctx);
+    await disconnectSocialAccount(f.scope, f.input);
     expect(
       (
         await db.socialConnection.findUniqueOrThrow({
@@ -680,6 +682,94 @@ suite("social publishing and analytics isolation", () => {
       (await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } }))
         .status
     ).toBe("CANCELLED");
+  });
+  it.each(["VIEWER", "EDITOR", "missing session", "expired session", "auth version", "mfa", "foreign business", "stale grant"])("rejects disconnection with %s", async reason => {
+    const ctx = await setup(), f = await disconnectFixture(ctx);
+    if (["VIEWER", "EDITOR"].includes(reason)) await db.membership.updateMany({ where: { organizationId: ctx.scope.organizationId }, data: { role: reason } });
+    if (reason === "missing session") await db.session.delete({ where: { id: f.scope.sessionId } });
+    if (reason === "expired session") await db.session.update({ where: { id: f.scope.sessionId }, data: { expiresAt: new Date(0) } });
+    if (reason === "auth version") await db.user.update({ where: { id: ctx.scope.actorId }, data: { authVersion: { increment: 1 } } });
+    if (reason === "mfa") await db.organization.update({ where: { id: ctx.scope.organizationId }, data: { requireMfa: true } });
+    if (reason === "foreign business") f.input.connectionId = (await setup()).connection.id;
+    if (reason === "stale grant") f.input.authorizationVersion = 2;
+    await expect(disconnectSocialAccount(f.scope, f.input)).rejects.toThrow();
+    expect(await db.socialConnection.findUnique({ where: { id: ctx.connection.id } })).toMatchObject({ status: "CONNECTED", authorizationVersion: 1 });
+    expect(await db.auditEvent.count({ where: { businessId: ctx.scope.businessId, action: "SOCIAL_DISCONNECTED" } })).toBe(0);
+  });
+  it.each(["SUBMITTING", "NEEDS_RECONCILIATION", "PUBLISHED"])("disconnect retains %s evidence, stops background work and cancels same-provider pending grants", async status => {
+    const ctx = await setup(), provider = adapter(), post = await queue(ctx, provider), f = await disconnectFixture(ctx);
+    const lease = new Date(Date.now() + 120000);
+    await db.socialPublication.update({ where: { id: post.id }, data: { status, candidatePostId: "page_post", submissionAdapterVersion: "test-v1",
+      leaseUntil: status === "SUBMITTING" ? lease : null, nextReconciliationAt: new Date(), nextMetricsAt: new Date(), metricsLeaseUntil: lease,
+      ...(status === "PUBLISHED" ? { externalPostId: "page_post", publishedAt: new Date(), permalink: "https://facebook.com/fixture" } : {}) } });
+    await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { dataSnapshot: { private: "snapshot" }, dataFetchedAt: new Date(), dataLeaseId: "active", dataLeaseUntil: lease } });
+    const flow = await db.socialOAuthFlow.create({ data: { ...f.scope, id: crypto.randomUUID(), provider: "Facebook", stateHash: crypto.randomUUID(), configurationHash: "test", encryptedVerifier: "secret-verifier", expiresAt: lease } });
+    const other = await db.socialOAuthFlow.create({ data: { ...f.scope, id: crypto.randomUUID(), provider: "Instagram", stateHash: crypto.randomUUID(), configurationHash: "test", encryptedVerifier: "other-secret", expiresAt: lease } });
+    await disconnectSocialAccount(f.scope, f.input);
+    expect(await db.socialConnection.findUnique({ where: { id: ctx.connection.id } })).toMatchObject({ status: "DISCONNECTED", authorizationVersion: 2, encryptedToken: "", permissions: [], expiresAt: null, dataSnapshot: null, dataFetchedAt: null, dataLeaseId: null, dataLeaseUntil: null });
+    expect(await db.socialOAuthFlow.findUnique({ where: { id: flow.id } })).toMatchObject({ status: "CANCELLED", encryptedVerifier: null });
+    expect(await db.socialOAuthFlow.findUnique({ where: { id: other.id } })).toMatchObject({ status: "PENDING", encryptedVerifier: "other-secret" });
+    expect(await db.socialPublication.findUnique({ where: { id: post.id } })).toMatchObject({ status: status === "PUBLISHED" ? status : "NEEDS_RECONCILIATION", candidatePostId: "page_post", submissionAdapterVersion: "test-v1", nextMetricsAt: null, metricsLeaseUntil: null, nextReconciliationAt: status === "PUBLISHED" ? expect.any(Date) : null });
+    expect(await runOneReconciliation({ Facebook: provider })).toBe(false);
+    expect(await runOneMetricSync({ Facebook: provider })).toBe(false);
+    expect(provider.publish).not.toHaveBeenCalled(); expect(provider.reconcile).not.toHaveBeenCalled(); expect(provider.metrics).not.toHaveBeenCalled();
+    await expect(disconnectSocialAccount(f.scope, f.input)).rejects.toThrow(/changed/);
+    await expect(disconnectSocialAccount(f.scope, { ...f.input, authorizationVersion: 2 })).resolves.toMatchObject({ alreadyDisconnected: true });
+    expect(await db.auditEvent.count({ where: { businessId: ctx.scope.businessId, action: "SOCIAL_DISCONNECTED" } })).toBe(1);
+  });
+  it("disconnection wins a late submission result and reconnect cannot resend the original", async () => {
+    const ctx = await setup(), provider = adapter(), post = await queue(ctx, provider), f = await disconnectFixture(ctx);
+    const grant = { provider: "Facebook", externalAccountId: ctx.scope.businessId, label: "Fixture Page", token: "new-private-token", permissions: ["publish"], expiresAt: null };
+    vi.mocked(provider.publish).mockImplementation(async () => {
+      await disconnectSocialAccount(f.scope, f.input);
+      await expect(saveVerifiedConnection(ctx.scope, grant)).rejects.toThrow(/active account request/);
+      return { state: "published", receipt: { externalPostId: "late-result", permalink: "https://facebook.com/fixture", publishedAt: new Date() } };
+    });
+    await runOnePublication({ Facebook: provider });
+    expect(await db.socialPublication.findUnique({ where: { id: post.id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", externalPostId: null, errorCode: "ACCOUNT_DISCONNECTED" });
+    await db.socialPublication.update({ where: { id: post.id }, data: { leaseUntil: new Date(Date.now() - 1) } });
+    await saveVerifiedConnection(ctx.scope, grant);
+    expect(await db.socialConnection.findUnique({ where: { id: ctx.connection.id } })).toMatchObject({ authorizationVersion: 3, status: "CONNECTED" });
+    await expect(disconnectSocialAccount(f.scope, f.input)).rejects.toThrow(/changed/);
+    expect(await runOneReconciliation({ Facebook: provider })).toBe(false);
+    expect(await runOnePublication({ Facebook: provider })).toBe(false);
+    await expect(manageSocial(ctx.scope, ctx.action, { Facebook: provider })).rejects.toThrow(/already been submitted/);
+    await expect(resumePublicationLookup({ publicationId: post.id, operatorId: "local-test-operator", evidence: "Verified reconnected same account in fixture" })).resolves.toMatchObject({ resumed: true });
+    await reconcilePublication(post.id, { Facebook: provider });
+    expect(provider.publish).toHaveBeenCalledTimes(1); expect(provider.reconcile).toHaveBeenCalledTimes(1);
+  });
+  it("late reconciliation cannot overwrite disconnection or restart its checks", async () => {
+    const ctx = await setup(), provider = adapter(), post = await queue(ctx, provider), f = await disconnectFixture(ctx);
+    await db.socialPublication.update({ where: { id: post.id }, data: { status: "NEEDS_RECONCILIATION" } });
+    vi.mocked(provider.reconcile).mockImplementation(async () => {
+      await disconnectSocialAccount(f.scope, f.input);
+      return { externalPostId: "late-lookup", publishedAt: new Date(), permalink: "https://facebook.com/fixture" };
+    });
+    expect(await reconcilePublication(post.id, { Facebook: provider })).toBe(false);
+    expect(await db.socialPublication.findUnique({ where: { id: post.id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", externalPostId: null, errorCode: "ACCOUNT_DISCONNECTED", nextReconciliationAt: null });
+  });
+  it("late metrics after disconnection do not save observations or restart polling", async () => {
+    const ctx = await setup(), provider = adapter(), post = await queue(ctx, provider), f = await disconnectFixture(ctx);
+    await runOnePublication({ Facebook: provider });
+    await db.socialPublication.update({ where: { id: post.id }, data: { nextMetricsAt: new Date(Date.now() - 1000) } });
+    vi.mocked(provider.metrics).mockImplementation(async () => {
+      await disconnectSocialAccount(f.scope, f.input);
+      return { observedAt: new Date(), definitionVersion: "fixture-v1", impressions: 100, reach: null, engagements: 1, clicks: null, videoViews: null };
+    });
+    await runOneMetricSync({ Facebook: provider });
+    expect(await db.metricSnapshot.count({ where: { publicationId: post.id } })).toBe(0);
+    expect(await db.socialPublication.findUnique({ where: { id: post.id } })).toMatchObject({ status: "PUBLISHED", nextMetricsAt: null, metricsLeaseUntil: null, metricsFailures: 0 });
+    expect(await runOneMetricSync({ Facebook: provider })).toBe(false);
+    expect(provider.publish).toHaveBeenCalledTimes(1);
+  });
+  it("concurrent admin disconnections commit once and the legacy sessionless action is rejected", async () => {
+    const ctx = await setup(), f = await disconnectFixture(ctx);
+    await db.membership.updateMany({ where: { organizationId: ctx.scope.organizationId }, data: { role: "ADMIN" } });
+    const results = await Promise.allSettled([disconnectSocialAccount(f.scope, f.input), disconnectSocialAccount(f.scope, f.input)]);
+    expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    expect(await db.auditEvent.count({ where: { businessId: ctx.scope.businessId, action: "SOCIAL_DISCONNECTED" } })).toBe(1);
+    await expect(manageSocial(ctx.scope, { action: "disconnect", connectionId: ctx.connection.id }, {})).rejects.toThrow();
+    await expect(db.socialConnection.update({ where: { id: ctx.connection.id }, data: { authorizationVersion: 0 } })).rejects.toThrow(/authorizationVersion_check/);
   });
   it.each(["shape", "hash", "media", "format"])("quarantines %s corruption before submission without blocking later posts", async kind => {
     const ctx = await setup(), provider = adapter(), post = await queue(ctx, provider);

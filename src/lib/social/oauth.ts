@@ -191,7 +191,7 @@ export async function readSocialConnections(scope: OAuthScope, adapters: SocialO
   return db.$transaction(async tx => {
     const member = await authorizeSocialScope(tx, scope, false), canManage = ["OWNER", "ADMIN"].includes(member.role);
     const connections = await tx.socialConnection.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId }, orderBy: { createdAt: "desc" }, take: 100,
-      select: { id: true, provider: true, label: true, status: true, expiresAt: true, dataFetchedAt: true, dataAttemptedAt: true, dataLeaseUntil: true, dataErrorCode: true } });
+      select: { id: true, provider: true, label: true, status: true, authorizationVersion: true, expiresAt: true, dataFetchedAt: true, dataAttemptedAt: true, dataLeaseUntil: true, dataErrorCode: true } });
     const flows = canManage ? await tx.socialOAuthFlow.findMany({ where: { businessId: scope.businessId, sessionId: scope.sessionId, actorId: scope.actorId, expiresAt: { gt: new Date() } }, orderBy: { createdAt: "desc" }, take: 10 }) : [];
     const enabledProviders = socialProvider.options.filter(provider => { try { configuration(provider, adapters); return true; } catch { return false; } });
     return { canManage, connections, enabledProviders, flows: flows.map(flow => {

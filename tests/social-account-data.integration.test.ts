@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import { db } from "../src/lib/db";
 import { sealSecret } from "../src/lib/secrets";
 import { type OAuthScope } from "../src/lib/social/oauth";
+import { disconnectSocialAccount } from "../src/lib/social/disconnect";
 import { expireSocialAccountData, forgetSocialAccountData, readSocialAccountData, refreshSocialAccountData } from "../src/lib/social/account-data-service";
 import { unavailableOrganic, type AccountSnapshot, type SocialDataAdapter } from "../src/lib/social/account-data-contracts";
 const local = process.env.TEST_DATABASE_URL;
@@ -72,7 +73,7 @@ suite("tenant-scoped social account data", () => {
   });
   it.each(["disconnect", "rotate", "forget", "role", "session", "mfa", "configuration"])("discards a response when %s changes during the request", async change => {
     const f = await fixture(); f.read.mockImplementation(async () => {
-      if (change === "disconnect") await db.socialConnection.update({ where: { id: f.connection.id }, data: { status: "DISCONNECTED" } });
+      if (change === "disconnect") await disconnectSocialAccount(f.scope, { action: "disconnect", connectionId: f.connection.id, authorizationVersion: 1 });
       if (change === "rotate") await db.socialConnection.update({ where: { id: f.connection.id }, data: { encryptedToken: "rotated" } });
       if (change === "forget") await forgetSocialAccountData(f.scope, f.connection.id);
       if (change === "role") await db.membership.updateMany({ where: { organizationId: f.scope.organizationId }, data: { role: "VIEWER" } });

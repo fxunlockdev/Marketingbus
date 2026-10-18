@@ -639,6 +639,7 @@ model SocialConnection {
   encryptedToken String
   permissions String[]
   status String @default("CONNECTED")
+  authorizationVersion Int @default(1)
   expiresAt DateTime?
   dataSnapshot Json?
   dataFetchedAt DateTime?

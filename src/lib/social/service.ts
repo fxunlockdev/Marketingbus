@@ -27,12 +27,6 @@ export const socialAction = z.discriminatedUnion("action", [
   z
     .object({ action: z.literal("cancel"), publicationId: z.string().min(1) })
     .strict(),
-  z
-    .object({
-      action: z.literal("disconnect"),
-      connectionId: z.string().min(1),
-    })
-    .strict(),
 ]);
 export async function assertNoPublicationInFlight(
   tx: Prisma.TransactionClient,
@@ -89,7 +83,6 @@ export async function saveVerifiedConnectionInTransaction(tx: Prisma.Transaction
     })
     .strict()
     .parse(raw);
-    await assertNoPublicationInFlight(tx, scope.businessId);
     const existing = await tx.socialConnection.findUnique({
       where: {
         businessId_provider_externalAccountId: {
@@ -99,6 +92,9 @@ export async function saveVerifiedConnectionInTransaction(tx: Prisma.Transaction
         },
       },
     });
+    if (existing && await tx.socialPublication.count({ where: { connectionId: existing.id,
+      OR: [{ status: "SUBMITTING" }, { status: "NEEDS_RECONCILIATION", leaseUntil: { gt: new Date() } }] } }))
+      throw new AppError(409, "Wait for the active account request to finish before reconnecting. Uncertain posts will not be resent.");
     const id = existing?.id ?? crypto.randomUUID();
     const encryptedToken = sealSecret(
       input.token,
@@ -122,7 +118,7 @@ export async function saveVerifiedConnectionInTransaction(tx: Prisma.Transaction
         organizationId: scope.organizationId,
         ...data,
       },
-      update: data,
+      update: { ...data, authorizationVersion: { increment: 1 } },
     });
     await tx.auditEvent.create({
       data: {
@@ -168,17 +164,7 @@ export async function manageSocial(
         },
       });
       if (!connection) throw new AppError(404, "Social account not found.");
-      if (input.action === "disconnect") {
-        await assertNoPublicationInFlight(tx, scope.businessId);
-        await tx.socialConnection.update({
-          where: { id: connection.id },
-          data: { status: "DISCONNECTED", encryptedToken: "", dataSnapshot: Prisma.DbNull, dataFetchedAt: null, dataLeaseId: null, dataLeaseUntil: null, dataErrorCode: null },
-        });
-        await tx.socialPublication.updateMany({
-          where: { connectionId: connection.id, status: "SCHEDULED" },
-          data: { status: "CANCELLED", errorCode: "DISCONNECTED" },
-        });
-      } else {
+      {
         const provider = socialProvider.parse(connection.provider);
         if (!adapters[provider])
           throw new AppError(

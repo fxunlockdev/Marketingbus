@@ -258,6 +258,7 @@ function reconciliationDue(now: Date) {
     status: "NEEDS_RECONCILIATION",
     reconciliationAttempts: { lt: MAX_RECONCILIATION_ATTEMPTS },
     AND: [
+      { OR: [{ errorCode: null }, { errorCode: { not: "ACCOUNT_DISCONNECTED" } }] },
       { OR: [{ leaseUntil: null }, { leaseUntil: { lte: now } }] },
       { OR: [{ nextReconciliationAt: { lte: now } }, { nextReconciliationAt: null, reconciliationAttempts: 0 }] },
     ],
@@ -268,7 +269,7 @@ function reconciliationDue(now: Date) {
 export async function runOneReconciliation(adapters: SocialAdapters) {
   if (!Object.keys(adapters).length) return false;
   const candidate = await db.socialPublication.findFirst({
-    where: { ...reconciliationDue(new Date()), connection: { provider: { in: Object.keys(adapters) } } },
+    where: { ...reconciliationDue(new Date()), connection: { status: "CONNECTED", provider: { in: Object.keys(adapters) } } },
     orderBy: [{ nextReconciliationAt: "asc" }, { createdAt: "asc" }],
   });
   if (!candidate) return false;
@@ -296,7 +297,8 @@ export async function reconcilePublication(publicationId: string, adapters: Soci
   });
   if (!claimed) return false;
   const { post, provider, attempt } = claimed;
-  const guard = { id: post.id, status: "NEEDS_RECONCILIATION", leaseUntil, reconciliationAttempts: attempt };
+  const guard = { id: post.id, status: "NEEDS_RECONCILIATION", leaseUntil, reconciliationAttempts: attempt,
+    OR: [{ errorCode: null }, { errorCode: { not: "ACCOUNT_DISCONNECTED" } }] };
   async function unresolved(code: string, retry = true) {
     await db.socialPublication.updateMany({ where: guard, data: {
       leaseUntil: null, errorCode: code,
@@ -367,6 +369,7 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
       status: "PUBLISHED",
       metricsInvalidatedAt: null,
       externalPostId: candidate.externalPostId,
+      connection: { status: "CONNECTED" },
       nextMetricsAt: { lte: new Date() },
       OR: [
         { metricsLeaseUntil: null },

@@ -127,7 +127,7 @@ export function SocialDashboard({
             <h2>Social accounts</h2>
             <p>
               Connections are scoped to this business. Tokens never appear in
-              this screen.
+              this screen. Use Connections to connect or disconnect an account.
             </p>
             {!data.enabledProviders.length && (
               <p className="muted">
@@ -149,23 +149,6 @@ export function SocialDashboard({
                     </small>
                   )}
                 </div>
-                <button
-                  className="button"
-                  disabled={busy || c.status === "DISCONNECTED"}
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        "Disconnect this account and cancel its queued posts?"
-                      )
-                    )
-                      void act("social", {
-                        action: "disconnect",
-                        connectionId: c.id,
-                      });
-                  }}
-                >
-                  Disconnect {c.label}
-                </button>
               </div>
             ))}
           </section>

@@ -7,6 +7,8 @@ import { createLinkedInOAuthAdapter } from "../src/lib/social/linkedin-oauth";
 import { linkedInFixture } from "./helpers/linkedin";
 import { metaFixture } from "./helpers/meta";
 import { createMetaOAuthAdapter } from "../src/lib/social/meta-oauth";
+import { disconnectSocialAccount } from "../src/lib/social/disconnect";
+import { saveVerifiedConnection } from "../src/lib/social/service";
 const local = process.env.TEST_DATABASE_URL;
 if (local && (process.env.DATABASE_URL !== local || !["localhost", "127.0.0.1"].includes(new URL(local).hostname))) throw Error("Local test DB required");
 const suite = local ? describe : describe.skip;
@@ -44,6 +46,38 @@ suite("session-bound social authorization", () => {
     return { scope, adapter, adapters, exchange, begin };
   }
   it("leaves unconfigured providers disabled", () => expect(configuredSocialOAuthAdapters()).toEqual({}));
+  it("disconnection cancels grants across sessions and a late exchange cannot restore access", async () => {
+    const f = await fixture(), other = await fixture();
+    const { sessionId: _session, ...scope } = f.scope;
+    const account = await saveVerifiedConnection(scope, { provider: "Facebook", externalAccountId: "page-1", label: "First page", token: "old-token", permissions: ["publish"], expiresAt: null });
+    const secondSession = await db.session.create({ data: { id: randomUUID(), userId: f.scope.actorId, expiresAt: new Date(Date.now() + 3600000) } });
+    await beginSocialOAuth({ ...f.scope, sessionId: secondSession.id }, "Facebook", f.adapters);
+    const foreign = await other.begin(), pending = await f.begin();
+    f.exchange.mockImplementation(async () => {
+      await disconnectSocialAccount(f.scope, { action: "disconnect", connectionId: account.id, authorizationVersion: 1 });
+      return [{ externalAccountId: "page-1", label: "First page", token: "late-token", permissions: ["publish"], expiresAt: null }];
+    });
+    await completeSocialOAuth(f.scope.sessionId, "Facebook", pending.params, f.adapters);
+    const flows = await db.socialOAuthFlow.findMany({ where: { businessId: f.scope.businessId } });
+    expect(flows).toHaveLength(2);
+    for (const flow of flows) expect(flow).toMatchObject({ status: "CANCELLED", encryptedVerifier: null, encryptedCandidates: null });
+    expect(await db.socialConnection.findUnique({ where: { id: account.id } })).toMatchObject({ status: "DISCONNECTED", encryptedToken: "", authorizationVersion: 2 });
+    expect(await db.socialOAuthFlow.findUnique({ where: { id: foreign.flow.id } })).toMatchObject({ status: "PENDING" });
+  });
+  it("a saved account choice cannot silently reconnect after disconnection", async () => {
+    const f = await fixture(), pending = await f.begin();
+    await completeSocialOAuth(f.scope.sessionId, "Facebook", pending.params, f.adapters);
+    const view = await readSocialConnections(f.scope, f.adapters), choiceId = view.flows[0].choices[0].choiceId;
+    const { sessionId: _session, ...scope } = f.scope;
+    const account = await saveVerifiedConnection(scope, { provider: "Facebook", externalAccountId: "page-1", label: "First page", token: "old-token", permissions: ["publish"], expiresAt: null });
+    await disconnectSocialAccount(f.scope, { action: "disconnect", connectionId: account.id, authorizationVersion: 1 });
+    await expect(chooseSocialAccount(f.scope, pending.flow.id, choiceId, f.adapters)).rejects.toThrow(/already used/);
+    const next = await f.begin();
+    await completeSocialOAuth(f.scope.sessionId, "Facebook", next.params, f.adapters);
+    const refreshed = await readSocialConnections(f.scope, f.adapters);
+    await chooseSocialAccount(f.scope, next.flow.id, refreshed.flows.find(row => row.id === next.flow.id)!.choices[0].choiceId, f.adapters);
+    expect(await db.socialConnection.findUnique({ where: { id: account.id } })).toMatchObject({ status: "CONNECTED", authorizationVersion: 3 });
+  });
   it.each(["Facebook", "Instagram"] as const)("completes %s confidential authorization with explicit selection and encrypted storage", async provider => {
     const f = await fixture(), transport = metaFixture(provider), adapters = { [provider]: createMetaOAuthAdapter(provider, transport.config, transport.fetcher) };
     const url = new URL((await beginSocialOAuth(f.scope, provider, adapters)).authorizationUrl), state = url.searchParams.get("state")!;
