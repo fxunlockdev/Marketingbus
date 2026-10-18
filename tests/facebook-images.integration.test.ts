@@ -12,6 +12,7 @@ import { facebookImageFixture } from "./helpers/facebook-publishing";
 import { submissionJournal } from "../src/lib/social/submission-journal";
 import { publicationPayload } from "../src/lib/social/contracts";
 import { readSocialDashboard } from "../src/lib/social/analytics";
+import { stopUnsubmittedImage } from "../src/lib/social/prepost-recovery";
 
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (process.env.TEST_DATABASE_URL && (process.env.DATABASE_URL !== process.env.TEST_DATABASE_URL || !["127.0.0.1", "localhost"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Local test DB required");
@@ -121,5 +122,17 @@ suite("approved image to Facebook durable publishing", () => {
     await Promise.all([runOnePublication({ Facebook: f.adapter }), runOnePublication({ Facebook: f.adapter })]);
     expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "PUBLISHED", attempts: 1 });
     expect(f.fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(2);
+  });
+  it("supports preview-first local recovery before a Facebook post fence, never after", async () => {
+    const f = await setup(), post = await queue(f); f.replies[2] = Error("Lost photo response");
+    await runOnePublication({ Facebook: f.adapter });
+    const input = { organizationId: f.scope.organizationId, businessId: f.scope.businessId, publicationId: post.id, operatorId: "test-operator" };
+    const preview = await stopUnsubmittedImage(input);
+    expect(preview.applied).toBe(false);
+    await stopUnsubmittedImage({ ...input, apply: true, expectedStateHash: preview.stateHash, evidence: "Synthetic photo acknowledgement lost before post submission." });
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "FAILED", errorCode: "PREPOST_IMAGE_STOPPED", submissionAdapterVersion: null });
+    const g = await setup(), attempted = await queue(g); g.replies[4] = Error("Lost post response");
+    await runOnePublication({ Facebook: g.adapter });
+    await expect(stopUnsubmittedImage({ ...input, organizationId: g.scope.organizationId, businessId: g.scope.businessId, publicationId: attempted.id })).rejects.toThrow("Never abandon");
   });
 });

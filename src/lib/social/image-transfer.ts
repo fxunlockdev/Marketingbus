@@ -90,7 +90,7 @@ export function createImageTransfer(store: () => AssetStore = assetStore): Socia
     record: (ctx, id) => withSubmissionContext(ctx, async (tx, post) => {
       await current(tx, post, ctx);
       if (ctx.account.provider === "LinkedIn") linkedInImageId.parse(id);
-      else if (ctx.account.provider === "Facebook") facebookImageId.parse(id);
+      else if (["Facebook", "Instagram"].includes(ctx.account.provider)) facebookImageId.parse(id);
       else throw Error("Unsupported image destination.");
       if (post.mediaTransferVersion !== ctx.adapterVersion || post.mediaExternalId || post.mediaUploaded) throw Error("Image registration already recorded or unavailable.");
       await tx.socialPublication.update({ where: { id: post.id }, data: { mediaExternalId: id } });

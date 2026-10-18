@@ -36,8 +36,8 @@ export async function stopUnsubmittedImage(raw: unknown) {
     catch { throw new AppError(409, "The immutable image snapshot could not be verified."); }
     // This image payload was introduced together with the mandatory durable post fence.
     // Older text adapters did not all use that fence; null alone is not enough evidence.
-    if (post.connection.provider !== "LinkedIn" || !payload.mediaExportId || !payload.image)
-      throw new AppError(409, "Only the journalled LinkedIn approved-image workflow supports this recovery.");
+    if (!["LinkedIn", "Facebook", "Instagram"].includes(post.connection.provider) || !payload.mediaExportId || !payload.image)
+      throw new AppError(409, "Only journalled approved-image workflows support this recovery.");
     const stateHash = createHash("sha256").update(JSON.stringify(post)).digest("hex");
     if (input.expectedStateHash && stateHash !== input.expectedStateHash)
       throw new AppError(409, "The attempt changed after review. Preview it again before applying recovery.");

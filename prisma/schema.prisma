@@ -681,6 +681,13 @@ model SocialPublication {
   mediaTransferVersion String?
   mediaExternalId String?
   mediaUploaded Boolean @default(false)
+  mediaDeliveryTokenHash String?
+  mediaDeliveryExpiresAt DateTime?
+  mediaDeliverySha256 String?
+  mediaDeliveryBytes Int?
+  mediaDeliveryVersion String?
+  mediaDeliveryAuthorizationVersion Int?
+  mediaDeliveryReads Int @default(0)
   reconciliationAttempts Int @default(0)
   nextReconciliationAt DateTime?
   permalink String?

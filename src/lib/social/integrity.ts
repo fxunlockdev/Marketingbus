@@ -5,6 +5,7 @@ export const MAX_RECONCILIATION_ATTEMPTS = 5;
 export function validCandidateId(provider: string, id: string, accountId: string) {
   if (provider === "LinkedIn") return /^urn:li:(share|ugcPost):[1-9][0-9]{0,30}$/.test(id);
   if (provider === "Facebook") return /^[1-9][0-9]{0,39}_[1-9][0-9]{0,39}$/.test(id) && id.startsWith(`${accountId}_`);
+  if (provider === "Instagram") return /^[1-9][0-9]{0,39}$/.test(id);
   return false;
 }
 
@@ -17,7 +18,7 @@ export function payloadHash(raw: unknown) {
 export function frozenCopy(raw: unknown, hash: string, provider: string) {
   const payload = publicationPayload.parse(raw);
   if (payloadHash(payload) !== hash || payload.channel !== provider ||
-      payload.format !== "static" || provider === "Instagram") {
+      payload.format !== "static") {
     throw Error("Publication snapshot is invalid or unsupported");
   }
   return payload;

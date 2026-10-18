@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { createLinkedInPublishingAdapter } from "./linkedin-publishing";
 import { createFacebookPublishingAdapter } from "./facebook-publishing";
+import { createInstagramPublishingAdapter } from "./instagram-publishing";
 import { metaEnvironment } from "./meta-oauth";
 
 export const socialProvider = z.enum(["Facebook", "Instagram", "LinkedIn"]);
@@ -21,8 +22,9 @@ export const publicationPayload = z
     mediaExportId: z.string().min(1).max(100).nullable(),
     image: publicationImage.optional(),
   })
-  .strict().refine(p => p.mediaExportId === null ? p.image === undefined : !!p.image && ["LinkedIn", "Facebook"].includes(p.channel) && p.format === "static", "Unsupported media binding")
-  .refine(p => p.channel !== "Facebook" || !p.image || p.image.bytes <= 4 * 1024 * 1024, "Facebook image exports must be 4 MB or smaller.");
+  .strict().refine(p => p.mediaExportId === null ? p.image === undefined : !!p.image && p.format === "static", "Unsupported media binding")
+  .refine(p => p.channel !== "Facebook" || !p.image || p.image.bytes <= 4 * 1024 * 1024, "Facebook image exports must be 4 MB or smaller.")
+  .refine(p => p.channel !== "Instagram" || p.caption.length <= 2200 && p.image?.width === 1080 && [1080, 1350].includes(p.image.height), "Instagram requires a square or portrait approved image and a caption of 2,200 characters or fewer.");
 export type PublicationPayload = z.infer<typeof publicationPayload>;
 export const publishedReceipt = z
   .object({
@@ -104,6 +106,9 @@ export function configuredSocialAdapters(): SocialAdapters {
   }
   if (process.env.FACEBOOK_PUBLISHING_ENABLED === "true" && process.env.FACEBOOK_CONNECTIONS_ENABLED === "true") {
     try { result.Facebook = createFacebookPublishingAdapter(metaEnvironment()); } catch { /* Disabled until completely configured/current. */ }
+  }
+  if (process.env.INSTAGRAM_PUBLISHING_ENABLED === "true" && process.env.INSTAGRAM_CONNECTIONS_ENABLED === "true") {
+    try { result.Instagram = createInstagramPublishingAdapter(metaEnvironment()); } catch { /* Requires current Meta configuration and an HTTPS delivery origin. */ }
   }
   return result;
 }

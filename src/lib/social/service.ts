@@ -216,7 +216,7 @@ export async function manageSocial(
           throw new AppError(409, "Resolve factual checks before publishing.");
         if (input.mediaExportId && !adapters[provider]?.imagePublishingAvailable) throw new AppError(409, "Image publishing is not enabled for this destination.");
         // Each media type needs a verified export and a corresponding platform transport.
-        if (provider === "Instagram" || item.format !== "static")
+        if (provider === "Instagram" && !input.mediaExportId || item.format !== "static")
           throw new AppError(
             409,
             "This placement requires a verified media export. Copy-only publishing is available for Facebook and LinkedIn."

@@ -12,6 +12,12 @@ const config: NextConfig = {
       { key: "Content-Security-Policy", value: `default-src 'self'; script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'` }
     ]},
     { source: "/api/social/:provider/callback", headers: [{ key: "Referrer-Policy", value: "no-referrer" }] },
+    // Global headers override route responses in this Next version. Keep capability URLs private.
+    { source: "/api/social/media/:path*", headers: [
+      { key: "Referrer-Policy", value: "no-referrer" },
+      { key: "Cache-Control", value: "private, no-store, max-age=0" },
+      { key: "Content-Security-Policy", value: "default-src 'none'; frame-ancestors 'none'; sandbox" },
+    ] },
     { source: "/social-connect", headers: [{ key: "Referrer-Policy", value: "no-referrer" }] }];
   }
 };

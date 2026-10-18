@@ -18,6 +18,8 @@ export async function withSubmissionContext<T>(context: SubmissionContext, run: 
     await lockBusiness(tx, { organizationId: initial.organizationId, businessId: initial.businessId, actorId: "social-transport" });
     const post = await tx.socialPublication.findUniqueOrThrow({ where: { id: initial.id }, include: { connection: true } });
     const c = post.connection;
+    // A reconnect revokes old delivery/writes, but an operator may still read a known post candidate.
+    if (post.status === "SUBMITTING" && post.mediaDeliveryAuthorizationVersion !== null && post.mediaDeliveryAuthorizationVersion !== c.authorizationVersion) throw Error("Media delivery authorization changed.");
     frozenCopy(post.payload, post.payloadHash, c.provider);
     if (!["SUBMITTING", "NEEDS_RECONCILIATION"].includes(post.status) || c.id !== context.account.id || c.provider !== context.account.provider || c.externalAccountId !== context.account.externalAccountId || c.status !== "CONNECTED" || !c.expiresAt || c.expiresAt <= new Date() || post.payloadHash !== payloadHash(context.payload) || openSecret(c.encryptedToken, `social:${post.organizationId}:${post.businessId}:${c.id}`) !== context.account.token) throw Error("Publication context changed.");
     return run(tx, post);

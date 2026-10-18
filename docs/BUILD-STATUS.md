@@ -1,5 +1,13 @@
 # Acceptance ledger — 18 October 2026
 
+## Instagram approved-image release — local verification
+
+Runtime `studio-v38-instagram-images`, additive migration 46, implements approved square/portrait image scheduling, deterministic bounded JPEG delivery through a hash-only short-lived capability, separate container/post fences, exact identity/caption/alt-text read-back and read-only known-candidate recovery. A reconnect revokes delivery and outgoing work without forbidding an authorized read-only investigation of an already-known post. Recovery also now supports Facebook pre-post image attempts, closing a documented/code mismatch. All three supported networks have a single-image implementation; Instagram/Facebook per-post metrics and social video remain unfinished. The feature stays disabled until designated-account acceptance; no customer bucket is made public. See [Instagram operations and limits](INSTAGRAM-PUBLISHING.md).
+
+Full local regression initially passed 1,245 tests/65 suites; two additional malformed-container cases subsequently pass in the 29-test Instagram transport suite. All 38 browser journeys pass, with one pre-existing private-storage browser case skipped. The initial Instagram browser run caught the site-wide referrer/CSP configuration overriding route-specific headers; the fix adds explicit capability-route overrides, and the full rerun verifies no-referrer/no-store/restrictive CSP. Production build and type checking pass. Isolated restore verifies 46 migrations, 52 tables and 100 synthetic rows including container/post/delivery journals; both temporary databases are removed. Dependency audit reports zero known vulnerabilities. Final source CI and deployment evidence will be recorded after observation, not inferred from local tests.
+
+No paid provider calls, real posts, emails, charges/refunds, production fixtures, configuration changes or new infrastructure. This is not 100% product completion or live Meta acceptance. The existing completion heartbeat remains active; remaining engineering and owner setup are tracked in [the activation checklist](ACTIVATION-CHECKLIST.md).
+
 ## Deployed Facebook approved-image publishing
 
 Runtime `studio-v37-facebook-images`, migration 45: a separately gated single-PNG Facebook Page lane now uses approved immutable exports, private multipart transfer, separate durable upload/post fences, exact photo owner/alt-text and single-attachment receipt checks, and read-only recovery of known post IDs. Unknown writes are never repeated. Provider-specific SQL validation retains LinkedIn image rules. Customer selection retains keyboard/error/size-limit help; no AI settings appear in Connections. Facebook post metrics remain unavailable, not invented.

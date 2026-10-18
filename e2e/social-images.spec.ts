@@ -7,7 +7,7 @@ const local = process.env.TEST_DATABASE_URL;
 test.skip(!local, "Requires explicit localhost fixture database.");
 if (local && (process.env.DATABASE_URL !== local || !["127.0.0.1", "localhost"].includes(new URL(local).hostname))) throw Error("Refusing non-local fixture writes");
 test.afterAll(async () => db.$disconnect());
-for (const provider of ["LinkedIn", "Facebook"]) test(`${provider} approved image selection preserves exact-version scope, keyboard submission and fail-closed integration`, async ({ page, browser }) => {
+for (const provider of ["LinkedIn", "Facebook", "Instagram"]) test(`${provider} approved image selection preserves exact-version scope, keyboard submission and fail-closed integration`, async ({ page, browser }) => {
   const email = `social-image-ui-${crypto.randomUUID()}@example.test`, headers = { Origin: "http://127.0.0.1:3000" };
   let organizationId: string | undefined;
   try {
@@ -24,7 +24,7 @@ for (const provider of ["LinkedIn", "Facebook"]) test(`${provider} approved imag
     await manageComposition(scope, { action: "approve", itemId: item.id, version: 1, rendererVersion: "static-outlines-v2" });
     const objects = new Map<string, Uint8Array>();
     const saved = await saveCompositionExport(scope, composition.composition.id, "square", { put: async (k, b) => { objects.set(k, b); }, get: async k => objects.get(k)!, remove: async k => { objects.delete(k); } });
-    const connection = await db.socialConnection.create({ data: { organizationId, businessId: id, provider, externalAccountId: provider === "Facebook" ? "789" : "urn:li:organization:123", label: "Design company", encryptedToken: "never-return-this-fixture", permissions: [], expiresAt: new Date(Date.now() + 3600000) } });
+    const connection = await db.socialConnection.create({ data: { organizationId, businessId: id, provider, externalAccountId: provider === "LinkedIn" ? "urn:li:organization:123" : "789", label: "Design company", encryptedToken: "never-return-this-fixture", permissions: [], expiresAt: new Date(Date.now() + 3600000) } });
     const endpoint = `/api/businesses/${id}/social`, actual = await page.request.get(endpoint), actualBody = await actual.json();
     expect(actualBody.imageProviders).toEqual([]);
     expect(actualBody.mediaChoices).toEqual([expect.objectContaining({ id: saved.id, itemId: item.id, revisionVersion: 1, placement: "square" })]);
@@ -42,6 +42,15 @@ for (const provider of ["LinkedIn", "Facebook"]) test(`${provider} approved imag
     await page.getByLabel("Approved creative", { exact: true }).selectOption(item.id);
     await page.getByLabel("Approved image export", { exact: true }).selectOption(saved.id);
     if (provider === "Facebook") await expect(page.locator("#social-image-help")).toContainText("4 MB or smaller");
+    if (provider === "Instagram") {
+      await expect(page.getByLabel("Approved image export", { exact: true })).toHaveAttribute("required", "");
+      await expect(page.locator("#social-image-help")).toContainText("temporary, download-limited link");
+      const denied = await page.request.get(`/api/social/media/${id}/${"a".repeat(64)}`);
+      expect(denied.status()).toBe(404); expect(denied.headers()["cache-control"]).toContain("no-store");
+      expect(denied.headers()["referrer-policy"]).toBe("no-referrer");
+      expect(denied.headers()["content-security-policy"]).toContain("default-src 'none'");
+      expect(denied.headers()["content-security-policy"]).toContain("sandbox");
+    }
     await expect(page.getByRole("link", { name: "Download selected approved image" })).toHaveAttribute("href", `/api/businesses/${id}/exports/${saved.id}`);
     await page.getByLabel("Destination account", { exact: true }).selectOption(connection.id);
     await page.getByLabel("Publish at (your local timezone)", { exact: true }).fill("2026-11-01T12:00");

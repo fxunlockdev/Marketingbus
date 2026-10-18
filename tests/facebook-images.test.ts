@@ -85,6 +85,6 @@ describe("Facebook single approved PNG transport", () => {
     vi.stubEnv("FACEBOOK_IMAGE_PUBLISHING_ENABLED", "true"); expect(configuredSocialAdapters().Facebook?.imagePublishingAvailable).toBe(true);
     vi.stubEnv("FACEBOOK_PUBLISHING_ENABLED", "false"); expect(configuredSocialAdapters().Facebook).toBeUndefined();
     expect(frozenCopy(f.payload, payloadHash(f.payload), "Facebook")).toEqual(f.payload);
-    expect(publicationPayload.safeParse({ ...f.payload, channel: "Instagram" }).success).toBe(false);
+    expect(publicationPayload.safeParse({ ...f.payload, channel: "Instagram", image: { ...f.payload.image, width: 1200, height: 628 } }).success).toBe(false);
   });
 });
