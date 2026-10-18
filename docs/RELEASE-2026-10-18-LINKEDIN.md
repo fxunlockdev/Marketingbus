@@ -1,6 +1,6 @@
 # LinkedIn connection release — 18 October 2026
 
-Runtime: `studio-v23-linkedin-connection`. Additive migration: `20261018020000_linkedin_confidential_oauth` (34 migrations total). Source/CI/deployment identifiers will be recorded after verification.
+Verified source: `ab51ba738683d151c3978115bc5f95d3a8484472`. Runtime: `studio-v23-linkedin-connection`. Additive migration: `20261018020000_linkedin_confidential_oauth` (34 migrations total).
 
 ## Implemented scope
 
@@ -18,6 +18,24 @@ No publishing, media-upload, analytics, refresh or platform-revocation adapter i
 - Isolated synthetic PostgreSQL dump/restore verifies 34 migrations, 52 tables and 60 rows, including tenant/credit/uncertain-operation/key invariants. Both temporary databases are removed. This does not establish production or object-storage restoration.
 - The first focused test run caught the existing database constraint that required a PKCE verifier for every pending provider. The new additive migration explicitly models confidential LinkedIn flows while retaining strict secret-state checks. A parameterized test's array shape was also corrected before the passing runs.
 
-## Delivery gate
+## Delivery verification
 
-CI and deployment are pending. Do not treat source implementation or mocked provider responses as live integration acceptance. Enable customer connections only after approved permissions, current API-version verification and a designated-account acceptance test. Publishing and metrics require their own implementations and acceptance.
+Source is pushed to main. [GitHub CI run 39103855256](https://github.com/fxunlockdev/Marketingbus/actions/runs/39103855256) passed all checks in 4m32s: 578 tests/45 suites, 30 browser journeys with one explicit storage skip, 34-migration synthetic restoration, production build and audit. CI reports non-blocking action-runtime deprecations and an upcoming ubuntu-latest image change; pin/update that toolchain in a separately verified hardening release.
+
+Both services were deployed from a fresh tracked-source archive of `ab51ba7`, excluding local secrets, dependencies and test artifacts. The worker was deployed first and its logs confirm migration 34 was applied before web deployment.
+
+| Service | Exact deployment | Observed result |
+|---|---|---|
+| Worker | `ca63b877-f13c-4f0b-b7e4-d290677e3666` | SUCCESS |
+| Web | `d9a54a06-9db5-4538-94bb-acbc21bfcd0d` | SUCCESS |
+
+Hosted smoke checks after web SUCCESS:
+
+- `/api/health`: 200, `no-store`, `status: ok`.
+- `/studio`: 307 to `/login` for a signed-out visitor.
+- Anonymous business connections: 401, `no-store`.
+- LinkedIn callback with a synthetic non-credential query: fixed 303 to `/social-connect?failed=1`, `no-store`, `no-referrer`; query values are not reflected.
+
+No hosted accounts or production fixture records were created. No paid AI/provider tests, real emails, financial actions or social posts were initiated. Provider flags, credentials, spending ceilings and customer policies are unchanged. The existing build-loop automation remains active.
+
+Do not treat source implementation, deployment health or mocked provider responses as live integration acceptance. Enable customer connections only after approved permissions, current API-version verification and a designated-account acceptance test. Publishing and metrics require their own implementations and acceptance. Generated video/audio, semantic quality evaluation, mixed-media automation and wider production hardening also remain unfinished.
