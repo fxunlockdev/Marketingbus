@@ -7,7 +7,7 @@ import type { Scope } from "./service";
 export const planItemSelection = {
   id: true, title: true, channel: true, format: true, status: true,
   revisions: { orderBy: { version: "desc" }, take: 1, select: { id: true, version: true, content: true, status: true, feedback: true } },
-  schedule: { select: { scheduledFor: true, timezone: true, revisionId: true } },
+  schedule: { select: { id: true, version: true, scheduledFor: true, timezone: true, revisionId: true } },
   quotes: { orderBy: { createdAt: "desc" }, take: 3, select: { id: true, credits: true, status: true, expiresAt: true, job: { select: { status: true, errorCode: true } } } },
 } satisfies Prisma.ProductionItemSelect;
 export const planSummarySelection = { id: true, title: true, status: true, brandVersion: true, createdAt: true } satisfies Prisma.ProductionPlanSelect;

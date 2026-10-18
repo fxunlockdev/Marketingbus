@@ -340,6 +340,7 @@ model GenerationQuote {
 
 model CalendarEntry {
   id             String           @id @default(cuid())
+  version        Int              @default(1)
   organizationId String
   itemId         String           @unique
   revisionId     String
@@ -352,6 +353,7 @@ model CalendarEntry {
 
   @@unique([itemId, organizationId])
   @@index([organizationId, scheduledFor])
+  @@index([organizationId, scheduledFor, id])
 }
 
 model Memory {

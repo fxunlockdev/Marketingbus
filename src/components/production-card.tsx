@@ -5,7 +5,7 @@ import type { Creative } from "@/lib/production/content";
 export type ProductionItemView = {
   id: string; title: string; channel: string; format: string; status: string;
   revisions: { id: string; version: number; content: Creative; status: string; feedback: string }[];
-  schedule: { scheduledFor: string; timezone: string; revisionId: string } | null;
+  schedule: { id: string; version: number; scheduledFor: string; timezone: string; revisionId: string } | null;
   quotes: { id: string; credits: number; status: string; expiresAt: string; job: { status: string; errorCode: string | null } | null }[];
 };
 type Post = (data: Record<string, unknown>) => Promise<unknown>;
@@ -72,12 +72,12 @@ export function ProductionCard({ item, brand, busy, post, review = false }: {
           <button className="button dark" disabled={blocked}>Save new copy version</button>
         </form>}
       </>}
-      {revision.status === "APPROVED" && <form className="inline-form" onSubmit={e => { e.preventDefault(); void run("schedule", { scheduledFor: new Date(date).toISOString(), timezone }); }}>
+      {revision.status === "APPROVED" && <form className="inline-form" onSubmit={e => { e.preventDefault(); void run("schedule", { scheduledFor: new Date(date).toISOString(), timezone, ...(item.schedule ? { expectedCalendar: { id: item.schedule.id, version: item.schedule.version } } : {}) }); }}>
         <label htmlFor={`date-${item.id}`}>Calendar date and time ({timezone})</label><input type="datetime-local" id={`date-${item.id}`} value={date} onChange={e => setDate(e.target.value)} required />
         <p className="small muted">Internal planning only. This will not publish to a social network.</p>
         <button className="button secondary" disabled={blocked}>{item.schedule ? "Change calendar date" : "Place approved version on calendar"}</button>
       </form>}
-      {item.schedule && <div className="notice"><p>Planned for {dateLabel(item.schedule.scheduledFor, timezone)} ({timezone}). Not connected for publishing.</p><button className="text-button" disabled={blocked} onClick={() => post({ action: "unschedule", itemId: item.id })}>Remove from calendar</button></div>}
+      {item.schedule && <div className="notice"><p>Internal reservation for {dateLabel(item.schedule.scheduledFor, timezone)} ({timezone}). Actual social publishing is managed separately.</p><button className="text-button" disabled={blocked} onClick={() => post({ action: "unschedule", itemId: item.id, expectedCalendar: { id: item.schedule!.id, version: item.schedule!.version } })}>Remove from calendar</button></div>}
     </>}
     {item.format !== "static" ? <p className="muted">Video generation and rendering are not enabled yet.</p> : (!revision || revision.status === "CHANGES_REQUESTED") && !pending && <form className="inline-form" onSubmit={async e => { e.preventDefault(); if (await post({ action: "quote", itemId: item.id, mode: revision ? mode : "initial", direction })) setQuoted(true); }}>
       {revision && <><p className="notice">Requested change: {revision.feedback}</p><label htmlFor={`mode-${item.id}`}>How much should change?</label><select id={`mode-${item.id}`} value={mode} onChange={e => { setMode(e.target.value); setQuoted(false); }}><option value="copy">Copy only · retain visual direction</option><option value="concept">Rethink the concept · creative model</option></select></>}
@@ -88,20 +88,5 @@ export function ProductionCard({ item, brand, busy, post, review = false }: {
     </form>}
     {review && revision && <RevisionDiscussion businessId={brand.id} itemId={item.id} version={revision.version} />}
     {!review && revision && <p className="muted">Version {revision.version} is available in the Review inbox.</p>}
-  </section>;
-}
-
-export function CalendarView({ items, post, busy }: { items: ProductionItemView[]; post: Post; busy: boolean }) {
-  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
-  const timezone = useLocalTimezone();
-  useEffect(() => { const d = new Date(); setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); }, []);
-  const scheduled = items.filter(i => {
-    if (!i.schedule) return false;
-    const parts = new Intl.DateTimeFormat("en", { timeZone: timezone, year: "numeric", month: "2-digit" }).formatToParts(new Date(i.schedule.scheduledFor));
-    return `${parts.find(p => p.type === "year")?.value}-${parts.find(p => p.type === "month")?.value}` === month;
-  }).sort((a, b) => a.schedule!.scheduledFor.localeCompare(b.schedule!.scheduledFor));
-  return <section className="panel"><div className="panel-heading"><h2>Approved work, in order.</h2><div><label htmlFor="calendar-month">Month</label><input id="calendar-month" type="month" required value={month} onChange={e => setMonth(e.target.value)} /></div></div>
-    <p className="notice">Times shown in {timezone}. This is an internal calendar; automatic publishing is not connected.</p>
-    {scheduled.length ? <ol className="calendar-agenda">{scheduled.map(item => <li key={item.id}><time dateTime={item.schedule!.scheduledFor}>{dateLabel(item.schedule!.scheduledFor, timezone)}</time><div><h3>{item.title}</h3><p>{item.channel} · approved version {item.revisions[0]?.version}</p></div><button className="text-button" disabled={busy} onClick={() => post({ action: "unschedule", itemId: item.id })}>Remove {item.channel} reservation</button></li>)}</ol> : <p className="muted">No approved creatives scheduled this month. Add a date from the Review inbox.</p>}
   </section>;
 }

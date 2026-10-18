@@ -14,6 +14,7 @@ import { assertWorkerReady } from "./readiness";
 import { creativeSchema, creativeJsonSchema, validateCreative } from "./content";
 import { approvedFactText, evaluateCreative } from "./quality";
 import { productionMemories, preferenceFingerprint } from "../social/learning-evidence";
+import { calendarExpectation, checkCalendarChange } from "./calendar";
 
 export type Scope = { businessId: string; organizationId: string; actorId: string };
 export const productionAction = z.discriminatedUnion("action", [
@@ -21,8 +22,8 @@ export const productionAction = z.discriminatedUnion("action", [
   z.object({ action: z.literal("accept"), quoteId: z.string() }).strict(),
   z.object({ action: z.enum(["approve", "reject", "revise"]), itemId: z.string(), version: z.number().int().positive(), feedback: z.string().trim().max(1000).default(""), remember: z.boolean().default(false) }).strict(),
   z.object({ action: z.literal("edit"), itemId: z.string(), version: z.number().int().positive(), headline: creativeSchema.shape.headline, caption: creativeSchema.shape.caption, cta: creativeSchema.shape.cta }).strict(),
-  z.object({ action: z.literal("schedule"), itemId: z.string(), version: z.number().int().positive(), scheduledFor: z.iso.datetime(), timezone: z.string().min(1).max(80) }).strict(),
-  z.object({ action: z.literal("unschedule"), itemId: z.string() }).strict(),
+  z.object({ action: z.literal("schedule"), itemId: z.string(), version: z.number().int().positive(), scheduledFor: z.iso.datetime(), timezone: z.string().min(1).max(80), expectedCalendar: calendarExpectation.optional() }).strict(),
+  z.object({ action: z.literal("unschedule"), itemId: z.string(), expectedCalendar: calendarExpectation.optional() }).strict(),
 ]);
 export const requestSchema = z.object({
   system: z.string().max(150000), input: z.string().max(150000), route: routeSchema,
@@ -123,8 +124,8 @@ export async function actOnProduction(scope: Scope, raw: unknown, internal?: { w
     }
     const item = await currentItem(tx, scope, input.itemId);
     await assertIdle(tx, item.id, scope.organizationId);
+    if (input.action === "schedule" || input.action === "unschedule") await checkCalendarChange(tx, scope, item.id, input.expectedCalendar);
     if (input.action === "unschedule") {
-      await invalidatePublications(tx, scope.businessId, item.id);
       await tx.calendarEntry.deleteMany({ where: { itemId: item.id, organizationId: scope.organizationId } });
       await tx.productionItem.update({ where: { id: item.id }, data: { scheduledFor: null } });
       await audit(tx, scope, "CALENDAR_REMOVED", "Removed the internal calendar reservation.");
@@ -144,7 +145,7 @@ export async function actOnProduction(scope: Scope, raw: unknown, internal?: { w
       const when = new Date(input.scheduledFor);
       if (when.getTime() < Date.now() + 60_000 || when.getTime() > Date.now() + 366 * 86400_000) throw new AppError(400, "Choose a date at least one minute ahead and within one year.");
       try { new Intl.DateTimeFormat("en", { timeZone: input.timezone }).format(when); } catch { throw new AppError(400, "Choose a valid timezone."); }
-      await tx.calendarEntry.upsert({ where: { itemId: item.id }, create: { organizationId: scope.organizationId, itemId: item.id, revisionId: revision.id, scheduledFor: when, timezone: input.timezone }, update: { revisionId: revision.id, scheduledFor: when, timezone: input.timezone, status: "PLANNED" } });
+      await tx.calendarEntry.upsert({ where: { itemId: item.id }, create: { organizationId: scope.organizationId, itemId: item.id, revisionId: revision.id, scheduledFor: when, timezone: input.timezone }, update: { revisionId: revision.id, scheduledFor: when, timezone: input.timezone, status: "PLANNED", version: { increment: 1 } } });
       await tx.productionItem.update({ where: { id: item.id }, data: { scheduledFor: when } });
       await audit(tx, scope, "CALENDAR_PLANNED", `Version ${revision.version} reserved for ${when.toISOString()}. Internal calendar only; no social post will be sent.`);
       return { ok: true };

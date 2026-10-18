@@ -10,6 +10,7 @@ const creative = { headline: "Room for your life", caption: "Considered architec
 const fixtureReasoner = async () => ({ id: "fixture-response", text: JSON.stringify(creative), usage: { input_tokens: 100, output_tokens: 100 } });
 suite("production authorization, review and worker integration", () => {
   const organizations: string[] = [];
+  const users: string[] = [];
   const workerId = `test-worker-${crypto.randomUUID()}`;
   async function runOneJob(reasoner?: Parameters<typeof processJob>[0]) {
     // Prisma assigns host timestamps; Docker Postgres can lag by milliseconds.
@@ -30,14 +31,16 @@ suite("production authorization, review and worker integration", () => {
     const quotes = await db.generationQuote.findMany({ where: { organizationId: { in: organizations } }, select: { id: true } });
     await db.supplierAuthorization.deleteMany({ where: { key: { in: quotes.map(q => q.id) } } });
     await db.workerHeartbeat.deleteMany({ where: { id: workerId } });
-    if (organizations.length) await db.organization.deleteMany({ where: { id: { in: organizations } } }); vi.unstubAllEnvs(); await db.$disconnect();
+    if (organizations.length) await db.organization.deleteMany({ where: { id: { in: organizations } } });
+    await db.user.deleteMany({ where: { id: { in: users } } }); vi.unstubAllEnvs(); await db.$disconnect();
   });
   async function setup(credits = 500) {
     await heartbeat(workerId);
     const org = await db.organization.create({ data: { name: "PRODUCTION TEST ONLY", wallet: { create: { available: credits } } } }); organizations.push(org.id);
+    const actor = await db.user.create({ data: { name: "Production fixture", email: `${crypto.randomUUID()}@example.test`, passwordHash: "not-a-login", memberships: { create: { organizationId: org.id, role: "OWNER" } } } }); users.push(actor.id);
     const business = await db.business.create({ data: { organizationId: org.id, name: "Fixture Studio", offering: "Considered architecture services", audience: "Homeowners", goal: "Book consultations", confirmedAt: new Date() } });
     const plan = await db.productionPlan.create({ data: { organizationId: org.id, businessId: business.id, brandVersion: 1, title: "Fixture plan", creditCeiling: 100, items: { create: { title: "Show the offering", channel: "Instagram", format: "static", brief: {} } } }, include: { items: true } });
-    return { scope: { organizationId: org.id, businessId: business.id, actorId: "test-user" } satisfies Scope, itemId: plan.items[0].id };
+    return { scope: { organizationId: org.id, businessId: business.id, actorId: actor.id } satisfies Scope, itemId: plan.items[0].id };
   }
   it("rejects stale, paused and mismatched workers without reserving customer credits", async () => {
     const { scope, itemId } = await setup();

@@ -18,7 +18,7 @@ export async function GET() {
     await db.$queryRaw`SELECT "paymentId", "providerRefundId", "status" FROM "BillingRefundOperation" LIMIT 0`;
     await db.$queryRaw`SELECT "eventId", "operatorId" FROM "BillingReconciliation" LIMIT 0`;
     await db.$queryRaw`SELECT "configurationHash" FROM "GenerationQuote" LIMIT 0`;
-    await db.$queryRaw`SELECT "revisionId" FROM "CalendarEntry" LIMIT 0`;
+    await db.$queryRaw`SELECT "revisionId", "version" FROM "CalendarEntry" LIMIT 0`;
     await db.$queryRaw`SELECT "submittedAt" FROM "Job" LIMIT 0`;
     await db.$queryRaw`SELECT "lastSeenAt", "motionReady" FROM "WorkerHeartbeat" LIMIT 0`;
     await db.$queryRaw`SELECT "document", "shotApprovals" FROM "VideoStoryboard" LIMIT 0`;

@@ -28,6 +28,7 @@ test("review, free editing, exact-version calendar and paid gates work in the br
     await page.getByRole("button", { name: "Place approved version on calendar" }).click();
     await expect(page.getByRole("button", { name: "Change calendar date" })).toBeVisible();
     await page.getByRole("button", { name: "Calendar", exact: true }).click();
+    await page.getByLabel("Calendar month", { exact: true }).fill(date.slice(0, 7));
     await expect(page.getByText("Instagram · approved version 1")).toBeVisible();
     await page.getByRole("button", { name: "Review inbox", exact: true }).click();
     await page.getByRole("button", { name: "Edit copy yourself · no credits" }).click();

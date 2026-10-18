@@ -34,7 +34,8 @@ import { SocialConnections } from "./social-connections";
 import { CompositionEditor } from "./composition-editor";
 import { VideoStudio } from "./video-studio";
 import { TeamPanel } from "./team-panel";
-import { ProductionCard, CalendarView } from "./production-card";
+import { ProductionCard } from "./production-card";
+import { BusinessCalendar } from "./business-calendar";
 import { WorkflowControls } from "./workflow-controls";
 import { BillingPanel } from "./billing-panel";
 import { PlanHistory, HistoricalCreative, type PlanView } from "./plan-history";
@@ -371,7 +372,7 @@ export function Studio({
           <span className="pilot-badge">PRIVATE PILOT</span>
         </header>
         <main id="main-content" className="content" tabIndex={-1}>
-          {!editing && business && ["Content plan", "Review inbox", "Calendar", "Design studio", "Video studio", "Publishing & analytics"].includes(page) && <div className="notice subtle plan-context" aria-busy={planLoading}>
+          {!editing && business && ["Content plan", "Review inbox", "Design studio", "Video studio", "Publishing & analytics"].includes(page) && <div className="notice subtle plan-context" aria-busy={planLoading}>
             <p role="status">{planLoading ? "Loading selected plan…" : activePlan ? `Viewing: ${activePlan.title} · brand version ${activePlan.brandVersion}${planReadOnly ? " · read-only" : ""}` : "No plan selected."}</p>
             {historical && <button className="text-button" disabled={busy} onClick={latestPlan}>Return to latest plan</button>}
             {historical && planError && <p role="alert">{planError}</p>}
@@ -796,7 +797,7 @@ export function Studio({
                   </div>
                 </>
               )}
-              {page === "Calendar" && <><Heading kicker="MAKE ROOM FOR GOOD WORK" title="Your publishing plan." description="A dated agenda for the selected plan's exact, approved versions. Change plans from Content plan to view another agenda." /><CalendarView items={items} post={production} busy={busy || planReadOnly} /></>}
+              {page === "Calendar" && <><Heading kicker="MAKE ROOM FOR GOOD WORK" title="Your content calendar." description="One business, all plans. Review weekly or monthly reservations without switching campaigns." />{business ? <BusinessCalendar key={business.id} businessId={business.id} /> : <Empty title="Choose a business first." text="Calendar reservations belong to each business." />}</>}
               {page === "Publishing & analytics" && <><Heading kicker="FROM APPROVAL TO EVIDENCE" title="Publishing & analytics" description="Business-wide outcomes and measured experiments. Only current selected-plan items are offered for new publishing requests." />{business ? <SocialDashboard key={`${business.id}:${activePlan?.id}`} businessId={business.id} items={planReadOnly ? [] : items} /> : <Empty title="Choose a business first." text="Publishing and performance belong to a specific business." />}</>}
               {page === "Design studio" && <><Heading kicker="YOUR ASSETS, PRECISELY PLACED" title="Design studio" description="Editable, versioned compositions and downloadable files. No model cost for layout changes." />{business && !planReadOnly ? <CompositionEditor key={`${business.id}:${activePlan?.id}`} businessId={business.id} items={items} /> : <Empty title="Choose a current plan." text="Open Content plan and select a current confirmed-brand plan with editing access. Historical copy remains available in the Review inbox." />}</>}
               {page === "Video studio" && <><Heading kicker="STORY, TIMING AND REVIEW" title="Video studio" description="Versioned storyboards and captioned motion reels made from approved originals and artwork." />{business && !planReadOnly ? <VideoStudio key={`${business.id}:${activePlan?.id}`} businessId={business.id} items={items} /> : <Empty title="Choose a current plan." text="Storyboarding needs a current confirmed-brand plan and editing access. Historical copy remains available in the Review inbox." />}</>}
