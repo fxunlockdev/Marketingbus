@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { db } from "../db";
 import { AppError } from "../http";
-import { brandInput } from "../brand";
+import { brandInput, draftBrandInput } from "../brand";
 import { lockBusiness, type Scope } from "../production/service";
 import { authorizeSupplier } from "../production/budget";
 import { assertWorkerReady } from "../production/readiness";
@@ -110,7 +110,7 @@ export async function manageBrandAnalysis(scope: Scope, raw: unknown) {
     if (new Set(input.fields).size !== input.fields.length || input.fields.some(f => row.rejectedFields.includes(f) || !suggestions.some(s => s.field === f))) throw new AppError(409, "Select only current, unrejected suggestions.");
     const profile = Object.fromEntries(Object.keys(brandInput.shape).map(key => [key, business[key as keyof typeof business]]));
     for (const item of suggestions.filter(s => input.fields.includes(s.field))) profile[item.field] = item.value;
-    await replaceBrandProfile(tx, scope, brandInput.parse(profile));
+    await replaceBrandProfile(tx, scope, business.setupStep !== null && business.setupStep < 6 ? draftBrandInput.parse(profile) : brandInput.parse(profile));
     await tx.brandAnalysis.update({ where: { id: row.id }, data: { status: "APPLIED", appliedFields: input.fields } });
     await audit("BRAND_SUGGESTIONS_APPLIED", `Selected fields (${input.fields.join(", ")}) applied to draft version ${business.version + 1}. Human confirmation required; existing production plans invalidated.`);
     return { ok: true };

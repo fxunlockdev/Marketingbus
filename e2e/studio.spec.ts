@@ -1,12 +1,24 @@
 import {test,expect} from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 const password="Test-only-password-2026!";
 test("create account, onboard a business, plan, remember and sign out",async({page})=>{
  await page.goto("/login");await page.getByRole("button",{name:"New here? Create an account"}).click();
  await page.getByLabel("Your name").fill("Pilot Tester");await page.getByLabel("Email address").fill(`pilot-${Date.now()}@example.test`);await page.getByLabel("Password",{exact:true}).fill(password);await page.getByRole("button",{name:"Create my account"}).click();await expect(page).toHaveURL(/\/studio/);
- await page.getByRole("button",{name:"Introduce your business",exact:true}).click();
- await page.getByLabel("Business name",{exact:true}).fill("Forma Architecture");await page.getByLabel("Industry",{exact:true}).fill("Architecture");await page.getByLabel("What do you offer?").fill("Residential architecture and interior design consultations.");await page.getByLabel("Who is it for?").fill("Homeowners building considered spaces.");await page.getByLabel("What should your marketing achieve?").fill("Book design consultations.");await page.getByRole("button",{name:"Continue",exact:true}).click();
- await page.getByLabel("Why do customers choose you?").fill("We work with the existing character of every home.");await page.getByRole("button",{name:"Continue",exact:true}).click();await page.getByRole("button",{name:"Save brand profile"}).click();await expect(page.getByRole("heading",{name:"The world of your brand."})).toBeVisible();
- await page.getByRole("button",{name:"Confirm this brand profile"}).click();await expect(page.getByRole("status")).toHaveText("Brand profile confirmed.");await page.getByRole("button",{name:"Content plan",exact:true}).click();await page.getByRole("button",{name:"Propose a planning outline"}).click();await expect(page.getByRole("heading",{name:"Introduce your point of view"})).toBeVisible();
+ await expect(page.getByRole("heading",{name:"Let’s build around your business."})).toBeVisible();
+ await page.getByLabel("Business name",{exact:true}).fill("Forma Architecture");await page.getByLabel("Industry",{exact:true}).fill("Architecture");
+ await page.getByRole("button",{name:"Start business setup",exact:true}).click();await expect(page.getByRole("heading",{name:"Give your team the real story."})).toBeVisible();
+ await page.reload();await expect(page.getByRole("heading",{name:"Give your team the real story."})).toBeVisible();
+ await page.getByRole("button",{name:"Continue to business details",exact:true}).click();
+ await page.getByLabel("What do you offer?").fill("Residential architecture and interior design consultations.");await page.getByLabel("Who is it for?").fill("Homeowners building considered spaces.");await page.getByLabel("What should your marketing achieve?").fill("Book design consultations.");
+ await page.getByLabel("Why do customers choose you?").fill("We work with the existing character of every home.");await page.getByRole("button",{name:"Save & continue",exact:true}).click();
+ await page.getByLabel("Writing language").selectOption("English (UK)");await page.getByLabel("Show the work",{exact:false}).check();
+ expect((await new AxeBuilder({page}).include("#main-content").withTags(["wcag2a","wcag2aa","wcag21aa"]).analyze()).violations).toEqual([]);
+ await page.getByRole("button",{name:"Save & continue",exact:true}).click();await page.getByLabel("Image direction").selectOption("studio");await page.getByRole("button",{name:"Save & continue",exact:true}).click();
+ await expect(page.getByText("English (UK) · editorial · studio",{exact:true})).toBeVisible();
+ await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+ await page.screenshot({path:"../outputs/marketingbus-setup-review.png",fullPage:true});
+ await expect(page.getByRole("button",{name:"Confirm brand & open content plan"})).toBeDisabled();await page.getByLabel("I have reviewed this business profile",{exact:false}).check();await page.getByRole("button",{name:"Confirm brand & open content plan"}).click();
+ await expect(page.getByRole("heading",{name:"Introduce your point of view"})).toBeVisible();await page.setViewportSize({width:1280,height:900});
  await page.getByRole("button",{name:"Memory",exact:true}).click();await page.getByLabel("What should this brand always remember?").fill("Use warm, practical language. Never invent project results.");await page.getByRole("button",{name:"Save brand preference"}).click();await expect(page.getByText("Use warm, practical language. Never invent project results.",{exact:true})).toBeVisible();
  await page.getByRole("button",{name:"Connections",exact:true}).click();
  await expect(page.getByRole("heading",{name:"Publishing destinations",exact:true})).toBeVisible();

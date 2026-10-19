@@ -103,6 +103,10 @@ model Business {
   color             String            @default("#c67139")
   designPreset      String            @default("editorial")
   channels          String[]          @default(["Instagram", "LinkedIn"])
+  contentPreferences Json             @default("{}")
+  setupKey          String?           @unique
+  setupStep         Int?
+  setupRevision     Int               @default(0)
   version           Int               @default(1)
   confirmedAt       DateTime?
   productionEnabled Boolean           @default(false)

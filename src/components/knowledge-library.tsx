@@ -2,10 +2,10 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { BrandIntelligence } from "./brand-intelligence";
 type Source = { id: string; title: string; kind: string; body: string; sourceUrl: string; status: string; retrievedAt: string | null };
-export function KnowledgeLibrary({ businessId }: { businessId: string }) {
+export function KnowledgeLibrary({ businessId, initialUrl = "" }: { businessId: string; initialUrl?: string }) {
   const uid = useId(), endpoint = `/api/businesses/${businessId}/sources`;
   const [sources, setSources] = useState<Source[]>([]), [error, setError] = useState(""), [notice, setNotice] = useState("");
-  const [busy, setBusy] = useState(false), [url, setUrl] = useState(""), [title, setTitle] = useState(""), [text, setText] = useState("");
+  const [busy, setBusy] = useState(false), [url, setUrl] = useState(initialUrl), [title, setTitle] = useState(""), [text, setText] = useState("");
   const [rights, setRights] = useState(false), [quotes, setQuotes] = useState<Record<string, string>>({}), [removing, setRemoving] = useState<string | null>(null);
   const [document, setDocument] = useState<File | null>(null);
   const load = useCallback(async (signal?: AbortSignal) => {

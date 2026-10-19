@@ -43,7 +43,7 @@ export async function GET() {
     await db.$queryRaw`SELECT "outboxId" FROM "TeamInvitation" LIMIT 0`;
     await db.$queryRaw`SELECT "actorId" FROM "TeamEvent" LIMIT 0`;
     await db.$queryRaw`SELECT "enabledAt", "lastStep" FROM "MfaCredential" LIMIT 0`;
-    await db.$queryRaw`SELECT "independentApproval" FROM "Business" LIMIT 0`;
+    await db.$queryRaw`SELECT "independentApproval", "contentPreferences", "setupKey", "setupStep", "setupRevision" FROM "Business" LIMIT 0`;
     await db.$queryRaw`SELECT "authorId", "approvedBy" FROM "CreativeRevision" LIMIT 0`;
     await db.$queryRaw`SELECT "blocking" FROM "ReviewComment" LIMIT 0`;
     await db.$queryRaw`SELECT "creditsPerWeek", "imagesAfterApproval" FROM "WeeklyPolicy" LIMIT 0`;

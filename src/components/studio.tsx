@@ -27,6 +27,7 @@ import {
 import type { BrandInput } from "@/lib/brand";
 import { brandSuggestions } from "@/lib/brand";
 import { BrandForm, presets } from "./brand-form";
+import { BusinessSetup } from "./business-setup";
 import { AssetLibrary } from "./asset-library";
 import { KnowledgeLibrary } from "./knowledge-library";
 import { SocialDashboard } from "./social-dashboard";
@@ -40,6 +41,7 @@ import { WorkflowControls } from "./workflow-controls";
 import { BillingPanel } from "./billing-panel";
 import { PlanHistory, HistoricalCreative, type PlanView } from "./plan-history";
 type Business = BrandInput & {
+  setupStep: number | null;
   id: string;
   organizationId: string;
   version: number;
@@ -133,10 +135,12 @@ export function Studio({
   user,
   initialBusinesses,
   wallets,
+  workspaces,
 }: {
   user: { name: string; email: string };
   initialBusinesses: Business[];
   wallets: { organizationId: string; available: number; held: number }[];
+  workspaces: { id: string; name: string }[];
 }) {
   const router = useRouter();
   useEffect(() => {
@@ -153,6 +157,7 @@ export function Studio({
   const [assetTarget, setAssetTarget] = useState<AssetTarget | undefined>();
   const business =
     initialBusinesses.find((b) => b.id === selected) ?? initialBusinesses[0];
+  const guidedSetup = editing === "new" || !editing && page === "Overview" && (!business && workspaces.length > 0 || !!business?.canEdit && business.setupStep !== null && business.setupStep < 6);
   const wallet =
     wallets.find((w) => w.organizationId === business?.organizationId) ??
     wallets[0];
@@ -266,6 +271,7 @@ export function Studio({
           color: 1,
           designPreset: 1,
           channels: 1,
+          contentPreferences: 1,
         }).map((k) => [k, business[k as keyof Business]]),
       ) as BrandInput)
     : undefined;
@@ -388,7 +394,7 @@ export function Studio({
               {message}
             </p>
           )}
-          {editing ? (
+          {guidedSetup ? <BusinessSetup key={editing === "new" ? "new-setup" : business?.id ?? "first-setup"} businessId={editing === "new" ? undefined : business?.id} workspaces={workspaces} onChange={() => router.refresh()} onComplete={id => { setSelected(id); setEditing(null); setPage("Content plan"); setMessage("Brand confirmed and planning outline saved. No generation or publication started."); router.refresh(); }} /> : editing ? (
             <BrandForm
               key={`${editing}-${selected}`}
               initial={editing === "edit" ? profile : undefined}

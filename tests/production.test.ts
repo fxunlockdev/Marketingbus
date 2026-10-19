@@ -8,6 +8,12 @@ const models = [
 ];
 afterEach(() => vi.unstubAllEnvs());
 describe("bounded model routing", () => {
+  it("keeps text on OpenAI even if a cheaper Claude key and model exist", () => {
+    vi.stubEnv("OPENAI_API_KEY", "fixture-only"); vi.stubEnv("ANTHROPIC_API_KEY", "fixture-only");
+    const claude = { ...models[0], provider: "anthropic" as const, inputUsdPerMillion: 0.001, outputUsdPerMillion: 0.001 };
+    expect(selectRoute("initial", 1000, [...models, claude]).model.provider).toBe("openai");
+    expect(() => selectRoute("initial", 1000, [claude])).toThrow("eligible model");
+  });
   it("uses the creative lane for new concepts, the routine lane only for scoped copy", () => {
     vi.stubEnv("OPENAI_API_KEY", "fixture-only");
     expect(selectRoute("initial", 1000, models).model.lane).toBe("creative");

@@ -65,6 +65,7 @@ async function main() {
     const b = await source.organization.create({ data: { name: "Synthetic tenant B", wallet: { create: { available: 17 } } } });
     const business = await source.business.create({ data: { organizationId: a.id, name: "Restore business", version: 3, confirmedAt: new Date(), offering: "Synthetic restoration fixture" } });
     await source.business.create({ data: { organizationId: b.id, name: "Other tenant" } });
+    const setupDraft = await source.business.create({ data: { organizationId: a.id, name: "Unfinished setup", setupKey: "synthetic-setup-key", setupStep: 2, setupRevision: 3, contentPreferences: { strategy: "education", language: "English (UK)" } } });
     phase = "credit fixtures";
     await source.creditEntry.create({ data: { organizationId: a.id, key: "restore-initial-grant", kind: "GRANT", amount: 1000 } });
     const settled = await source.$transaction(tx => reserveCreditsInTransaction(tx, a.id, "already-settled", 100));
@@ -161,6 +162,9 @@ async function main() {
     await mustReject(() => target.weeklyPolicy.update({ where: { businessId: business.id }, data: { mode: "PLAN" } }));
     await mustReject(() => target.weeklyTask.update({ where: { id: "synthetic-weekly-image-task" }, data: { imageStatus: "AUTHORIZED" } }));
     const audio = await target.videoClip.findUniqueOrThrow({ where: { id: "synthetic-audio" } });
+    const restoredSetup = await target.business.findUniqueOrThrow({ where: { id: setupDraft.id } });
+    check(restoredSetup.setupStep === 2 && restoredSetup.setupRevision === 3 && restoredSetup.confirmedAt === null && isDeepStrictEqual(restoredSetup.contentPreferences, { strategy: "education", language: "English (UK)" }), "Setup progress or preferences lost.");
+    await mustReject(() => target.business.update({ where: { id: setupDraft.id }, data: { setupStep: null } }));
     check(audio.mediaKind === "AUDIO" && audio.instrumentalConfirmedAt !== null && audio.status === "READY" && audio.approvedBy === null && audio.durationMs === 3000, "Audio rights or review state not preserved.");
     await mustReject(() => target.videoClip.update({ where: { id: audio.id }, data: { instrumentalConfirmedAt: null } }));
     await mustReject(() => target.videoClip.update({ where: { id: audio.id }, data: { durationMs: 30001 } }));

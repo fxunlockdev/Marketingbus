@@ -1064,6 +1064,42 @@ hr {
   gap: 28px;
   margin: 30px 0;
 }
+.setup-flow { max-width: 1120px; margin: 0 auto; }
+.setup-progress { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 4px 0 42px; }
+.setup-progress li { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.setup-progress li > span { display: grid; place-items: center; border: 1px solid var(--line); width: 25px; height: 25px; border-radius: 50%; }
+.setup-progress li[aria-current="step"] { color: var(--ink); font-weight: 700; }
+.setup-progress li[aria-current="step"] > span { background: var(--ink); color: var(--surface); }
+.setup-heading { max-width: 760px; margin-bottom: 28px; }
+.setup-heading h1 { font-size: clamp(30px, 3.6vw, 48px); line-height: 1.1; letter-spacing: -.035em; margin: 16px 0; text-wrap: balance; }
+.setup-heading p { color: var(--muted); line-height: 1.6; max-width: 650px; }
+.setup-card { max-width: none; }
+.setup-fields { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+.setup-split, .setup-summary { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 40px; }
+.setup-split > div { display: flex; flex-direction: column; gap: 24px; }
+.setup-note { background: #ede6d9; border: 1px solid var(--line); border-radius: 18px; padding: 26px; align-self: start; }
+.setup-note p { line-height: 1.6; margin: 16px 0; }
+.setup-note h2 { font-size: 21px; margin-top: 12px; }
+.setup-options { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.setup-option { display: flex; flex-direction: row; align-items: flex-start; gap: 12px; border: 1px solid var(--line); padding: 20px; border-radius: 14px; cursor: pointer; }
+.setup-option.selected { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.setup-option input { flex-shrink: 0; margin-top: 3px; }
+.setup-option small { display: block; line-height: 1.5; margin-top: 8px; color: var(--muted); }
+.setup-save-state { display: flex; gap: 8px 20px; align-items: center; flex-wrap: wrap; font-size: 12px; margin-bottom: 20px; }
+.setup-save-state small { color: var(--muted); }
+.setup-assets { margin-bottom: 24px; }
+.setup-assets summary { padding: 18px 0; cursor: pointer; }
+.setup-summary dl { display: grid; gap: 8px; margin-top: 24px; }
+.setup-summary dt { font-weight: 700; font-size: 12px; }
+.setup-summary dd { margin: 0 0 14px; overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  .setup-split, .setup-summary, .setup-options { grid-template-columns: 1fr; gap: 20px; }
+  .setup-progress { gap: 12px; margin-bottom: 28px; }
+  .setup-progress li { font-size: 11px; }
+  .setup-card { padding: 20px; }
+  .setup-flow .form-actions { gap: 12px; flex-wrap: wrap; }
+  .setup-flow .button { white-space: normal; }
+}
 .stepper > span {
   display: flex;
   align-items: center;

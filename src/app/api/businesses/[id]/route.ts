@@ -28,6 +28,8 @@ export async function POST(request:Request, context:{params:Promise<{id:string}>
         await audit("PROFILE_UPDATED","Profile changed; confirmation and production authorization reset.");
       }
       if(input.action==="confirm") {
+        if(fresh.setupStep !== null && fresh.setupStep < 6) throw new AppError(409,"Finish the guided business setup before confirming this profile.");
+        brandInput.parse(Object.fromEntries(Object.keys(brandInput.shape).map(key=>[key,fresh[key as keyof typeof fresh]])));
         await tx.brandSnapshot.upsert({where:{businessId_version:{businessId:id,version:fresh.version}},create:{businessId:id,organizationId:business.organizationId,version:fresh.version,data:JSON.parse(JSON.stringify(fresh))},update:{}});
         await tx.business.update({where:{id},data:{confirmedAt:new Date()}});
         await audit("PROFILE_CONFIRMED",`Confirmed brand version ${fresh.version}.`);
