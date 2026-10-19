@@ -21,6 +21,8 @@ const names = [
   "clicks",
   "videoViews",
   "views",
+  "uniqueViewers",
+  "reactions",
 ] as const;
 export function summarizePerformance(rows: Row[]) {
   const groups = new Map<string, Row[]>();
@@ -59,7 +61,9 @@ export function summarizePerformance(rows: Row[]) {
       })
     ),
     // Reach is deliberately not presented as distinct people across posts.
-    note: group[0].reading?.definitionVersion.startsWith("instagram-feed-")
+    note: group[0].reading?.definitionVersion.startsWith("facebook-post-")
+      ? "Facebook native lifetime views, unique viewers, clicks and reported reaction types. Views are not impressions; unique viewers are summed per post, not a deduplicated audience or reach. Reactions are not total engagement; clicks are not conversions. No organic/paid split is asserted. Missing metrics remain unavailable; these readings do not meet the impression-based learning policy."
+      : group[0].reading?.definitionVersion.startsWith("instagram-feed-")
       ? "Instagram native lifetime views, reach and total interactions for the observed feed images only. Views are not impressions or video views. No organic/paid separation is asserted. Reach is summed post reach, not unique audience. Missing metrics remain unavailable; these readings do not meet the impression-based learning policy."
       : "Totals cover observed posts only. Reach is summed post reach, not unique audience. Engagement is not a conversion or causal result.",
   }));
@@ -85,7 +89,7 @@ async function performanceRows(scope: Scope) {
     provider: p.connection.provider,
     format: p.revision.item.format,
     publishedAt: p.publishedAt!,
-    reading: p.metricsInvalidatedAt || (p.connection.provider === "LinkedIn" && !/^linkedin-organic-post-likes-comments-shares-[0-9]{6}-v2$/.test(p.metrics[0]?.definitionVersion ?? "")) || (p.connection.provider === "Instagram" && !/^instagram-feed-views-reach-total-interactions-v[1-9][0-9]?\.0-v1$/.test(p.metrics[0]?.definitionVersion ?? "")) ? null : p.metrics[0] ?? null,
+    reading: p.metricsInvalidatedAt || (p.connection.provider === "LinkedIn" && !/^linkedin-organic-post-likes-comments-shares-[0-9]{6}-v2$/.test(p.metrics[0]?.definitionVersion ?? "")) || (p.connection.provider === "Instagram" && !/^instagram-feed-views-reach-total-interactions-v[1-9][0-9]?\.0-v1$/.test(p.metrics[0]?.definitionVersion ?? "")) || (p.connection.provider === "Facebook" && !/^facebook-post-views-unique-clicks-reactions-v[1-9][0-9]?\.0-v1$/.test(p.metrics[0]?.definitionVersion ?? "")) ? null : p.metrics[0] ?? null,
   }));
 }
 export async function readSocialDashboard(scope: Scope) {

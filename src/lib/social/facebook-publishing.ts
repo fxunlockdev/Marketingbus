@@ -8,6 +8,7 @@ import { submissionJournal, type SubmissionContext, type SubmissionJournal } fro
 import { validCandidateId } from "./integrity";
 import { createImageTransfer, facebookImageId, type SocialImageTransfer } from "./image-transfer";
 import { prepareFacebookImage, readFacebookImage } from "./facebook-image-upload";
+import { facebookMetricReader } from "./facebook-metrics";
 
 const failure = () => Error("Facebook publication could not be verified.");
 export function createFacebookPublishingAdapter(raw: MetaSettings, fetcher: typeof fetch = fetch, journal: SubmissionJournal = submissionJournal, images: { enabled: boolean; transfer?: SocialImageTransfer } = { enabled: process.env.FACEBOOK_IMAGE_PUBLISHING_ENABLED === "true" }): SocialAdapter {
@@ -47,9 +48,8 @@ export function createFacebookPublishingAdapter(raw: MetaSettings, fetcher: type
   }
   return {
     imagePublishingAvailable: images.enabled,
-    // Publishing does not certify the current Insights metrics/attribution contract.
-    metricsAvailable: false,
-    async metrics() { throw Error("Facebook post metrics are not implemented."); },
+    metricsAvailable: process.env.FACEBOOK_METRICS_ENABLED === "true",
+    metrics: facebookMetricReader(config, fetcher, authorize),
     async publish(account, payload, requestId, signal) {
       try { validatePayload(account, payload); } catch { return { state: "failed", code: "INVALID_MEDIA" }; }
       try { await authorize(account, signal); }

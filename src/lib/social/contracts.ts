@@ -46,6 +46,8 @@ export const metricReading = z
     videoViews: metric,
     // Optional for existing providers; stored as NULL when unsupported, never renamed impressions.
     views: metric.optional(),
+    uniqueViewers: metric.optional(),
+    reactions: metric.optional(),
   })
   .strict();
 export type MetricReading = z.infer<typeof metricReading>;

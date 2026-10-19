@@ -1,5 +1,11 @@
 # Acceptance ledger — 19 October 2026
 
+## Facebook native metrics — verification in progress
+
+Runtime `studio-v41-facebook-metrics`, additive migration 48: gated real HTTP reader for the app's Facebook text/single-image publications; exact before/after caption/Page/time/visibility/attachment/photo checks; separate native views, unique viewers, clicks and reaction counts; bounded nullable parsing, durable ingestion, reconnect-race rejection and source-change invalidation. Unsupported legacy Facebook definitions are excluded from the dashboard and current impression-based learning. Existing learning tests now use LinkedIn's supported impression contract. No provider or posting flag is activated. See [contract evidence and live acceptance](FACEBOOK-PUBLISHING.md#metrics-boundary).
+
+Focused verification passes 162 checks across three suites and type checking. The first type check caught an insufficiently narrowed test-helper union; it was corrected before the passing run. Full regression, browser, isolated restoration and deployment verification are in progress. No live provider call, paid generation, post, email or payment has been made. Completion of this increment will not establish live Meta acceptance, video publishing, view-based learning or full production readiness.
+
 ## Deployed Instagram native post metrics
 
 Runtime `studio-v40-instagram-metrics`, additive migration 47: separately gated native Instagram feed-image views/reach/interactions, bounded real HTTP adapter, exact before/after source checks, late-result rejection after same-token reconnect, persisted nullable views, honest dashboard coverage and exclusion of invalidated/unverified sources. Views never become impressions or video views. Current impression-based experiments do not accept them. No paid generation, posting, email, payment, production data fixture, flag activation or new infrastructure is involved. See [the reader contract and live acceptance gates](INSTAGRAM-PUBLISHING.md#metrics-testing-and-release-limits).

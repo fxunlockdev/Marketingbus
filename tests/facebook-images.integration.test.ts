@@ -13,6 +13,7 @@ import { submissionJournal } from "../src/lib/social/submission-journal";
 import { publicationPayload } from "../src/lib/social/contracts";
 import { readSocialDashboard } from "../src/lib/social/analytics";
 import { stopUnsubmittedImage } from "../src/lib/social/prepost-recovery";
+import { facebookInsightRows } from "./helpers/facebook-metrics";
 
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (process.env.TEST_DATABASE_URL && (process.env.DATABASE_URL !== process.env.TEST_DATABASE_URL || !["127.0.0.1", "localhost"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Local test DB required");
@@ -20,7 +21,7 @@ suite("approved image to Facebook durable publishing", () => {
   const organizations: string[] = [], users: string[] = [], objects = new Map<string, Uint8Array>();
   const store: AssetStore = { put: async (key, bytes) => { objects.set(key, bytes); }, get: async key => { const b = objects.get(key); if (!b) throw Error("Missing image"); return b; }, remove: async key => { objects.delete(key); } };
   beforeAll(() => { vi.stubEnv("SECRET_ENCRYPTION_KEYS_JSON", JSON.stringify({ test: randomBytes(32).toString("base64") })); vi.stubEnv("SECRET_ENCRYPTION_ACTIVE_KEY", "test"); });
-  afterEach(async () => { await db.socialPublication.deleteMany({ where: { organizationId: { in: organizations } } }); });
+  afterEach(async () => { vi.stubEnv("FACEBOOK_METRICS_ENABLED", "false"); await db.socialPublication.deleteMany({ where: { organizationId: { in: organizations } } }); });
   afterAll(async () => {
     await db.compositionExport.deleteMany({ where: { organizationId: { in: organizations } } });
     await db.organization.deleteMany({ where: { id: { in: organizations } } }); await db.user.deleteMany({ where: { id: { in: users } } });
@@ -50,6 +51,55 @@ suite("approved image to Facebook durable publishing", () => {
     await db.socialPublication.update({ where: { id: post.id }, data: { scheduledFor: new Date(Date.now() - 1000) } });
     return post;
   }
+  async function metricFixture() {
+    vi.stubEnv("FACEBOOK_METRICS_ENABLED", "true");
+    const f = await setup(), post = await queue(f); await runOnePublication({ Facebook: f.adapter });
+    expect((await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).nextMetricsAt).toBeInstanceOf(Date);
+    const publishedAt = new Date(Date.now() - 3600000); f.post.created_time = publishedAt.toISOString();
+    await db.socialPublication.update({ where: { id: post.id }, data: { publishedAt, nextMetricsAt: new Date(Date.now() - 1000) } });
+    const stats = facebookInsightRows(f.id);
+    f.replies.push({ data: f.inspectedPage }, f.capability, f.post, f.photo, stats, f.post, f.photo);
+    return { f, post, stats };
+  }
+  it("ingests exact native Facebook counters once with tenant isolation and no credit spend", async () => {
+    const { f, post } = await metricFixture();
+    expect(await runOneMetricSync({ Facebook: f.adapter })).toBe(true);
+    const metric = await db.metricSnapshot.findFirstOrThrow({ where: { publicationId: post.id } });
+    expect(metric).toMatchObject({ businessId: f.scope.businessId, organizationId: f.scope.organizationId, views: 1200, uniqueViewers: 800, reactions: 15, clicks: 0, impressions: null, reach: null, engagements: null, videoViews: null });
+    const summary = (await readSocialDashboard(f.scope)).summary[0]; expect(summary.metrics.uniqueViewers).toEqual({ value: 800, coveredPosts: 1 }); expect(summary.metrics.reactions.value).toBe(15); expect(summary.note).toContain("not total engagement");
+    expect((await readSocialDashboard({ ...f.scope, organizationId: (await setup()).scope.organizationId })).summary).toEqual([]);
+    const calls = f.fetcher.mock.calls.length; expect(await runOneMetricSync({ Facebook: f.adapter })).toBe(false); expect(f.fetcher).toHaveBeenCalledTimes(calls);
+    expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(0);
+    for (const data of [{ uniqueViewers: -1 }, { reactions: -1 }]) await expect(db.metricSnapshot.update({ where: { id: metric.id }, data })).rejects.toThrow();
+    await db.metricSnapshot.update({ where: { id: metric.id }, data: { definitionVersion: "uncertified-legacy", impressions: 9000 } });
+    const legacy = (await readSocialDashboard(f.scope)).summary[0]; expect(legacy.metrics.impressions.value).toBeNull(); expect(legacy.metrics.views.value).toBeNull();
+  });
+  it.each(["caption", "image"])("invalidates externally edited %s, retaining receipt/history but excluding reporting", async kind => {
+    const { f, post } = await metricFixture(); await runOneMetricSync({ Facebook: f.adapter });
+    await db.socialPublication.update({ where: { id: post.id }, data: { nextMetricsAt: new Date(Date.now() - 1000) } });
+    f.replies.push({ data: f.inspectedPage }, f.capability, kind === "caption" ? { ...f.post, message: "Changed externally" } : f.post, { ...f.photo, alt_text_custom: "Changed image description" });
+    await runOneMetricSync({ Facebook: f.adapter });
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "PUBLISHED", externalPostId: f.id, nextMetricsAt: null, metricsInvalidatedAt: expect.any(Date), errorCode: "METRICS_SOURCE_CHANGED" });
+    expect(await db.metricSnapshot.count({ where: { publicationId: post.id } })).toBe(1); expect((await readSocialDashboard(f.scope)).summary[0].metrics.views.value).toBeNull();
+    await expect(db.socialPublication.update({ where: { id: post.id }, data: { nextMetricsAt: new Date() } })).rejects.toThrow();
+  });
+  it.each(["empty", "permission", "malformed"])("preserves unavailable vs failed Facebook readings: %s", async kind => {
+    const { f, post } = await metricFixture();
+    f.replies[4] = kind === "empty" ? { data: [] } : kind === "permission" ? new Response("secret", { status: 403 }) : { data: [{ value: "bad" }] };
+    await runOneMetricSync({ Facebook: f.adapter });
+    const saved = await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } }); expect(saved.metricsInvalidatedAt).toBeNull();
+    expect(saved.metricsFailures).toBe(kind === "empty" ? 0 : 1); expect(saved.nextMetricsAt!.getTime()).toBeGreaterThan(Date.now());
+    const snapshots = await db.metricSnapshot.findMany({ where: { publicationId: post.id } }); expect(snapshots).toHaveLength(kind === "empty" ? 1 : 0);
+    if (kind === "empty") expect(snapshots[0]).toMatchObject({ views: null, uniqueViewers: null, reactions: null, clicks: null });
+  });
+  it.each([false, true])("discards late results after same-token reauthorization, source changed: %s", async changed => {
+    const { f, post } = await metricFixture(), original = f.fetcher.getMockImplementation()!; let count = 0;
+    if (changed) f.replies[2] = { ...f.post, message: "Changed during reconnect" };
+    f.fetcher.mockImplementation(async (...args) => { const result = await original(...args); if (++count === (changed ? 3 : 7)) await db.socialConnection.update({ where: { id: f.connection.id }, data: { authorizationVersion: { increment: 1 } } }); return result; });
+    await runOneMetricSync({ Facebook: f.adapter });
+    expect(await db.metricSnapshot.count({ where: { publicationId: post.id } })).toBe(0);
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ errorCode: "METRICS_CONTEXT_CHANGED", metricsInvalidatedAt: null, nextMetricsAt: null, metricsLeaseUntil: null });
+  });
   it("renders, selects, transfers exact PNG, verifies photo/post and keeps unknown metrics unavailable", async () => {
     const f = await setup(), post = await queue(f);
     expect(publicationPayload.parse(post.payload)).toMatchObject({ channel: "Facebook", mediaExportId: f.exported.id, image: { sha256: f.exported.sha256, altText: f.photo.alt_text_custom } });

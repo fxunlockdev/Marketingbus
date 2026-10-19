@@ -55,6 +55,7 @@ export async function learningRows(tx: Prisma.TransactionClient, scope: Scope, b
       AND plan."businessId"=p."businessId" AND plan."organizationId"=p."organizationId" AND r."organizationId"=p."organizationId"
       AND p.status='PUBLISHED' AND p."brandVersion"=${brandVersion} AND p."externalPostId" IS NOT NULL AND c.status='CONNECTED'
       AND p."metricsInvalidatedAt" IS NULL
+      AND c.provider <> 'Facebook'
       AND (c.provider <> 'LinkedIn' OR m."definitionVersion" ~ '^linkedin-organic-post-likes-comments-shares-[0-9]{6}-v2$')
       AND (c.provider <> 'Instagram' OR m."definitionVersion" ~ '^instagram-feed-views-reach-total-interactions-v[1-9][0-9]?[.]0-v1$')
       AND p."publishedAt">=${new Date(at.getTime() - 45 * DAY)} AND m."observedAt"<=${at}

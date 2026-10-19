@@ -342,7 +342,7 @@ export function SocialDashboard({
                   <tbody>
                     {Object.entries(group.metrics).map(([metric, reading]) => (
                       <tr key={metric}>
-                        <th scope="row">{({ views: "Views (not impressions)", videoViews: "Video views" } as Record<string, string>)[metric] ?? metric}</th>
+                        <th scope="row">{({ views: "Views (not impressions)", videoViews: "Video views", uniqueViewers: "Unique viewers per post", reactions: "Reactions (not total engagement)" } as Record<string, string>)[metric] ?? metric}</th>
                         <td>
                           {reading.value === null
                             ? "Unavailable"

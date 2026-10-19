@@ -1,6 +1,6 @@
 # Facebook Page text and single-image publishing
 
-This adapter connects the approved-copy queue to Facebook Page text or one approved PNG image. It is not Instagram publishing, video transfer, Page Insights ingestion or live-account acceptance.
+This adapter connects the approved-copy queue to Facebook Page text or one approved PNG image, with separately gated per-publication metrics. It is not Instagram publishing, video transfer or live-account acceptance.
 
 ## Activation
 
@@ -32,7 +32,15 @@ Text-only publishing reuses the existing submission journal. Candidate validatio
 
 ## Metrics boundary
 
-`metricsAvailable=false` explicitly disables the metric worker for this adapter, including older due rows. Successful publication and reconciliation leave `nextMetricsAt=null`; no all-zero/all-null fake snapshot is written. Account refresh is a separate read-only feature. Facebook per-publication Insights still needs a verified metric contract and implementation; it is not a missing API key alone.
+`FACEBOOK_METRICS_ENABLED=false` is the default. Keep it off until designated-account acceptance verifies the exact API version, app/Page grants, response shape and edited-post behavior. Account refresh is a separate read-only feature. Enabling this gate does not authorize new posts, paid generation or another image upload. Existing old stopped publications need the existing explicit, authorized resume-metrics workflow; enabling a flag does not backfill every post.
+
+The reader supports the app's verified text and single-image publications. It revalidates the app-bound Page token, required scopes, granular targets and Page capability. It reads exact post ID/Page/message/publication time/visibility and attachment state both before and after one lifetime Insights request. Image posts also recheck the journal-bound photo ID, owner and custom alt text twice. The request is fixed to `post_media_view`, `post_total_media_view_unique`, `post_clicks`, and `post_reactions_by_type_total`. It does not download external pixels or follow pagination. Text requires at most five GETs and image seven; existing 30-second worker deadlines and bounded HTTP bodies apply. Source version, credential, same-token authorization version and lease are checked again before persistence.
+
+Migration 48 adds nullable `uniqueViewers` and `reactions`, with SQL nonnegative constraints; existing `views` is preserved. Values remain separate from impressions, reach, total engagements and video views, which this adapter does not claim. Unique viewers are per-post counts, not deduplicated across posts. Reactions sum only the recognized returned `like`, `love`, `wow`, `haha`, `sorry`, `anger` keys; unknown types or overflow fail closed, and an empty breakdown remains unknown. These are not comments, shares, total engagement or conversions. Missing rows/values remain NULL, explicit zero remains zero. No paid/organic attribution is asserted. Duplicate rows, another post's IDs, unexpected periods, objects in scalar fields, ambiguous totals and pagination are refused.
+
+Verified external changes invalidate attribution, stop polling and exclude reporting while retaining receipts and historical snapshots. Permission, transport and malformed-response failures use bounded retry/backoff, not a fabricated source-edit diagnosis. Unverified/legacy definitions are excluded from summaries. Facebook readings are excluded from the current impression-based learning policy, including old generic observations; a separately evaluated view-based policy is still needed. Test learning fixtures now use the supported LinkedIn definition rather than pretend Facebook views are impressions.
+
+Contract evidence: Meta's official [Post SDK](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/post.py) exposes the GET Insights edge and source fields; its [InsightsResult schema](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/insightsresult.py) defines lifetime scalar results. Current metric-name selection is corroborated by the maintainers' [official Airbyte Facebook Pages connector documentation](https://docs.airbyte.com/integrations/sources/facebook-pages), including its August 2026 removal of unique-impression metrics. This is primary evidence of that connector's implementation, **not Meta certification of our version/account**. Meta's reference returned 429 and its new documentation URLs were inaccessible during implementation. Do not activate from these sources or fixture success alone: check actual response IDs/values/reaction keys, availability for the target Page, latency and errors, source edits, reconnect races and preserved zero/unknown behavior with the designated account first. No actual Meta read/post was made by this release.
 
 ## Verification and acceptance
 

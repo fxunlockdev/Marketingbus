@@ -451,6 +451,18 @@ suite("social publishing and analytics isolation", () => {
     expect((await readSocialDashboard(ctx.scope)).summary[0].metrics.impressions.value).toBe(10000);
     expect(await manageLearning(ctx.scope, { action: "evaluate" })).toMatchObject({ ok: true });
   });
+  it("rejects Facebook evidence even when historical data claims impression-based learning eligibility", async () => {
+    const ctx = await setup(), fixture = await seedLearningEvidence(db, { ...ctx.scope, connectionId: ctx.connection.id, planId: ctx.item.planId });
+    await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { provider: "Facebook" } });
+    for (const { post } of fixture) {
+      const payload = { ...(post.payload as object), channel: "Facebook" };
+      await db.socialPublication.update({ where: { id: post.id }, data: { payload, payloadHash: payloadHash(payload) } });
+    }
+    await expect(manageLearning(ctx.scope, { action: "evaluate" })).rejects.toThrow("Insufficient");
+    await db.metricSnapshot.updateMany({ where: { businessId: ctx.scope.businessId }, data: { definitionVersion: "facebook-post-views-unique-clicks-reactions-v26.0-v1", views: 1000 } });
+    await expect(manageLearning(ctx.scope, { action: "evaluate" })).rejects.toThrow("Insufficient");
+    expect(await db.memory.count({ where: { businessId: ctx.scope.businessId } })).toBe(0);
+  });
   it("isolates accounts and records; publishing replays never duplicate", async () => {
     const a = await setup(),
       b = await setup(),
@@ -604,7 +616,8 @@ suite("social publishing and analytics isolation", () => {
       await db.metricSnapshot.count({ where: { publicationId: post.id } })
     ).toBe(1);
     const dashboard = await readSocialDashboard(ctx.scope);
-    expect(dashboard.summary[0].metrics.impressions.value).toBe(100);
+    // Generic fixture observations can exercise deduplication, but do not establish a certified Facebook definition.
+    expect(dashboard.summary[0].metrics.impressions.value).toBeNull();
     expect(dashboard.summary[0].metrics.clicks.value).toBeNull();
     await expect(
       manageLearning(ctx.scope, { action: "evaluate" })

@@ -726,6 +726,8 @@ model MetricSnapshot {
   clicks Int?
   videoViews Int?
   views Int?
+  uniqueViewers Int?
+  reactions Int?
   publication SocialPublication @relation(fields: [publicationId, businessId, organizationId], references: [id, businessId, organizationId], onDelete: Cascade)
   @@unique([publicationId, observedAt, definitionVersion])
   @@index([businessId, observedAt])
