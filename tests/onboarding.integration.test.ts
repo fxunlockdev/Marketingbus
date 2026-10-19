@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { db } from "../src/lib/db";
-import { startSetup, readSetup, manageSetup } from "../src/lib/onboarding/service";
+import { startSetup, startConnectionDraft, readSetup, manageSetup } from "../src/lib/onboarding/service";
 import { brandInput, draftBrandInput, proposePlan } from "../src/lib/brand";
 import { contentPreferences } from "../src/lib/onboarding/preferences";
 import { compileHarness } from "../src/lib/harness/contracts";
@@ -21,6 +21,26 @@ suite("durable guided setup", () => {
     const f = await fixture(); const { id } = await startSetup(f.user.id, f.input);
     return { ...f, scope: { businessId: id, organizationId: f.org.id, actorId: f.user.id } };
   }
+  it("creates an idempotent connection-only draft, but requires a website before advancing setup", async () => {
+    const f = await fixture(), input = { organizationId: f.org.id, name: f.input.name, requestId: f.input.requestId };
+    const [a, b] = await Promise.all([startConnectionDraft(f.user.id, input), startConnectionDraft(f.user.id, input)]);
+    expect(a.id).toBe(b.id);
+    const scope = { businessId: a.id, organizationId: f.org.id, actorId: f.user.id }, state = await readSetup(scope);
+    expect(state.profile.website).toBe("");
+    expect(await db.business.findUnique({ where: { id: a.id } })).toMatchObject({ confirmedAt: null, productionEnabled: false });
+    await expect(manageSetup(scope, { action: "save", revision: state.revision, version: state.version, step: 2, profile: state.profile })).rejects.toThrow("business website");
+    await manageSetup(scope, { action: "save", revision: state.revision, version: state.version, step: 1, profile: { ...state.profile, website: "https://example.test" } });
+    expect((await readSetup(scope)).profile.website).toBe("https://example.test");
+    expect(await db.socialPublication.count({ where: { businessId: a.id } })).toBe(0);
+  });
+  it.each(["", "http://example.com", "https://127.0.0.1", "https://service.railway.internal", "https://user:password@example.com"])("rejects an unsuitable required website: %s", async website => {
+    const f = await fixture(); await expect(startSetup(f.user.id, { ...f.input, website })).rejects.toThrow();
+    expect(await db.business.count({ where: { organizationId: f.org.id } })).toBe(0);
+  });
+  it("does not let a viewer create a connection draft", async () => {
+    const f = await fixture("VIEWER");
+    await expect(startConnectionDraft(f.user.id, { organizationId: f.org.id, requestId: randomUUID(), name: "Another business" })).rejects.toThrow("owner or admin");
+  });
   async function save(f: Awaited<ReturnType<typeof started>>, step: number, patch: Record<string, unknown> = {}) {
     const state = await readSetup(f.scope);
     await manageSetup(f.scope, { action: "save", revision: state.revision, version: state.version, step, profile: { ...state.profile, ...patch } });

@@ -6,6 +6,7 @@ test("create account, onboard a business, plan, remember and sign out",async({pa
  await page.getByLabel("Your name").fill("Pilot Tester");await page.getByLabel("Email address").fill(`pilot-${Date.now()}@example.test`);await page.getByLabel("Password",{exact:true}).fill(password);await page.getByRole("button",{name:"Create my account"}).click();await expect(page).toHaveURL(/\/studio/);
  await expect(page.getByRole("heading",{name:"Let’s build around your business."})).toBeVisible();
  await page.getByLabel("Business name",{exact:true}).fill("Forma Architecture");await page.getByLabel("Industry",{exact:true}).fill("Architecture");
+ await page.getByLabel("Business website (required)").fill("https://example.com");await page.getByLabel("I have permission to import this business website.").check();
  await page.getByRole("button",{name:"Start business setup",exact:true}).click();await expect(page.getByRole("heading",{name:"Give your team the real story."})).toBeVisible();
  await page.reload();await expect(page.getByRole("heading",{name:"Give your team the real story."})).toBeVisible();
  await page.getByRole("button",{name:"Continue to business details",exact:true}).click();

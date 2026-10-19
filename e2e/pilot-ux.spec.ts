@@ -9,7 +9,7 @@ test("new account sees publishing choices and compact accessible onboarding", as
   await page.goto("/studio"); await page.getByRole("button", { name: "Connections", exact: true }).click();
   const catalogue = page.getByRole("region", { name: "Publishing destination catalogue" });
   for (const name of ["Instagram", "Facebook", "LinkedIn"]) await expect(catalogue.getByRole("heading", { name, exact: true })).toBeVisible();
-  await expect(catalogue.getByText("Business setup required")).toHaveCount(3);
+  await expect(catalogue.getByText("One account per business · platform setup required")).toHaveCount(3);
   await catalogue.getByRole("button", { name: "Set up your business" }).click();
   const setup = page.getByRole("region", { name: "Guided business setup" });
   const button = setup.getByRole("button", { name: "Start business setup" });
@@ -19,6 +19,29 @@ test("new account sees publishing choices and compact accessible onboarding", as
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await button.scrollIntoViewIfNeeded(); await expect(button).toBeVisible();
+});
+test("connect-first draft resumes the same business and requires a website", async ({ page }) => {
+  const headers = { Origin: "http://127.0.0.1:3000" };
+  expect((await page.request.post("/api/auth/register", { headers, data: { name: "Connect first", email: `connect-first-${crypto.randomUUID()}@example.test`, password: "Test-only-password-2026!" } })).ok()).toBe(true);
+  await page.goto("/studio"); await page.getByRole("button", { name: "Connections", exact: true }).click();
+  const form = page.getByRole("form", { name: "Connect before brand setup" });
+  await form.getByLabel("Business name").fill("Connect-first business");
+  await form.getByRole("button", { name: "Continue to social connections" }).click();
+  await expect(page.getByRole("region", { name: "Publishing connections", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Connect Instagram", exact: true })).toBeDisabled();
+  await expect(page.getByText("Instagram: platform setup pending")).toBeVisible();
+  expect((await new AxeBuilder({ page }).include("main").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+  await page.getByRole("button", { name: "Complete your website and brand setup" }).click();
+  const setup = page.getByRole("region", { name: "Guided business setup" });
+  await expect(setup.getByLabel("Business name", { exact: true })).toHaveValue("Connect-first business");
+  const website = setup.getByLabel("Business website (required)"); await expect(website).toHaveAttribute("required", "");
+  await website.fill("https://example.com");
+  await setup.getByLabel("I have permission to import this business website.").check();
+  await setup.getByRole("button", { name: "Start business setup" }).click();
+  await expect(page.getByText("Self-hosted website extraction is not configured yet.", { exact: false })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Business evidence" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Business evidence" })).toBeVisible();
 });
 test("review filters combine channel and format, and reviewed procedures recall into matching work", async ({ page }) => {
   const database = process.env.TEST_DATABASE_URL;

@@ -7,10 +7,16 @@ import { contentPreferences } from "./preferences";
 import { lockBusiness, type Scope } from "../production/service";
 import { assertBrandEditor } from "../knowledge/analysis";
 import { replaceBrandProfile } from "../knowledge/profile";
+import { publicUrl } from "../providers/url-policy";
+
+const requiredWebsite = z.string().trim().min(1, "Enter your business website.").max(500).transform((value, ctx) => {
+  try { return publicUrl(value).href; } catch { ctx.addIssue({ code: "custom", message: "Enter a public HTTPS business website." }); return z.NEVER; }
+});
 
 export const draftProfile = draftBrandInput;
 const startInput = z.object({ organizationId: z.string().min(1), requestId: z.uuid(),
-  name: brandInput.shape.name, website: brandInput.shape.website, industry: brandInput.shape.industry }).strict();
+  name: brandInput.shape.name, website: requiredWebsite, industry: brandInput.shape.industry }).strict();
+const connectionDraftInput = z.object({ organizationId: z.string().min(1), requestId: z.uuid(), name: brandInput.shape.name }).strict();
 const actionInput = z.discriminatedUnion("action", [
   z.object({ action: z.literal("save"), revision: z.number().int().positive(), version: z.number().int().positive(), step: z.number().int().min(1).max(5), profile: draftProfile }).strict(),
   z.object({ action: z.literal("finish"), revision: z.number().int().positive(), version: z.number().int().positive(), confirmed: z.literal(true) }).strict(),
@@ -20,6 +26,13 @@ export function profileFromBusiness(business: Record<string, unknown>) {
 }
 export async function startSetup(actorId: string, raw: unknown) {
   const input = startInput.parse(raw);
+  return createSetup(actorId, input, false);
+}
+export async function startConnectionDraft(actorId: string, raw: unknown) {
+  const input = connectionDraftInput.parse(raw);
+  return createSetup(actorId, { ...input, website: "", industry: "" }, true);
+}
+async function createSetup(actorId: string, input: z.infer<typeof startInput>, connectionOnly: boolean) {
   return db.$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM "Organization" WHERE id=${input.organizationId} FOR UPDATE`;
     const members = await tx.$queryRaw<{role:string}[]>`SELECT role FROM "Membership" WHERE "organizationId"=${input.organizationId} AND "userId"=${actorId} FOR SHARE`;
@@ -29,7 +42,7 @@ export async function startSetup(actorId: string, raw: unknown) {
     if (existing) return { id: existing.id };
     if (await tx.business.count({ where: { organizationId: input.organizationId } }) >= 3) throw new AppError(409, "This pilot supports up to three businesses per organization.");
     const business = await tx.business.create({ data: { organizationId: input.organizationId, name: input.name, website: input.website, industry: input.industry, setupKey, setupStep: 1, setupRevision: 1, contentPreferences: contentPreferences.parse({}) } });
-    await tx.auditEvent.create({ data: { businessId: business.id, organizationId: input.organizationId, actorId, action: "SETUP_STARTED", detail: "Business setup saved. No website request, paid generation or publication authorized." } });
+    await tx.auditEvent.create({ data: { businessId: business.id, organizationId: input.organizationId, actorId, action: "SETUP_STARTED", detail: connectionOnly ? "Named business draft created for social connections. Brand setup, website import and content approval remain incomplete." : "Business setup saved. No website request, paid generation or publication authorized." } });
     return { id: business.id };
   });
 }
@@ -48,6 +61,7 @@ export async function manageSetup(scope: Scope, raw: unknown) {
     if (business.setupRevision !== input.revision || business.version !== input.version) throw new AppError(409, "This setup changed in another tab or through brand analysis. Reload the saved setup before continuing.");
     if (business.setupStep === 6) throw new AppError(409, "Setup is complete. Edit your saved brand profile instead.");
     if (input.action === "save") {
+      requiredWebsite.parse(input.profile.website);
       if (input.step > business.setupStep + 1) throw new AppError(409, "Complete the preceding setup step first.");
       if (input.step >= 3) brandInput.parse(input.profile);
       const current = profileFromBusiness(business);
@@ -58,6 +72,7 @@ export async function manageSetup(scope: Scope, raw: unknown) {
     }
     if (business.setupStep !== 5) throw new AppError(409, "Review your setup before finishing.");
     const profile = brandInput.parse(profileFromBusiness(business));
+    requiredWebsite.parse(profile.website);
     await tx.brandSnapshot.upsert({ where: { businessId_version: { businessId: business.id, version: business.version } }, create: { businessId: business.id, organizationId: business.organizationId, version: business.version, data: JSON.parse(JSON.stringify(business)) }, update: {} });
     await tx.business.update({ where: { id: business.id }, data: { confirmedAt: new Date(), setupStep: 6, setupRevision: { increment: 1 } } });
     const existing = await tx.productionPlan.findFirst({ where: { businessId: business.id, brandVersion: business.version, status: "PROPOSED" } });

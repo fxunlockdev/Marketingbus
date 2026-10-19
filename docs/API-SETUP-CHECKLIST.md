@@ -42,9 +42,9 @@ Configure registered callbacks as `APP_ORIGIN/api/social/linkedin/callback`, `AP
 
 ## Each customer supplies only their business context and authorization
 
-1. Create their own account/workspace and complete business onboarding; confirm imported facts, audience, tone and design preferences.
+1. Create their own account/workspace. They may name a business draft and connect social accounts immediately, before completing onboarding. A website is required when resuming guided setup; confirm imported facts, audience, tone and design preferences before production.
 2. Upload assets they have permission to use and approve their permitted roles.
-3. Connect their own supported publishing destinations through OAuth. They never supply your OpenAI/Gemini/Higgsfield keys.
+3. Connect their own supported publishing destinations through OAuth (before or after brand setup). Each business has one connected account per platform; disconnect the existing account before choosing a replacement. They never supply your OpenAI/Gemini/Higgsfield keys.
 4. Review the plan, credit quote and drafts; approve exact versions, select destination/schedule, and explicitly enable any recurring generation policy.
 5. Inspect real post receipts and available metrics. Missing metrics remain unavailable, not invented zeroes. Review learned rules before activating them.
 

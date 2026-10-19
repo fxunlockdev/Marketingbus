@@ -881,7 +881,7 @@ export function Studio({
                     title="Publishing destinations"
                     description="Your business's social accounts for publishing approved content and tracking performance."
                   />
-                  {business ? <SocialConnections key={business.id} businessId={business.id} /> : <DestinationCatalogue onSetup={() => { setEditing("new"); setError(""); }} />}
+                  {business ? <><SocialConnections key={business.id} businessId={business.id} />{business.setupStep !== null && business.setupStep < 6 && <p className="notice subtle">You can connect accounts now. <button className="text-button" onClick={() => go("Overview")}>Complete your website and brand setup</button> before creating and approving content.</p>}</> : <DestinationCatalogue workspaces={workspaces} onCreated={id => { setSelected(id); router.refresh(); }} onSetup={() => { setEditing("new"); setError(""); }} />}
                 </>
               )}
               {page === "Credits" && (

@@ -305,7 +305,7 @@ suite("social publishing and analytics isolation", () => {
       else if (change === "publication time") await db.socialPublication.update({ where: { id: post.id }, data: { publishedAt: new Date(Date.now() - 60000) } });
       else if (change === "brand version") await db.socialPublication.update({ where: { id: post.id }, data: { brandVersion: 2 } });
       else if (change === "connection") {
-        const other = await db.socialConnection.create({ data: { organizationId: ctx.scope.organizationId, businessId: ctx.scope.businessId, provider: "Facebook", externalAccountId: "another-account", label: "Other scoped fixture", encryptedToken: "not-used", permissions: [] } });
+        const other = await db.socialConnection.create({ data: { organizationId: ctx.scope.organizationId, businessId: ctx.scope.businessId, provider: "Facebook", externalAccountId: "another-account", label: "Historical scoped fixture", status: "DISCONNECTED", encryptedToken: "", permissions: [] } });
         await db.socialPublication.update({ where: { id: post.id }, data: { connectionId: other.id } });
       }
       else await db.socialPublication.update({ where: { id: post.id }, data: { payload: { caption: "tampered" } } });

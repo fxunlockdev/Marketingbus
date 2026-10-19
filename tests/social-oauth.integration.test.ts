@@ -9,6 +9,7 @@ import { metaFixture } from "./helpers/meta";
 import { createMetaOAuthAdapter } from "../src/lib/social/meta-oauth";
 import { disconnectSocialAccount } from "../src/lib/social/disconnect";
 import { saveVerifiedConnection } from "../src/lib/social/service";
+import { startConnectionDraft } from "../src/lib/onboarding/service";
 const local = process.env.TEST_DATABASE_URL;
 if (local && (process.env.DATABASE_URL !== local || !["localhost", "127.0.0.1"].includes(new URL(local).hostname))) throw Error("Local test DB required");
 const suite = local ? describe : describe.skip;
@@ -46,6 +47,33 @@ suite("session-bound social authorization", () => {
     return { scope, adapter, adapters, exchange, begin };
   }
   it("leaves unconfigured providers disabled", () => expect(configuredSocialOAuthAdapters()).toEqual({}));
+  it("connects through OAuth before brand setup is complete", async () => {
+    const f = await fixture();
+    const draft = await startConnectionDraft(f.scope.actorId, { organizationId: f.scope.organizationId, requestId: randomUUID(), name: "New customer" });
+    const scope = { ...f.scope, businessId: draft.id };
+    const url = new URL((await beginSocialOAuth(scope, "Facebook", f.adapters)).authorizationUrl);
+    const result = await completeSocialOAuth(scope.sessionId, "Facebook", new URLSearchParams({ state: url.searchParams.get("state")!, code: "test-code" }), f.adapters);
+    const view = await readSocialConnections(scope, f.adapters);
+    await chooseSocialAccount(scope, result.flowId, view.flows[0].choices[0].choiceId, f.adapters);
+    expect((await readSocialConnections(scope, f.adapters)).connections).toHaveLength(1);
+    expect(await db.business.findUnique({ where: { id: draft.id } })).toMatchObject({ website: "", confirmedAt: null, productionEnabled: false, setupStep: 1 });
+    expect(await db.socialPublication.count({ where: { businessId: draft.id } })).toBe(0);
+  });
+  it("serializes competing accounts, permits same-account renewal and preserves disconnected history", async () => {
+    const f = await fixture(), { sessionId: _, ...scope } = f.scope;
+    const grant = { provider: "Facebook", label: "Page", token: "secret", permissions: ["publish"], expiresAt: null };
+    const results = await Promise.allSettled(["a", "b"].map(externalAccountId => saveVerifiedConnection(scope, { ...grant, externalAccountId })));
+    expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+    const account = await db.socialConnection.findFirstOrThrow({ where: { businessId: scope.businessId } });
+    await saveVerifiedConnection(scope, { ...grant, externalAccountId: account.externalAccountId });
+    expect(await db.socialConnection.count({ where: { businessId: scope.businessId } })).toBe(1);
+    await expect(db.socialConnection.create({ data: { businessId: scope.businessId, organizationId: scope.organizationId, provider: "Facebook", externalAccountId: "bypass", label: "Bypass", encryptedToken: "not-real", permissions: [] } })).rejects.toThrow();
+    await disconnectSocialAccount(f.scope, { action: "disconnect", connectionId: account.id, authorizationVersion: 2 });
+    await saveVerifiedConnection(scope, { ...grant, externalAccountId: "replacement" });
+    await saveVerifiedConnection(scope, { ...grant, provider: "Instagram", externalAccountId: "instagram" });
+    expect(await db.socialConnection.count({ where: { businessId: scope.businessId, status: "CONNECTED" } })).toBe(2);
+    expect(await db.socialConnection.findUnique({ where: { id: account.id } })).toMatchObject({ status: "DISCONNECTED", encryptedToken: "" });
+  });
   it("disconnection cancels grants across sessions and a late exchange cannot restore access", async () => {
     const f = await fixture(), other = await fixture();
     const { sessionId: _session, ...scope } = f.scope;

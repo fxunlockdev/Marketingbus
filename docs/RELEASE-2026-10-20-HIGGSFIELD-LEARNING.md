@@ -15,12 +15,12 @@
 - Browser suite with fresh local PostgreSQL, real loopback private S3/TLS and FFmpeg: 52 passed. Includes keyboard disclosure and automated accessibility checks of the Memory panel, onboarding, tenant isolation and actual local media playback.
 - Production dependency audit: zero reported vulnerabilities.
 - SDK demonstration with synthetic credentials, default mode: no-network syntax check passed. `.env.local` is ignored by Git.
-- Earlier full backend/media regression: 84 suites / 1,717 tests passed. The release run after complete-key support passed 1,717 of 1,721 tests, with three five-second timeouts in audio/social OAuth tests and one following audio queue assertion. Both affected suites passed unchanged on isolated rerun (38 tests). This is not an all-green full-run claim. An earlier run omitted explicit FFmpeg paths and failed three suite setup checks; it is not acceptance evidence.
+- Final full backend/media regression run without concurrent build: 84 suites / 1,721 tests passed (`/tmp/marketingbus-v54-regression-serial.log`). An earlier concurrent run had three timeouts and a following queue assertion; affected suites passed unchanged, then the entire regression passed. An earlier run without explicit FFmpeg paths is not acceptance evidence.
 
 ## Provider configuration
 
-The owner's staged Gemini and Higgsfield key additions were applied to production web. Worker now references web's `OPENAI_API_KEY`, `GEMINI_API_KEY` and `HIGGSFIELD_API_KEY`; resolved equality for all three was verified without exposing values. No keys were added to PostgreSQL. Model/rate cards and capability gates were not fabricated or bulk-enabled. New deployments are required before running processes use these values.
+The owner's staged Gemini and Higgsfield key additions were applied to production web. Worker now references web's `OPENAI_API_KEY`, `GEMINI_API_KEY` and `HIGGSFIELD_API_KEY`; resolved equality for all three was verified without exposing values. No keys were added to PostgreSQL. Model/rate cards and capability gates were not fabricated or bulk-enabled. Source `5cf81b4` was deployed to web `60614a3a-79ac-49f5-af27-8b94eacd27e7` and worker `bbd66938-6aa5-42b0-be89-5d522399bb64`; both observed SUCCESS.
 
 ## Limits
 
-No real Higgsfield generation, Gemini image, social post or payment was made during this release. Credential presence is not account validation. The configured keys still require deployment, verified model rates, output-host configuration and the existing execution controls. Live integrations, semantic/visual holdout quality and full-product acceptance remain incomplete.
+No real Higgsfield generation, Gemini image, social post or payment was made during this release. Credential presence is not account validation. Generation still requires verified model rates, output-host configuration and the existing execution controls. Live integrations, semantic/visual holdout quality and full-product acceptance remain incomplete.

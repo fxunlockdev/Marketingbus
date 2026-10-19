@@ -89,6 +89,13 @@ export async function saveVerifiedConnectionInTransaction(tx: Prisma.Transaction
     })
     .strict()
     .parse(raw);
+    // All connection writers serialize on the business, including OAuth callbacks
+    // from different tabs. Expired accounts reserve their slot until disconnected.
+    await lockBusiness(tx, scope);
+    if (await tx.socialConnection.findFirst({ where: {
+      businessId: scope.businessId, provider: input.provider,
+      status: { not: "DISCONNECTED" }, externalAccountId: { not: input.externalAccountId },
+    } })) throw new AppError(409, `Only one ${input.provider} account can be connected per business. Disconnect the existing account before choosing another.`);
     const existing = await tx.socialConnection.findUnique({
       where: {
         businessId_provider_externalAccountId: {

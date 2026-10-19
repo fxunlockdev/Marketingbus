@@ -38,14 +38,15 @@ export function SocialConnections({ businessId }: { businessId: string }) {
   }
   return <section className="panel" aria-label="Publishing connections" aria-busy={busy}>
     <h2>Social accounts</h2>
-    <p className="muted">Connect a destination, then choose the account for this business. Connecting does not publish anything or approve your work.</p>
+    <p className="muted">Connect one account per platform for this business—even before completing your brand setup. To switch accounts, disconnect the existing one first. Connecting does not publish anything or approve your work.</p>
     {error && <p role="alert">{error}</p>}
     <p role="status" tabIndex={-1} ref={resultRef}>{message}</p>
     {!view && !error && <p role="status">Loading destinations…</p>}
     {view && <>
       {!view.canManage && <p>Only a workspace owner or admin can manage connections.</p>}
       <div className="tag-row">{["Instagram", "Facebook", "LinkedIn"].map(provider => <div key={provider}>
-        <button className="button secondary" disabled={busy || !view.canManage || !view.enabledProviders.includes(provider)} onClick={() => act({ action: "begin", provider })}>Connect {provider}</button>
+        <button className="button secondary" disabled={busy || !view.canManage || !view.enabledProviders.includes(provider) || view.connections.some(a => a.provider === provider && a.status !== "DISCONNECTED")} onClick={() => act({ action: "begin", provider })}>Connect {provider}</button>
+        {view.connections.some(a => a.provider === provider && a.status !== "DISCONNECTED") && <p className="muted">Account slot in use. Renew access or disconnect below.</p>}
         {!view.enabledProviders.includes(provider) && <p className="muted">{provider}: platform setup pending</p>}
       </div>)}</div>
       <p className="muted">X and YouTube are planned destinations and are not available yet.</p>
