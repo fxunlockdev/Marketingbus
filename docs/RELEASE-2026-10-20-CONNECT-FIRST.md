@@ -20,3 +20,12 @@ Local tests use synthetic OAuth adapters, not real social accounts. Provider cre
 - Nine focused browser tests passed against the final build: new-account catalogue, connect-first/resume, mandatory website, unavailable scraper, keyboard/accessibility, connection lifecycle, full guided setup and tenant boundaries (`/tmp/marketingbus-v55-browser-final.log`).
 - Migration 60 applied successfully to both isolated local test databases. Direct duplicate inserts are rejected; concurrent verified grants leave one slot occupied. Existing metric-context tampering tests use a historical disconnected account and retain their rejection assertions.
 - No paid provider generation, real social posting, email delivery or billing transaction was performed.
+- Full browser acceptance: 53 tests passed against an isolated PostgreSQL database, including real local private-S3/media transfer and FFmpeg checks (`/tmp/marketingbus-v55-all-browser.log`). Synthetic storage resources were cleaned up by the fixture.
+
+## Production receipt
+
+- Source: `c0fecbed0017e0cf0b19d8f171bf6083b44be1d0`; both services uploaded from the same tracked-source archive.
+- Web deployment `5c8aa115-95c4-4bf3-8d5f-541b28d78fc4`: SUCCESS.
+- Worker deployment `14bf7537-a779-4cc6-8fc1-d8906e06acc8`: SUCCESS.
+- Migration 60 applied successfully in production; the other service reported no pending migrations. Web and worker startup logs are present, and the public `/api/health` returned HTTP 200 with `{"status":"ok"}` after deployment. This checks database/schema availability, not every external integration or worker capability.
+- The earlier 00:48:55 GMT+8 SIGTERM belongs to removed worker deployment `91e5390c-f007-403c-98a7-e945886e5b4e`. Replacement `bbd66938-6aa5-42b0-be89-5d522399bb64` started at 00:48:42, before the old container stopped. Database EOF/reset entries coincide with the handover; subsequent checkpoint LOG entries are routine database activity. These entries alone do not demonstrate repeated worker crashes.
