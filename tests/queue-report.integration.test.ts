@@ -28,6 +28,13 @@ suite("read-only operator queue inventory", () => {
   async function job(scope: Awaited<ReturnType<typeof setup>>, status: string, extra = {}) {
     return db.job.create({ data: { ...scope, kind: "STATIC_COPY", key: crypto.randomUUID(), status, payload: { secret: "do-not-output-prompt" }, errorCode: "do-not-output-error-secret", createdAt: old, availableAt: old, ...extra } });
   }
+  async function publication(scope: Awaited<ReturnType<typeof setup>>, extra: Prisma.SocialPublicationUncheckedUpdateInput = {}) {
+    const connection = await db.socialConnection.findFirst({ where: { ...scope, provider: "LinkedIn" } })
+      ?? await db.socialConnection.create({ data: { ...scope, provider: "LinkedIn", externalAccountId: crypto.randomUUID(), label: "Private account label", encryptedToken: "never-output-social-secret", permissions: ["private-permission"], createdAt: old } });
+    const plan = await db.productionPlan.create({ data: { ...scope, brandVersion: 1, title: "Private plan", creditCeiling: 0, items: { create: { title: "Private item", channel: "LinkedIn", format: "static", brief: {}, revisions: { create: { version: 1, status: "APPROVED", content: { caption: "never-output-private-caption" } } } } } }, include: { items: { include: { revisions: true } } } });
+    const post = await db.socialPublication.create({ data: { ...scope, connectionId: connection.id, revisionId: plan.items[0].revisions[0].id, brandVersion: 1, status: "PUBLISHED", externalPostId: crypto.randomUUID(), publishedAt: old, scheduledFor: old, timezone: "UTC", payload: { secret: "never-output-private-payload" }, payloadHash: "fixture", createdAt: old } });
+    return db.socialPublication.update({ where: { id: post.id }, data: extra });
+  }
   it("isolates organizations and businesses, including mismatched pairs", async () => {
     const a = await setup(), b = await setup(); const first = await job(a, "FAILED"); await job(b, "FAILED");
     const sibling = await db.business.create({ data: { organizationId: a.organizationId, name: "Sibling" } });
@@ -99,8 +106,53 @@ suite("read-only operator queue inventory", () => {
     await db.socialConnection.update({ where: { id: account.id }, data: { status: "DISCONNECTED" } });
     expect((await report(scope)).items).toEqual([]);
   });
+  it.each([
+    [{ metricsFailures: 5 }, "METRICS_STOPPED"],
+    [{ errorCode: "METRICS_NOT_ENABLED" }, "METRICS_STOPPED"],
+    [{ errorCode: "METRICS_CONTEXT_CHANGED" }, "METRICS_STOPPED"],
+    [{ metricsInvalidatedAt: old, errorCode: "METRICS_SOURCE_CHANGED" }, "METRIC_SOURCE_INVALIDATED"],
+    [{ nextMetricsAt: old }, "OVERDUE"],
+    [{ nextMetricsAt: old, metricsLeaseUntil: old }, "EXPIRED_LEASE"],
+  ] as const)("surfaces analytics attention %j independently from a successful publication", async (state, reason) => {
+    const scope = await setup(), post = await publication(scope, state);
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } });
+    const network = vi.fn(() => { throw Error("Operator inventory must not call a provider"); }); vi.stubGlobal("fetch", network);
+    const result = await report(scope);
+    expect(result.items).toEqual([expect.objectContaining({ queue: "social-metrics", id: post.id, status: "PUBLISHED", reason })]);
+    expect(JSON.stringify(result)).not.toMatch(/never-output|Private|encryptedToken|externalPostId|payloadHash|errorCode/);
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toEqual(post);
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } })).toEqual(wallet);
+    expect(network).not.toHaveBeenCalled();
+    expect((await report(await setup())).items).toEqual([]);
+  });
+  it.each([
+    {}, { nextMetricsAt: future }, { nextMetricsAt: now }, { nextMetricsAt: old, metricsLeaseUntil: future },
+    { metricsFailures: 4 }, { metricsFailures: 5, nextMetricsAt: future },
+    { errorCode: "METRICS_NOT_ENABLED", nextMetricsAt: future },
+    { metricsFailures: 5, publishedAt: new Date(now.getTime() - 31 * 86400000) },
+    { metricsFailures: 5, publishedAt: future }, { metricsFailures: 5, status: "CANCELLED" },
+    { metricsFailures: 5, metricsLeaseUntil: future },
+  ])("does not flag normal, backoff, active or out-of-window metrics %j", async state => {
+    const scope = await setup(); await publication(scope, state);
+    expect((await report(scope)).items).toEqual([]);
+  });
+  it.each([{ publishedAt: null }, { externalPostId: null }])("preserves database rejection of incomplete published receipts %j", async state => {
+    const scope = await setup();
+    await expect(publication(scope, state)).rejects.toThrow();
+    expect((await report(scope)).items).toEqual([]);
+  });
+  it("uses the metric lease and exact due/publication boundaries, not the old publishing lease", async () => {
+    const scope = await setup();
+    const post = await publication(scope, { publishedAt: new Date(now.getTime() - 30 * 86400000), nextMetricsAt: new Date(now.getTime() - 15 * 60000), leaseUntil: future });
+    expect((await report(scope)).items).toEqual([expect.objectContaining({ queue: "social-metrics", id: post.id, reason: "OVERDUE", leaseActiveAtReportTime: false })]);
+    expect((await report(scope, { overdueMinutes: 16 })).items).toEqual([]);
+    await db.socialPublication.update({ where: { id: post.id }, data: { metricsLeaseUntil: now } });
+    expect((await report(scope)).items[0].reason).toBe("EXPIRED_LEASE");
+  });
   it("paginates equal timestamps without duplicates, freezes cutoff and rejects cross-scope cursors", async () => {
-    const scope = await setup(); for (let i = 0; i < 5; i++) await job(scope, "FAILED");
+    const scope = await setup();
+    for (let i = 0; i < 2; i++) await job(scope, "FAILED");
+    for (let i = 0; i < 3; i++) await publication(scope, { metricsFailures: 5 });
     const first = await report(scope, { limit: 2 });
     expect(first.hasMore).toBe(true); expect(first.nextCursor).toBeTruthy();
     await job(scope, "FAILED", { createdAt: future });
@@ -179,6 +231,12 @@ suite("read-only operator queue inventory", () => {
       catch (error) { const result = error as { code: number; stdout: string; stderr: string }; return { code: result.code, stdout: result.stdout, stderr: result.stderr }; }
     };
     expect((await run("--organization", scope.organizationId, "--check")).code).toBe(0);
+    // The subprocess uses its real clock, unlike report()'s fixed test timestamp.
+    const stopped = await publication(scope, { metricsFailures: 5, publishedAt: new Date(Date.now() - 3600000) });
+    const metricAttention = await run("--organization", scope.organizationId, "--check");
+    expect(metricAttention.code).toBe(2);
+    expect(JSON.parse(metricAttention.stdout).items).toEqual([expect.objectContaining({ id: stopped.id, queue: "social-metrics", reason: "METRICS_STOPPED" })]);
+    await db.socialPublication.update({ where: { id: stopped.id }, data: { metricsFailures: 0 } });
     const failed = await job(scope, "FAILED", { createdAt: new Date("2026-10-01T00:00:00Z") });
     const attention = await run("--organization", scope.organizationId, "--check");
     expect(attention.code).toBe(2); expect(JSON.parse(attention.stdout).items[0].id).toBe(failed.id);
