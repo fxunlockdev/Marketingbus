@@ -7,7 +7,7 @@ import { runOneWeeklyImage } from "../src/lib/workflows/weekly-images";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { heartbeat, HEARTBEAT_TTL_MS } from "../src/lib/production/readiness";
-import { runWorkerCycle, type WorkerStep } from "../src/lib/production/cycle";
+import { GroupReadiness, runWorkerGroups, validateWorkerGroups, WORKER_POLL_MS, type WorkerGroup } from "../src/lib/production/groups";
 import { purgeExpiredAssets } from "../src/lib/assets/service";
 import { purgeCompositionExports } from "../src/lib/composition/exports";
 import { assetStore } from "../src/lib/assets/storage";
@@ -24,21 +24,36 @@ import { expireSocialOAuth } from "../src/lib/social/oauth";
 import { expireSocialAccountData } from "../src/lib/social/account-data-service";
 import { runOnePublication, runOneMetricSync, recoverSocialLeases, runOneReconciliation } from "../src/lib/social/worker";
 let stopping = false;
-let lastHealthyAt = 0;
 let lastRetentionCheck = 0;
 const instance = process.env.RAILWAY_REPLICA_ID || randomUUID();
-const steps: WorkerStep[] = [
+const groups: WorkerGroup[] = [{ name: "production", steps: [
   { name: "copy-recovery", run: recoverExpiredLeases },
   { name: "brand-recovery", run: recoverBrandAnalysisLeases },
   { name: "image-recovery", run: recoverImageLeases },
   { name: "motion-recovery", run: recoverMotionLeases },
   { name: "clip-recovery", run: recoverClipLeases },
   { name: "shot-recovery", run: recoverShotGenerations },
-  { name: "social-recovery", run: recoverSocialLeases },
-  { name: "payments", run: processOnePayment },
-  { name: "weekly-plan", run: createDuePlan },
   { name: "weekly-draft", enabled: paid => paid, run: runOneWeeklyDraft },
   { name: "weekly-image", enabled: paid => paid, run: runOneWeeklyImage },
+  { name: "brand", enabled: paid => paid, run: runOneBrandAnalysis },
+  { name: "image", enabled: paid => paid, run: runOneImage },
+  { name: "shot", run: runOneShotGeneration },
+  { name: "clip", enabled: () => process.env.MOTION_RENDERING_ENABLED === "true", run: runOneClip },
+  { name: "motion", enabled: () => process.env.MOTION_RENDERING_ENABLED === "true", run: runOneMotion },
+  { name: "copy", enabled: paid => paid, run: runOneJob },
+] }, { name: "publishing", steps: [
+  { name: "social-recovery", run: recoverSocialLeases },
+  { name: "social-publish", enabled: () => process.env.SOCIAL_EXECUTION_ENABLED === "true", run: async () => runOnePublication(configuredSocialAdapters()) },
+  { name: "social-reconcile", enabled: () => process.env.SOCIAL_EXECUTION_ENABLED === "true", run: async () => runOneReconciliation(configuredSocialAdapters()) },
+] }, { name: "metrics", steps: [
+  { name: "social-metrics", enabled: () => process.env.SOCIAL_EXECUTION_ENABLED === "true", run: async () => runOneMetricSync(configuredSocialAdapters()) },
+] }, { name: "delivery", steps: [
+  { name: "payments", run: processOnePayment },
+  { name: "weekly-plan", run: createDuePlan },
+  { name: "email", enabled: () => process.env.EMAIL_DELIVERY_ENABLED === "true", run: runOneEmail },
+] }, { name: "intake", steps: [
+  { name: "website", enabled: () => process.env.WEBSITE_EXTRACTION_ENABLED === "true", run: runOneSourceJob },
+] }, { name: "maintenance", steps: [
   { name: "retention", run: async () => {
     if (Date.now() - lastRetentionCheck <= 300000) return;
     lastRetentionCheck = Date.now();
@@ -47,27 +62,29 @@ const steps: WorkerStep[] = [
     await expireSocialAccountData();
     if (process.env.ASSET_S3_ENDPOINT) {
       const store = assetStore();
-      void purgeExpiredAssets(store).catch(() => console.error("Asset retention check failed; retry remains queued."));
-      void purgeCompositionExports(store).catch(() => console.error("Export retention check failed; private tombstones retained for retry."));
-      void purgeMotion(videoStore()).catch(() => console.error("Motion retention check failed; private tombstones retained for retry."));
-      void purgeClips(videoStore()).catch(() => console.error("Clip retention check failed; private tombstones retained for retry."));
+      await purgeExpiredAssets(store).catch(() => console.error("Asset retention check failed; retry remains queued."));
+      await purgeCompositionExports(store).catch(() => console.error("Export retention check failed; private tombstones retained for retry."));
+      await purgeMotion(videoStore()).catch(() => console.error("Motion retention check failed; private tombstones retained for retry."));
+      await purgeClips(videoStore()).catch(() => console.error("Clip retention check failed; private tombstones retained for retry."));
     }
   } },
-  { name: "email", enabled: () => process.env.EMAIL_DELIVERY_ENABLED === "true", run: runOneEmail },
-  { name: "brand", enabled: paid => paid, run: runOneBrandAnalysis },
-  { name: "image", enabled: paid => paid, run: runOneImage },
-  { name: "shot", run: runOneShotGeneration },
-  { name: "clip", enabled: () => process.env.MOTION_RENDERING_ENABLED === "true", run: runOneClip },
-  { name: "motion", enabled: () => process.env.MOTION_RENDERING_ENABLED === "true", run: runOneMotion },
-  { name: "copy", enabled: paid => paid, run: runOneJob },
-  { name: "social-publish", enabled: () => process.env.SOCIAL_EXECUTION_ENABLED === "true", run: async () => runOnePublication(configuredSocialAdapters()) },
-  { name: "social-reconcile", enabled: () => process.env.SOCIAL_EXECUTION_ENABLED === "true", run: async () => runOneReconciliation(configuredSocialAdapters()) },
-  { name: "social-metrics", enabled: () => process.env.SOCIAL_EXECUTION_ENABLED === "true", run: async () => runOneMetricSync(configuredSocialAdapters()) },
-  { name: "website", enabled: () => process.env.WEBSITE_EXTRACTION_ENABLED === "true", run: runOneSourceJob },
-];
+] }];
+validateWorkerGroups(groups);
+const readiness = new GroupReadiness(groups.map(group => group.name), {
+  write: at => heartbeat(instance, at), stopping: () => stopping, ttlMs: HEARTBEAT_TTL_MS,
+});
+const sleepers = new Set<() => void>();
+function pause() {
+  return new Promise<void>(resolve => {
+    if (stopping) { resolve(); return; }
+    const wake = () => { clearTimeout(timer); sleepers.delete(wake); resolve(); };
+    const timer = setTimeout(wake, WORKER_POLL_MS); sleepers.add(wake);
+  });
+}
+let readinessRemoval: Promise<unknown> | undefined;
 const server = createServer((req, res) => {
   if (req.url !== "/health") { res.writeHead(404).end(); return; }
-  const healthy = !stopping && Date.now() - lastHealthyAt < HEARTBEAT_TTL_MS;
+  const healthy = readiness.healthy();
   res.writeHead(healthy ? 200 : 503, { "Content-Type": "application/json", "Cache-Control": "no-store" });
   res.end(JSON.stringify({ status: healthy ? "ok" : "unavailable" }));
 });
@@ -75,7 +92,9 @@ function stop() {
   if (stopping) return;
   stopping = true;
   // Let the bounded provider request finish. A hard interruption is reconciled, never retried.
-  void db.workerHeartbeat.deleteMany({ where: { id: instance } }).catch(() => {});
+  for (const wake of sleepers) wake();
+  // Serialize deletion after an in-flight readiness write; no late upsert can revive it.
+  readinessRemoval = readiness.drain().then(() => db.workerHeartbeat.deleteMany({ where: { id: instance } })).catch(() => {});
   setTimeout(() => process.exit(1), 110_000).unref();
 }
 process.on("SIGTERM", stop);
@@ -85,17 +104,12 @@ async function main() {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error("Invalid worker port");
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(port, "0.0.0.0", resolve); });
   console.info("Production worker started; paid execution requires explicit server configuration.");
-  while (!stopping) {
-    try {
-      await runWorkerCycle(steps, {
-        heartbeat: async () => { const enabled = await heartbeat(instance); lastHealthyAt = Date.now(); return enabled; },
-        stopping: () => stopping,
-        failed: name => console.error(`Worker lane ${name} failed; other lanes remain available. No automatic provider resubmission.`),
-      });
-    } catch { lastHealthyAt = 0; console.error("Worker readiness check failed; cycle stopped without provider retries."); }
-    if (stopping) break;
-    await new Promise(resolve => setTimeout(resolve, 5000));
-  }
+  await runWorkerGroups(groups, {
+    readiness, stopping: () => stopping, sleep: pause,
+    failed: (group, name) => console.error(`Worker lane ${group}/${name} failed; other lanes remain available. No automatic provider resubmission.`),
+    readinessFailed: group => { if (!stopping) console.error(`Worker readiness unavailable for ${group}; cycle stopped without provider retries.`); },
+  });
+  await readinessRemoval;
   await db.workerHeartbeat.deleteMany({ where: { id: instance } });
   await new Promise<void>(resolve => server.close(() => resolve()));
   await db.$disconnect();

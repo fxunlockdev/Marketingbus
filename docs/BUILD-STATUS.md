@@ -1,5 +1,11 @@
 # Acceptance ledger — 19 October 2026
 
+## Worker workload isolation — local verification
+
+Runtime `studio-v46-isolated-worker-groups` preserves the existing 23 workflows in six fixed asynchronous groups. AI/media generation and CPU processing remain sequential; publishing, metrics, delivery, website intake and retention can progress independently. Shared readiness uses the oldest group checkpoint so healthy peers cannot mask a stalled workflow. Database writes are coalesced, failures stay closed, shutdown drains active work and awaited retention, and heartbeat deletion cannot race a late upsert. No new infrastructure, operational limit increase, paid call or schema migration is introduced. See [scheduling and capacity limits](WORKER-SCHEDULING.md).
+
+Focused verification passes 24 scheduler/process/database tests. Full local verification passes **1,550 tests/75 suites and all 46 browser journeys with zero skips**, type checking, production build, real private-storage transport and dependency audit with zero known vulnerabilities. Synthetic database restoration passes 51 migrations, 52 tables and 121 rows; both temporary restoration databases and this run's storage fixture/objects/TLS files were removed. An initial rehearsal invocation correctly stopped at its configuration guard before creating resources; the documented explicit rehearsal configuration then passed. CI and deployment are pending at this checkpoint. This is not whole-product completion, actual production recovery or proof of production capacity.
+
 ## Deployed guided business setup and focused provider policy
 
 Runtime `studio-v45-guided-setup`, migration 51, adds automatic first-business onboarding, explicitly selected workspace, idempotent draft creation, saved/resumable source → business → strategy → visual assets → confirmation flow, revision/brand-version conflict checks and atomic brand confirmation plus one zero-cost planning outline. Existing website/document ingestion, source-backed analysis and private asset management are wired into setup. Drafts can receive selected evidence-backed suggestions without fabricated placeholder facts. Completed brands can edit creative preferences through the existing profile editor and must reconfirm after changes.

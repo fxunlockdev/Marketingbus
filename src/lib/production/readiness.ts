@@ -8,7 +8,7 @@ import { motionConfigurationHash } from "../video/limits";
 import { motionRendererAvailable } from "../video/render";
 import { shotConfigurationHash, shotRates, configuredShotAdapters } from "../video/generation-contracts";
 
-export const WORKER_RUNTIME = "studio-v45-guided-setup";
+export const WORKER_RUNTIME = "studio-v46-isolated-worker-groups";
 export const HEARTBEAT_TTL_MS = 120_000;
 export function workerConfigurationHash() {
   return createHash("sha256").update(JSON.stringify({
@@ -21,14 +21,15 @@ export function workerConfigurationHash() {
     providers: { openai: !!keyFor("openai"), anthropic: !!keyFor("anthropic") },
   })).digest("hex");
 }
-export async function heartbeat(id: string) {
+export async function heartbeat(id: string, lastSeenAt = new Date()) {
+  if (!Number.isFinite(lastSeenAt.getTime()) || lastSeenAt.getTime() > Date.now()) throw Error("Invalid worker checkpoint");
   let executionEnabled = false;
   try {
     assertExecutionEnabled();
     executionEnabled = configuredModels().some(m => !!keyFor(m.provider) && new Date(m.verifiedUntil).getTime() > Date.now()) || (!!process.env.GEMINI_API_KEY && imageRates().some(m => new Date(m.verifiedUntil).getTime() > Date.now()));
     executionEnabled ||= shotRates().some(r => new Date(r.verifiedUntil).getTime() > Date.now() && configuredShotAdapters().some(a => a.id === r.provider && a.accountId === r.accountId && a.version === r.adapterVersion));
   } catch { /* A paused worker is still operationally healthy. */ }
-  const data = { runtimeVersion: WORKER_RUNTIME, configurationHash: workerConfigurationHash(), executionEnabled, motionReady: await motionRendererAvailable(), lastSeenAt: new Date() };
+  const data = { runtimeVersion: WORKER_RUNTIME, configurationHash: workerConfigurationHash(), executionEnabled, motionReady: await motionRendererAvailable(), lastSeenAt };
   await db.workerHeartbeat.upsert({ where: { id }, create: { id, ...data }, update: data });
   return executionEnabled;
 }
