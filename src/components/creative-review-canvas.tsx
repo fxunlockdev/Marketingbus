@@ -37,7 +37,7 @@ export function CreativeReviewCanvas({ business, item, row, canEdit, busy, post,
     <section className="canvas-feedback" aria-label={`Improve ${item.title}`} aria-busy={working}>
       <h3>Make it more yours.</h3>
       <p className="revision-meter" role="status">{allowance ? `${allowance.remaining} of 3 AI revisions remaining` : "Loading revision allowance…"}</p>
-      <p className="small muted">Shared across copy, artwork and new video takes. A quote uses none; authorizing a revision uses one, even if later cancelled or unsuccessful. Manual edits and comments are unlimited. Credits are quoted separately.</p>
+      <p className="small muted">Shared across copy, artwork and new video takes. A quote uses none; authorizing a revision uses one, even if later cancelled or unsuccessful. Manual edits and comments do not use AI revisions. Credits are quoted separately.</p>
       {exhausted && <p className="notice">Revision limit reached. You can still edit manually, approve or reject this creative.</p>}
       <label htmlFor={`feedback-target-${item.id}`}>What should change?</label>
       <select id={`feedback-target-${item.id}`} value={target} disabled={working} onChange={e => { setTarget(e.target.value); setOffer(null); setError(""); }}>
