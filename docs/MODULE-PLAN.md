@@ -54,7 +54,7 @@ Failures before submission release credits; unknown supplier outcomes retain the
 
 Added and deployed: bundled Figtree outlines, measured kerning/wrapping and ink bounds, explicit overflow/unsupported-character rejection, font fingerprints in exports and renderer-version-bound approval. Old approvals require preview and explicit reapproval; old stored bytes are retained rather than overwritten. Motion captions share the measured renderer. See [typography release evidence](RELEASE-2026-10-16-TYPOGRAPHY.md).
 
-Remaining internal work: automated semantic visual-claim checks, calibrated fidelity/revision-adherence evaluation, broader template art direction, custom/multilingual fonts and social media-transfer linkage. The current acceptance gate is explicit human visual review, not automated fidelity certification. Live Gemini capabilities/prices, real bucket behavior and output quality remain unverified. No paid Gemini calls were made.
+Remaining internal work: automated semantic visual-claim checks, calibrated fidelity/revision-adherence evaluation, broader template art direction and custom/multilingual fonts. Single-image social transfer is implemented for the three supported destinations, with separate live acceptance gates. The current quality gate is explicit human visual review, not automated fidelity certification. Live Gemini capabilities/prices, real bucket behavior and output quality remain unverified. No paid Gemini calls were made.
 
 ## Module 4 Video and motion
 
