@@ -1,6 +1,6 @@
 # Acceptance ledger — 19 October 2026
 
-## Facebook Reel implementation — local verification complete
+## Deployed approved Facebook Reels
 
 Runtime `studio-v44-facebook-reels`, migration 50, adds approved final-video selection for Facebook, direct private MP4 upload, separate registration/publication fences, exact video-to-post receipt verification and read-only recovery when asynchronous publication has no post ID yet. Upload and finish acknowledgements never imply success. The frontend omits Instagram-only placement; the backend rejects it for Facebook. Uncertain writes are not retried; pre-post recovery cannot close an attempt with a publication fence. Text/image metrics are not applied to video.
 
@@ -8,7 +8,9 @@ Focused verification passes 101 transport/database/metric tests and type checkin
 
 Final local verification passes **1,523 tests/73 suites and 46 browser journeys with zero skips**, type checking, production build, real local private-storage verification and dependency audit with zero known vulnerabilities. The first browser run caught an old Facebook metric fixture with a deliberately invalid payload/hash; it was replaced with a valid immutable snapshot and an explicit invalid-hash exclusion assertion. The complete pipeline then passed without weakening the production source checks. Both runs cleaned up their synthetic storage container, objects and TLS files. Accessibility skill guidance kept the scheduling controls native, labelled and keyboard accessible.
 
-Deployment and independent CI for this source are not yet recorded. Do not activate `FACEBOOK_REELS_ENABLED` without designated-account/API acceptance. See [Facebook Reel operations](FACEBOOK-PUBLISHING.md#approved-reels). Read-only capacity audit also confirms the shared 100/day processing ceiling and single active media slot; see [capacity gate](WORKER-SCHEDULING.md#capacity-gate-for-500700-businesses). Facebook video metrics, LinkedIn video, token lifecycle, broader media/learning/automation and production/provider acceptance remain unfinished; the full-product goal remains active.
+Application source `3ef2c8899d6eade9294e9f4231b0d92f4d5abd12` is deployed from the same tracked-only archive to web `cc62991b-c34d-43ff-aa55-8c3c74f3f298` and worker `58d0e70e-ebcc-4f1d-8f22-21ac7f785200`, both observed SUCCESS. Worker applied migration 50; web confirmed none pending; both started successfully. Hosted read-only checks pass: health 200/no-store, studio 307/login, anonymous review/images/video/social/planning 401/no-store, all three callback-denial routes 303/no-store/no-referrer to the fixed recovery page, and invalid media GET/HEAD 404 and POST 405/private/no-store/no-referrer. No production fixture, paid AI call, social post, email, payment, new infrastructure or execution-setting change occurred.
+
+Independent [source CI 39243693456](https://github.com/fxunlockdev/Marketingbus/actions/runs/39243693456) passed regression, synthetic restoration, production build, private-storage browser acceptance and dependency audit for this exact application source. Do not activate `FACEBOOK_REELS_ENABLED` without designated-account/API acceptance. See [Facebook Reel operations](FACEBOOK-PUBLISHING.md#approved-reels). Read-only capacity audit also confirms the shared 100/day processing ceiling and single active media slot; see [capacity gate](WORKER-SCHEDULING.md#capacity-gate-for-500700-businesses). Facebook video metrics, LinkedIn video, token lifecycle, broader media/learning/automation and production/provider acceptance remain unfinished; the full-product goal remains active.
 
 ## Deployed Instagram Reel native metrics
 
