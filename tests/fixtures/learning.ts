@@ -16,3 +16,17 @@ export async function seedLearningEvidence(db: PrismaClient, context: { business
   }
   return result;
 }
+
+export async function seedInstagramLearningEvidence(db: PrismaClient, context: Parameters<typeof seedLearningEvidence>[1], now = new Date()) {
+  const rows = await seedLearningEvidence(db, context, now);
+  await db.socialConnection.update({ where: { id: context.connectionId }, data: { provider: "Instagram" } });
+  for (const row of rows) {
+    const format = row.item.format;
+    const payload = { caption: "Synthetic fixture", channel: "Instagram", format, mediaExportId: `fixture-${row.item.id}`,
+      ...(format === "static" ? { image: { sha256: "a".repeat(64), bytes: 1000, width: 1080, height: 1080, altText: "Fixture" } } : { video: { sha256: "b".repeat(64), bytes: 1000, width: 720, height: 1280, durationMs: 5000, shareToFeed: false } }) };
+    await db.productionItem.update({ where: { id: row.item.id }, data: { channel: "Instagram" } });
+    await db.socialPublication.update({ where: { id: row.post.id }, data: { payload, payloadHash: payloadHash(payload) } });
+    await db.metricSnapshot.update({ where: { id: row.metric.id }, data: { impressions: null, views: 1000, definitionVersion: `instagram-${format === "static" ? "feed" : "reel"}-views-reach-total-interactions-v24.0-v1` } });
+  }
+  return rows;
+}

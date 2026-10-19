@@ -397,7 +397,10 @@ export function SocialDashboard({
             <p>
               Compare current-brand posts on the same account using measurements
               taken 72–96 hours after publication, not lifetime totals. Each format
-              needs at least five posts and 1,000 impressions. Approval rechecks
+              needs at least five posts and 1,000 LinkedIn impressions or Instagram
+              native views. Instagram feed displays and Reel plays differ; their
+              interaction rates suggest a format test, not an equivalent exposure
+              or proven improvement. Facebook is not eligible for these comparisons yet. Approval rechecks
               the saved evidence within seven days and saves a reversible experiment,
               not a proven fact. Experiments stop informing new work after 30 days
               or when their evidence becomes invalid.

@@ -203,7 +203,7 @@ export async function manageLearning(scope: Scope, raw: unknown) {
       if (!candidate)
         throw new AppError(
           409,
-          "Insufficient comparable evidence. Each format needs five current-brand posts and 1,000 impressions on the same account and metric definition, observed at 72–96 hours. Lifetime totals are not comparable evidence."
+          "Insufficient comparable evidence. Each format needs five current-brand posts and 1,000 eligible exposures on the same account, observed at 72–96 hours: LinkedIn impressions or Instagram native views. Metric definitions and API versions must match the supported policy; views are never impressions. Lifetime totals are not comparable evidence."
         );
       const duplicate = await tx.learningProposal.findFirst({
         where: {

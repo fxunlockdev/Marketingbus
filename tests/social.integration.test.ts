@@ -24,8 +24,9 @@ import { resumePublicationLookup } from "../src/lib/social/recovery";
 import { resumeMetricChecks } from "../src/lib/social/metric-recovery";
 import { disconnectSocialAccount } from "../src/lib/social/disconnect";
 import { expireOneSocialConnection } from "../src/lib/social/access-lifecycle";
-import { seedLearningEvidence } from "./fixtures/learning";
+import { seedLearningEvidence, seedInstagramLearningEvidence } from "./fixtures/learning";
 import { productionMemories, validLearningEvidence } from "../src/lib/social/learning-evidence";
+import { businessKnowledge, graphPrompt } from "../src/lib/harness/knowledge-graph";
 import { publishingFixture } from "./helpers/linkedin-publishing";
 import { submissionJournal } from "../src/lib/social/submission-journal";
 import { LINKEDIN_SCOPES } from "../src/lib/social/linkedin-oauth";
@@ -645,6 +646,37 @@ suite("social publishing and analytics isolation", () => {
     const stale = await db.learningProposal.create({ data: { businessId: ctx.scope.businessId, organizationId: ctx.scope.organizationId, brandVersion: 1, hypothesis: "Stale fixture", evidence: {} } });
     await db.business.update({ where: { id: ctx.scope.businessId }, data: { version: 2 } });
     await expect(manageLearning(ctx.scope, { action: "promote", proposalId: stale.id })).rejects.toThrow("current-brand");
+  });
+  async function instagramEvidence(ctx: Awaited<ReturnType<typeof setup>>) {
+    return seedInstagramLearningEvidence(db, { ...ctx.scope, connectionId: ctx.connection.id, planId: ctx.item.planId });
+  }
+  it("connects native Instagram observations to reviewed planning knowledge and reversible memory", async () => {
+    const ctx = await setup(), other = await setup(); await instagramEvidence(ctx);
+    const proposal = await manageLearning(ctx.scope, { action: "evaluate" }) as { id: string };
+    const stored = await db.learningProposal.findUniqueOrThrow({ where: { id: proposal.id } });
+    expect(stored.evidence).toMatchObject({ kind: "OBSERVATIONAL_VIEWS_V1", basis: "total_interactions_per_native_view" });
+    expect(graphPrompt(await businessKnowledge(db, ctx.scope, "planning", "Instagram"))).not.toContain("Matched-age total interactions");
+    await expect(manageLearning(other.scope, { action: "promote", proposalId: proposal.id })).rejects.toThrow("not found");
+    await manageLearning(ctx.scope, { action: "promote", proposalId: proposal.id });
+    const graph = await businessKnowledge(db, ctx.scope, "planning", "Instagram");
+    expect(graphPrompt(graph)).toContain("Matched-age total interactions per native view");
+    expect(graph.edges.some(e => e.relation === "SUPPORTED_BY")).toBe(true);
+    expect(graphPrompt(await businessKnowledge(db, ctx.scope, "copy", "Instagram"))).not.toContain("Matched-age total interactions");
+    await manageLearning(ctx.scope, { action: "revert", proposalId: proposal.id });
+    expect(graphPrompt(await businessKnowledge(db, ctx.scope, "planning", "Instagram"))).not.toContain("Matched-age total interactions");
+  });
+  it.each(["views", "definition", "source", "account", "payload", "snapshot"])("invalidates native-view learning after %s changes", async reason => {
+    const ctx = await setup(), rows = await instagramEvidence(ctx);
+    const p = await manageLearning(ctx.scope, { action: "evaluate" }) as { id: string };
+    await manageLearning(ctx.scope, { action: "promote", proposalId: p.id });
+    if (reason === "views") await db.metricSnapshot.update({ where: { id: rows[0].metric.id }, data: { views: 1001 } });
+    if (reason === "definition") await db.metricSnapshot.update({ where: { id: rows[0].metric.id }, data: { definitionVersion: "instagram-feed-views-reach-total-interactions-v25.0-v1" } });
+    if (reason === "source") await db.socialPublication.update({ where: { id: rows[0].post.id }, data: { metricsInvalidatedAt: new Date() } });
+    if (reason === "account") await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { status: "DISCONNECTED" } });
+    if (reason === "payload") await db.socialPublication.update({ where: { id: rows[0].post.id }, data: { payloadHash: "tampered" } });
+    if (reason === "snapshot") await db.metricSnapshot.delete({ where: { id: rows[0].metric.id } });
+    expect(await db.$transaction(tx => productionMemories(tx, ctx.scope, 1))).toEqual([]);
+    expect((await db.learningProposal.findUniqueOrThrow({ where: { id: p.id } })).status).toBe("PROMOTED"); // Historical review retained; recall stops.
   });
   it.each(["removed snapshot", "changed count", "changed definition", "tampered payload", "old brand", "disconnected account", "changed hypothesis", "invalidated source"])("blocks promotion after %s", async reason => {
     const ctx = await setup(), fixture = await seedLearningEvidence(db, { ...ctx.scope, connectionId: ctx.connection.id, planId: ctx.item.planId });

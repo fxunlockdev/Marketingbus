@@ -9,6 +9,7 @@ describe("reproducible observational experiment policy", () => {
     const input = rows(), a = experimentCandidate(input, now)!;
     expect(a).toEqual(experimentCandidate(input.reverse(), now));
     expect(a.evidence.kind).toBe("OBSERVATIONAL_V2"); expect(a.evidence.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+    if (a.evidence.kind !== "OBSERVATIONAL_V2") throw Error("Expected impression evidence");
     expect(a.evidence.cohorts.map(c => c.impressions)).toEqual([5000, 5000]);
     expect(a.evidence.warning).toContain("Non-randomized");
   });

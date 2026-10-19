@@ -6,6 +6,7 @@ import { publicationPayload, type MetricReading } from "./contracts";
 import { payloadHash } from "./integrity";
 import { validSkillMemories } from "../harness/learning";
 import { validProcedureMemories } from "../harness/procedure-evidence";
+import { viewExperimentCandidate, viewLearningEvidence } from "./view-learning";
 
 const DAY = 86400000;
 const ref = z.string().min(1).max(200);
@@ -16,10 +17,11 @@ export type LearningRow = { id: string; snapshotId: string; connectionId: string
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 
 // Conservative observation policy, not a significance test or causal inference.
-export function experimentCandidate(rows: LearningRow[], now = new Date()) {
+function impressionCandidate(rows: LearningRow[], now = new Date()) {
   if (rows.length > 500 || new Set(rows.map(r => r.id)).size !== rows.length || new Set(rows.map(r => r.snapshotId)).size !== rows.length) return null;
   const groups = new Map<string, LearningRow[]>();
   for (const row of rows) {
+    if (row.provider === "Instagram") continue; // Native Instagram views never enter impression-based comparisons.
     const r = row.reading, age = r ? r.observedAt.getTime() - row.publishedAt.getTime() : 0;
     if (!r || !["static", "video"].includes(row.format) || !["Facebook", "Instagram", "LinkedIn"].includes(row.provider) || r.impressions === null || r.engagements === null || !Number.isSafeInteger(r.impressions) || !Number.isSafeInteger(r.engagements) || r.impressions < 100 || r.engagements < 0 || r.impressions > 2147483647 || r.engagements > 2147483647 || age < 3 * DAY || age > 4 * DAY || r.observedAt > now || row.publishedAt.getTime() < now.getTime() - 45 * DAY) continue;
     const key = JSON.stringify([row.connectionId, row.provider, r.definitionVersion, row.format]);
@@ -45,11 +47,15 @@ export function experimentCandidate(rows: LearningRow[], now = new Date()) {
   return null;
 }
 
-type StoredRow = { id: string; snapshotId: string; connectionId: string; provider: string; payload: unknown; payloadHash: string; publishedAt: Date; observedAt: Date; definitionVersion: string; impressions: number | null; engagements: number | null };
+export function experimentCandidate(rows: LearningRow[], now = new Date()) {
+  return impressionCandidate(rows, now) ?? viewExperimentCandidate(rows, now);
+}
+
+type StoredRow = { id: string; snapshotId: string; connectionId: string; provider: string; payload: unknown; payloadHash: string; publishedAt: Date; observedAt: Date; definitionVersion: string; impressions: number | null; engagements: number | null; views: number | null };
 export async function learningRows(tx: Prisma.TransactionClient, scope: Scope, brandVersion: number, at: Date, snapshotIds: string[] | null = null): Promise<LearningRow[]> {
   // Exact observation-age window in SQL avoids fetching unbounded lifetime histories.
   const records = await tx.$queryRaw<StoredRow[]>`
-    SELECT p.id, m.id AS "snapshotId", p."connectionId", c.provider, p.payload, p."payloadHash", p."publishedAt", m."observedAt", m."definitionVersion", m.impressions, m.engagements
+    SELECT p.id, m.id AS "snapshotId", p."connectionId", c.provider, p.payload, p."payloadHash", p."publishedAt", m."observedAt", m."definitionVersion", m.impressions, m.engagements, m.views
     FROM "MetricSnapshot" m JOIN "SocialPublication" p ON p.id=m."publicationId" AND p."businessId"=m."businessId" AND p."organizationId"=m."organizationId"
     JOIN "SocialConnection" c ON c.id=p."connectionId" AND c."businessId"=p."businessId" AND c."organizationId"=p."organizationId"
     JOIN "CreativeRevision" r ON r.id=p."revisionId" JOIN "ProductionItem" i ON i.id=r."itemId" JOIN "ProductionPlan" plan ON plan.id=i."planId"
@@ -59,7 +65,7 @@ export async function learningRows(tx: Prisma.TransactionClient, scope: Scope, b
       AND p."metricsInvalidatedAt" IS NULL
       AND c.provider <> 'Facebook'
       AND (c.provider <> 'LinkedIn' OR m."definitionVersion" ~ '^linkedin-organic-post-likes-comments-shares-[0-9]{6}-v2$')
-      AND (c.provider <> 'Instagram' OR m."definitionVersion" ~ '^instagram-feed-views-reach-total-interactions-v[1-9][0-9]?[.]0-v1$')
+      AND (c.provider <> 'Instagram' OR m."definitionVersion" ~ '^instagram-(feed|reel)-views-reach-total-interactions-v[1-9][0-9]?[.]0-v1$')
       AND p."publishedAt">=${new Date(at.getTime() - 45 * DAY)} AND m."observedAt"<=${at}
       AND m."observedAt">=p."publishedAt" + INTERVAL '72 hours' AND m."observedAt"<=p."publishedAt" + INTERVAL '96 hours'
       AND (${snapshotIds === null} OR m.id=ANY(${snapshotIds ?? []}::text[]))
@@ -71,22 +77,23 @@ export async function learningRows(tx: Prisma.TransactionClient, scope: Scope, b
     if (!parsed.success || parsed.data.channel !== row.provider || payloadHash(parsed.data) !== row.payloadHash) continue;
     // One earliest age-matched snapshot per post. A post cannot inflate the sample.
     if (used.has(row.id)) continue;
+    if (row.provider === "Instagram" && (row.impressions !== null || (parsed.data.format === "static" ? !parsed.data.image || !!parsed.data.video || !row.definitionVersion.startsWith("instagram-feed-") : !parsed.data.video || !row.definitionVersion.startsWith("instagram-reel-")))) continue;
     used.add(row.id);
-    result.push({ ...row, format: parsed.data.format, reading: { observedAt: row.observedAt, definitionVersion: row.definitionVersion, impressions: row.impressions, engagements: row.engagements, reach: null, clicks: null, videoViews: null } });
+    result.push({ ...row, format: parsed.data.format, reading: { observedAt: row.observedAt, definitionVersion: row.definitionVersion, impressions: row.impressions, engagements: row.engagements, views: row.views, reach: null, clicks: null, videoViews: null } });
   }
   return result;
 }
 
 export async function validLearningEvidence(tx: Prisma.TransactionClient, scope: Scope, brandVersion: number, raw: unknown, hypothesis: string, now = new Date(), maxAgeDays = 7) {
-  const parsed = learningEvidence.safeParse(raw);
+  const parsed = z.union([learningEvidence, viewLearningEvidence]).safeParse(raw);
   if (!parsed.success) return false;
   const evidence = parsed.data, evaluated = new Date(evidence.evaluatedAt);
   if (evaluated > now || now.getTime() - evaluated.getTime() > maxAgeDays * DAY) return false;
-  const points = evidence.cohorts.flatMap(c => c.points);
+  const points = evidence.cohorts.flatMap<{ publicationId: string; snapshotId: string }>(c => c.points);
   if (new Set(points.map(p => p.publicationId)).size !== points.length || new Set(points.map(p => p.snapshotId)).size !== points.length) return false;
   const rows = await learningRows(tx, scope, brandVersion, evaluated, points.map(p => p.snapshotId));
   if (rows.length !== points.length) return false;
-  const rebuilt = experimentCandidate(rows, evaluated);
+  const rebuilt = evidence.kind === "OBSERVATIONAL_V2" ? impressionCandidate(rows, evaluated) : viewExperimentCandidate(rows, evaluated);
   return !!rebuilt && rebuilt.hypothesis === hypothesis && JSON.stringify(rebuilt.evidence) === JSON.stringify(evidence);
 }
 

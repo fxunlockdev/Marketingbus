@@ -1,5 +1,13 @@
 # Acceptance ledger — 19 October 2026
 
+## 20 October — native Instagram observation learning
+
+Implemented a separate native-view policy connecting retained Instagram feed/Reel observations to human-reviewed, reversible planning experiments. Exact evidence is revalidated before promotion and recall; metrics are never relabelled as impressions. The wording guidance keeps the difference between feed displays and Reel plays explicit. No new model calls, infrastructure service, migration or provider activation is introduced. [Policy and remaining boundaries](NATIVE-VIEW-LEARNING.md).
+
+Focused local verification passes **160 tests across five suites**, plus production build/TypeScript and **two browser journeys** covering approval, reversal, altered-evidence denial, tenant/role boundaries, mobile layout and automated accessibility. The browser screenshot was visually inspected. Its synthetic storage container/objects/TLS files were removed. Full regression and deployment are not yet claimed for this increment; later observations will be appended here. No live provider request, real post, email or payment occurred.
+
+The preceding scraper source `86aedb0` has successful independent [CI 39307339414](https://github.com/fxunlockdev/Marketingbus/actions/runs/39307339414). The production scraper remains disabled pending hosting/isolation and cost acceptance; test success does not activate it or establish the USD 10/customer/month infrastructure target.
+
 ## Application-owned business knowledge graph — release verification
 
 Runtime `studio-v52-business-knowledge`, additive migration 58, projects a typed graph from existing PostgreSQL facts, explicit preferences, activated lessons, revalidated evidence and selected asset hashes. No Graphiti dependency, graph server, embeddings or additional provider calls were added. New copy/image/video requests persist exact task-scoped snapshots; weekly plan briefs retain planning knowledge. Changed knowledge is checked at authorization, submission and delivery. Source-specific rights/approval checks remain authoritative; completed outputs retain their historical review workflow. See [scope and limitations](BUSINESS-KNOWLEDGE.md).
