@@ -8,7 +8,7 @@ import { assertCurrentExport } from "../composition/exports";
 import { placements, type Placement } from "../composition/document";
 import type { Scope } from "../production/service";
 import { assertNoBlockingComments } from "../workflows/approvals";
-import { publicationImage, type PublicationPayload } from "./contracts";
+import { publicationImage, reelPublishingEnabled, type PublicationPayload } from "./contracts";
 import { withSubmissionContext, type SubmissionContext } from "./submission-journal";
 import { assertPublicationVideo } from "./video-transfer";
 import { MAX_VIDEO_BYTES } from "../video/limits";
@@ -71,7 +71,7 @@ export function createImageTransfer(store: () => AssetStore = () => assetStore(M
   const current = async (tx: Prisma.TransactionClient, post: Parameters<Parameters<typeof withSubmissionContext>[1]>[1], ctx: SubmissionContext) => {
     if (post.status !== "SUBMITTING" || !post.leaseUntil || post.leaseUntil <= new Date() || post.submissionAdapterVersion) throw new AppError(409, "Image transfer ownership changed.");
     if (post.mediaTransferVersion && post.mediaTransferVersion !== ctx.adapterVersion) throw new AppError(409, "Image transfer configuration changed.");
-    if (ctx.payload.video && process.env.INSTAGRAM_REELS_ENABLED !== "true") throw new AppError(503, "Reels publishing is paused.");
+    if (ctx.payload.video && !reelPublishingEnabled(ctx.account.provider)) throw new AppError(503, "Reels publishing is paused.");
     return assertPublicationMedia(tx, { businessId: post.businessId, organizationId: post.organizationId, actorId: "social-media-worker" }, post.revisionId, ctx.payload);
   };
   return {

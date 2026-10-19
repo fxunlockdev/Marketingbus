@@ -3,12 +3,15 @@ import { openSecret } from "../secrets";
 import { lockBusiness } from "../production/service";
 import { frozenCopy, payloadHash, validCandidateId } from "./integrity";
 import { assertPublicationMedia } from "./image-transfer";
-import type { Account, PublicationPayload } from "./contracts";
+import { reelPublishingEnabled, type Account, type PublicationPayload } from "./contracts";
 export type SubmissionContext = { requestId: string; account: Account; payload: PublicationPayload; adapterVersion: string };
 export interface SubmissionJournal {
   begin(context: SubmissionContext): Promise<boolean>;
   record(context: SubmissionContext, externalPostId: string): Promise<void>;
   candidate(context: SubmissionContext): Promise<string | null>;
+  // Some asynchronous APIs acknowledge publication without returning a post ID.
+  // Lookup of their recorded media requires this exact durable publication fence.
+  started?(context: SubmissionContext): Promise<boolean>;
 }
 // A durable local write fence is not provider idempotency. Lost remote IDs remain uncertain.
 import type { Prisma, SocialPublication, SocialConnection } from "@prisma/client";
@@ -27,11 +30,12 @@ export async function withSubmissionContext<T>(context: SubmissionContext, run: 
 }
 const transact = withSubmissionContext;
 export const submissionJournal: SubmissionJournal = {
+  started: context => transact(context, async (_tx, post) => post.submissionAdapterVersion === context.adapterVersion),
   begin: context => transact(context, async (tx, post) => {
     if (post.submissionAdapterVersion || post.status !== "SUBMITTING" || !post.leaseUntil || post.leaseUntil <= new Date()) return false;
     if (context.payload.mediaExportId) {
       if (post.mediaTransferVersion !== context.adapterVersion || !post.mediaExternalId || !post.mediaUploaded) return false;
-      if (context.payload.video && process.env.INSTAGRAM_REELS_ENABLED !== "true") return false;
+      if (context.payload.video && !reelPublishingEnabled(context.account.provider)) return false;
       await assertPublicationMedia(tx, { businessId: post.businessId, organizationId: post.organizationId, actorId: "social-transport" }, post.revisionId, context.payload);
     }
     await tx.socialPublication.update({ where: { id: post.id }, data: { submissionAdapterVersion: context.adapterVersion } });

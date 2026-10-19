@@ -2,23 +2,26 @@ import { createHmac } from "node:crypto";
 import { z } from "zod";
 import { assertMetaFresh, createMetaOAuthAdapter, META_SCOPES, metaClient, metaId, metaSettings, verifyMetaToken, type MetaSettings } from "./meta-oauth";
 import { SocialReadError, socialJson } from "./provider-http";
-import { publicationPayload, type Account, type PublicationPayload, type PublishedReceipt, type SocialAdapter } from "./contracts";
+import { publicationPayload, reelPublishingEnabled, type Account, type PublicationPayload, type PublishedReceipt, type SocialAdapter } from "./contracts";
 import { safeSocialPermalink } from "./permalink";
 import { submissionJournal, type SubmissionContext, type SubmissionJournal } from "./submission-journal";
 import { validCandidateId } from "./integrity";
 import { createImageTransfer, facebookImageId, type SocialImageTransfer } from "./image-transfer";
 import { prepareFacebookImage, readFacebookImage } from "./facebook-image-upload";
 import { facebookMetricReader } from "./facebook-metrics";
+import { facebookReels } from "./facebook-reels";
 
 const failure = () => Error("Facebook publication could not be verified.");
 export function createFacebookPublishingAdapter(raw: MetaSettings, fetcher: typeof fetch = fetch, journal: SubmissionJournal = submissionJournal, images: { enabled: boolean; transfer?: SocialImageTransfer } = { enabled: process.env.FACEBOOK_IMAGE_PUBLISHING_ENABLED === "true" }): SocialAdapter {
   const config = metaSettings.parse(raw);
   const version = `${createMetaOAuthAdapter("Facebook", config).config.version}:publish-v1`;
   const transfer = images.transfer ?? createImageTransfer();
-  const context = (account: Account, payload: PublicationPayload, requestId: string): SubmissionContext => ({ account, payload, requestId, adapterVersion: payload.image ? `${version}:image-v1` : version });
+  const reels = facebookReels(config, fetcher, transfer, journal);
+  const context = (account: Account, payload: PublicationPayload, requestId: string): SubmissionContext => ({ account, payload, requestId, adapterVersion: payload.video ? `${version}:reel-v1` : payload.image ? `${version}:image-v1` : version });
   function validatePayload(account: Account, payload: PublicationPayload) {
     publicationPayload.parse(payload); metaId.parse(account.externalAccountId);
-    if (account.provider !== "Facebook" || payload.channel !== "Facebook" || payload.format !== "static" || payload.image && !images.enabled) throw failure();
+    if (account.provider !== "Facebook" || payload.channel !== "Facebook" ||
+        (payload.video ? !reelPublishingEnabled("Facebook") : payload.format !== "static" || payload.image && !images.enabled)) throw failure();
   }
   async function authorize(account: Account, signal: AbortSignal) {
     if (account.provider !== "Facebook") throw failure();
@@ -48,6 +51,8 @@ export function createFacebookPublishingAdapter(raw: MetaSettings, fetcher: type
   }
   return {
     imagePublishingAvailable: images.enabled,
+    videoPublishingAvailable: reelPublishingEnabled("Facebook"),
+    videoMetricsAvailable: false,
     metricsAvailable: process.env.FACEBOOK_METRICS_ENABLED === "true",
     metrics: facebookMetricReader(config, fetcher, authorize),
     async publish(account, payload, requestId, signal) {
@@ -60,6 +65,10 @@ export function createFacebookPublishingAdapter(raw: MetaSettings, fetcher: type
       }
       const ctx = context(account, payload, requestId);
       try {
+        if (payload.video) {
+          const receipt = await reels.publish(ctx, signal);
+          return receipt ? { state: "published", receipt } : { state: "uncertain" };
+        }
         const imageId = payload.image ? await prepareFacebookImage(ctx, signal, config, fetcher, transfer) : undefined;
         if (!await journal.begin(ctx)) return { state: "uncertain" };
         signal.throwIfAborted(); assertMetaFresh(config);
@@ -77,7 +86,13 @@ export function createFacebookPublishingAdapter(raw: MetaSettings, fetcher: type
     async reconcile(account, requestId, payload, signal) {
       try {
         validatePayload(account, payload);
-        const ctx = context(account, payload, requestId), id = await journal.candidate(ctx);
+        const ctx = context(account, payload, requestId);
+        if (payload.video) {
+          if (!await journal.started?.(ctx)) return null;
+          await authorize(account, signal);
+          return await reels.receipt(ctx, signal);
+        }
+        const id = await journal.candidate(ctx);
         if (!id) return null;
         let imageId: string | undefined;
         if (payload.image) {

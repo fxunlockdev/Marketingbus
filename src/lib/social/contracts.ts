@@ -29,10 +29,14 @@ export const publicationPayload = z
     video: publicationVideo.optional(),
   })
   .strict().refine(p => p.mediaExportId === null ? p.image === undefined && p.video === undefined :
-    !!p.image && !p.video && p.format === "static" || !!p.video && !p.image && p.format === "video" && p.channel === "Instagram", "Unsupported media binding")
+    !!p.image && !p.video && p.format === "static" || !!p.video && !p.image && p.format === "video" && ["Instagram", "Facebook"].includes(p.channel), "Unsupported media binding")
+  .refine(p => p.channel !== "Facebook" || !p.video || p.video.durationMs >= 4000 && !p.video.shareToFeed, "Facebook Reels require at least four seconds and cannot use Instagram feed placement.")
   .refine(p => p.channel !== "Facebook" || !p.image || p.image.bytes <= 4 * 1024 * 1024, "Facebook image exports must be 4 MB or smaller.")
   .refine(p => p.channel !== "Instagram" || p.caption.length <= 2200 && (!!p.video || p.image?.width === 1080 && [1080, 1350].includes(p.image.height)), "Instagram requires an approved image or Reel and a caption of 2,200 characters or fewer.");
 export type PublicationPayload = z.infer<typeof publicationPayload>;
+export function reelPublishingEnabled(provider: string) {
+  return provider === "Instagram" ? process.env.INSTAGRAM_REELS_ENABLED === "true" : provider === "Facebook" && process.env.FACEBOOK_REELS_ENABLED === "true";
+}
 export const publishedReceipt = z
   .object({
     externalPostId: z.string().min(1).max(500),

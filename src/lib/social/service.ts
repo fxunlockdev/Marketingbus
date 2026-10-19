@@ -219,9 +219,9 @@ export async function manageSocial(
           throw new AppError(409, "Resolve factual checks before publishing.");
         if (input.mediaExportId && !adapters[provider]?.imagePublishingAvailable) throw new AppError(409, "Image publishing is not enabled for this destination.");
         // Each media type needs a verified export and a corresponding platform transport.
-        if (input.videoRenderId && (!adapters[provider]?.videoPublishingAvailable || provider !== "Instagram" || !["static", "motion", "video"].includes(item.format) || input.mediaExportId))
-          throw new AppError(409, "Choose one approved final Reel for an enabled Instagram video destination.");
-        if (input.shareToFeed !== undefined && !input.videoRenderId) throw new AppError(400, "Feed placement applies only to Reels.");
+        if (input.videoRenderId && (!adapters[provider]?.videoPublishingAvailable || !["Instagram", "Facebook"].includes(provider) || !["static", "motion", "video"].includes(item.format) || input.mediaExportId))
+          throw new AppError(409, "Choose one approved final Reel for an enabled video destination.");
+        if (input.shareToFeed !== undefined && (!input.videoRenderId || provider !== "Instagram")) throw new AppError(400, "Feed placement applies only to Instagram Reels.");
         if (!input.videoRenderId && (item.format !== "static" || provider === "Instagram" && !input.mediaExportId))
           throw new AppError(
             409,
@@ -244,6 +244,7 @@ export async function manageSocial(
         const image = input.mediaExportId ? await publicationExport(tx, scope, input.mediaExportId, revision.id) : null;
         if (image && image.row.purgeAfter <= scheduledFor) throw new AppError(409, "Schedule before this image export expires or save a new approved version.");
         const video = input.videoRenderId ? await publicationRender(tx, scope, input.videoRenderId, revision.id) : null;
+        if (video && provider === "Facebook" && video.video.durationMs < 4000) throw new AppError(409, "Facebook Reels require at least four seconds.");
         if (video && video.row.purgeAfter <= scheduledFor) throw new AppError(409, "Schedule before this final video expires or save a new approved version.");
         const payload = publicationPayload.parse({
           caption: creative.caption,

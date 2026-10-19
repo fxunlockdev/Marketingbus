@@ -88,6 +88,7 @@ async function performanceRows(scope: Scope) {
   });
   return posts.map((p) => {
     let instagramDefinitionMatches = false;
+    let facebookDefinitionMatches = false;
     let format = p.revision.item.format;
     if (p.connection.provider === "Instagram") {
       try {
@@ -96,13 +97,20 @@ async function performanceRows(scope: Scope) {
         instagramDefinitionMatches = new RegExp(`^instagram-${payload.video ? "reel" : "feed"}-views-reach-total-interactions-v[1-9][0-9]?\\.0-v1$`).test(p.metrics[0]?.definitionVersion ?? "");
       } catch { /* A definition cannot override an invalid immutable source. */ }
     }
+    if (p.connection.provider === "Facebook") {
+      try {
+        const payload = frozenCopy(p.payload, p.payloadHash, "Facebook");
+        format = payload.format;
+        facebookDefinitionMatches = !payload.video && /^facebook-post-views-unique-clicks-reactions-v[1-9][0-9]?\.0-v1$/.test(p.metrics[0]?.definitionVersion ?? "");
+      } catch { /* Feed metrics cannot be attached to an unverified or video source. */ }
+    }
     return {
     id: p.id,
     connectionId: p.connectionId,
     provider: p.connection.provider,
     format,
     publishedAt: p.publishedAt!,
-    reading: p.metricsInvalidatedAt || (p.connection.provider === "LinkedIn" && !/^linkedin-organic-post-likes-comments-shares-[0-9]{6}-v2$/.test(p.metrics[0]?.definitionVersion ?? "")) || (p.connection.provider === "Instagram" && !instagramDefinitionMatches) || (p.connection.provider === "Facebook" && !/^facebook-post-views-unique-clicks-reactions-v[1-9][0-9]?\.0-v1$/.test(p.metrics[0]?.definitionVersion ?? "")) ? null : p.metrics[0] ?? null,
+    reading: p.metricsInvalidatedAt || (p.connection.provider === "LinkedIn" && !/^linkedin-organic-post-likes-comments-shares-[0-9]{6}-v2$/.test(p.metrics[0]?.definitionVersion ?? "")) || (p.connection.provider === "Instagram" && !instagramDefinitionMatches) || (p.connection.provider === "Facebook" && !facebookDefinitionMatches) ? null : p.metrics[0] ?? null,
     };
   });
 }

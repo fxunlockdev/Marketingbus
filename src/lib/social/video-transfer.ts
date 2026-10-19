@@ -20,11 +20,11 @@ export async function publicationRender(client: Prisma.TransactionClient | typeo
       ctx.document.shots.some(shot => !reviews.some(r => r.shotId === shot.id && r.hash === shotHash(ctx.document, shot))))
     throw new AppError(409, "Review and export the current complete storyboard before publishing.");
   const video = publicationVideo.safeParse({ sha256: row.sha256, bytes: row.bytes, width: dimensions.width, height: dimensions.height, durationMs: row.durationMs, shareToFeed: false });
-  if (!video.success) throw new AppError(409, "Instagram Reels require a portrait 720×1280 export, 3–30 seconds, at most 20 MB.");
+  if (!video.success) throw new AppError(409, "Reels require a portrait 720×1280 export, 3–30 seconds, at most 20 MB; Facebook requires at least four seconds.");
   return { row, video: video.data, storyboard: ctx.row };
 }
 export async function assertPublicationVideo(client: Prisma.TransactionClient | typeof db, scope: Scope, revisionId: string, payload: PublicationPayload) {
-  if (!payload.video || !payload.mediaExportId || payload.channel !== "Instagram") throw new AppError(409, "An approved final Reel is required.");
+  if (!payload.video || !payload.mediaExportId || !["Instagram", "Facebook"].includes(payload.channel)) throw new AppError(409, "An approved final Reel is required.");
   const current = await publicationRender(client, scope, payload.mediaExportId, revisionId);
   const { shareToFeed: _placement, ...expected } = payload.video;
   const { shareToFeed: _default, ...actual } = current.video;
