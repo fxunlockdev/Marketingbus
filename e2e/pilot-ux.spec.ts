@@ -56,6 +56,10 @@ test("review filters combine channel and format, and reviewed procedures recall 
     await expect(panel.getByRole("heading", { name: "LinkedIn · copy · active" })).toBeVisible();
     const graph = await (await page.request.get(`/api/businesses/${id}/knowledge-graph?task=copy&channel=LinkedIn`)).json();
     expect(graph.nodes.some((n: { text: string }) => n.text.includes("concrete detail"))).toBe(true);
+    const outcomes = panel.locator("summary", { hasText: "Use and review outcomes" });
+    await expect(outcomes).toContainText("0 delivered outputs");
+    await outcomes.focus(); await page.keyboard.press("Enter");
+    await expect(panel.getByText("No retained delivered outputs with this procedure yet.")).toBeVisible();
     expect((await new AxeBuilder({ page }).include("main").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
     await panel.getByRole("button", { name: "Retire procedure", exact: true }).click();
     await expect(panel.getByRole("heading", { name: "LinkedIn · copy · retired" })).toBeVisible();

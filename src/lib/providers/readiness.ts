@@ -1,6 +1,7 @@
 import { configuredModels, assertExecutionEnabled } from "../production/router";
 import { selfHostedScraperBase } from "../knowledge/service";
 import { emailConfiguration } from "../identity/service";
+import { hasHiggsfieldCredentials } from "./higgsfield-credentials";
 export function providerReadiness(){
  let models:ReturnType<typeof configuredModels>=[];let enabled=false;
  try{models=configuredModels().filter(m=>new Date(m.verifiedUntil).getTime()>Date.now());assertExecutionEnabled();enabled=true;}catch{/* Status never exposes secrets or configuration contents. */}
@@ -8,7 +9,7 @@ export function providerReadiness(){
   {id:"openai",name:"OpenAI",role:"Strategy and structured copy",configured:!!(process.env.OPENAI_API_KEY&&(process.env.OPENAI_MODEL||models.some(m=>m.provider==="openai")))},
   {id:"anthropic",name:"Claude",role:"Creative copy and revisions",configured:!!(process.env.ANTHROPIC_API_KEY&&(process.env.ANTHROPIC_MODEL||models.some(m=>m.provider==="anthropic")))},
   {id:"gemini",name:"Gemini",role:"Reference-led brand imagery",configured:!!(process.env.GEMINI_API_KEY&&process.env.GEMINI_IMAGE_MODEL)},
-  {id:"higgsfield",name:"Higgsfield",role:"Generated footage and media",configured:!!(process.env.HIGGSFIELD_API_KEY&&process.env.HIGGSFIELD_API_SECRET)}
+  {id:"higgsfield",name:"Higgsfield",role:"Generated footage and media",configured:hasHiggsfieldCredentials()}
 ].map(p=>{
  const implemented=["openai","anthropic"].includes(p.id);
  const executionEnabled=implemented&&p.configured&&enabled&&models.some(m=>m.provider===p.id);

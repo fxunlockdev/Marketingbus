@@ -2,7 +2,9 @@
   "name": "marketingbus",
   "version": "0.1.0",
   "private": true,
-  "engines": { "node": ">=26 <27" },
+  "engines": {
+    "node": ">=26 <27"
+  },
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1",
     "build": "prisma generate && next build",
@@ -21,8 +23,10 @@
     "@aws-sdk/client-s3": "3.1151.0",
     "@fontsource-variable/figtree": "^5.3.0",
     "@fontsource/figtree": "5.3.0",
+    "@higgsfield/client": "0.2.6",
     "@prisma/client": "6.19.3",
     "bcryptjs": "3.0.3",
+    "dotenv": "18.0.8",
     "fontkit": "2.0.4",
     "ipaddr.js": "2.3.0",
     "lucide-react": "0.577.0",
@@ -45,8 +49,8 @@
   "devDependencies": {
     "@axe-core/playwright": "4.13.0",
     "@playwright/test": "1.58.2",
-    "@types/node": "22.19.15",
     "@types/fontkit": "2.0.9",
+    "@types/node": "22.19.15",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "jszip": "3.10.1",

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createHiggsfieldTransport, higgsfieldRequest, type HiggsfieldInput, type HiggsfieldSettings } from "../providers/higgsfield";
 import { downloadProviderMedia, type MediaDownload } from "../providers/media-download";
 import type { ShotAdapter, ShotRoute } from "./generation-contracts";
+import { higgsfieldCredentials } from "../providers/higgsfield-credentials";
 
 export const HIGGSFIELD_SHOT_VERSION = "higgsfield-silent-v1";
 export const HIGGSFIELD_QUOTED_VERSION = "higgsfield-account-quote-v1";
@@ -49,16 +50,18 @@ export function createHiggsfieldShotAdapter(settings: HiggsfieldSettings, fetche
 
 function configuredSettings() {
   return {
-    keyId: process.env.HIGGSFIELD_API_KEY || "", secret: process.env.HIGGSFIELD_API_SECRET || "",
+    ...higgsfieldCredentials(),
     verifiedUntil: process.env.HIGGSFIELD_VERIFIED_UNTIL || "",
     outputHosts: JSON.parse(process.env.HIGGSFIELD_OUTPUT_HOSTS_JSON || "[]") as string[],
   };
 }
 export function higgsfieldConfigurationFingerprint() {
   const enabled = process.env.HIGGSFIELD_VIDEO_ENABLED === "true";
+  let credentials: ReturnType<typeof higgsfieldCredentials> | undefined;
+  try { credentials = higgsfieldCredentials(); } catch { /* Invalid values still invalidate quotes, without leaking secrets. */ }
   // Only this digest enters the shared worker/quote fingerprint. No secrets are returned.
   return createHash("sha256").update(JSON.stringify(enabled ? {
-    enabled, key: process.env.HIGGSFIELD_API_KEY, secret: process.env.HIGGSFIELD_API_SECRET,
+    enabled, ...(credentials ? (credentials.apiKey ? { apiKey: credentials.apiKey } : { key: credentials.keyId, secret: credentials.secret }) : { invalidCredentials: true, combined: process.env.HF_CREDENTIALS, alias: process.env.HF_API_KEY, key: process.env.HIGGSFIELD_API_KEY, secret: process.env.HIGGSFIELD_API_SECRET }),
     until: process.env.HIGGSFIELD_VERIFIED_UNTIL, hosts: process.env.HIGGSFIELD_OUTPUT_HOSTS_JSON,
     policy: process.env.HIGGSFIELD_EXPENSE_POLICY, version: HIGGSFIELD_QUOTED_VERSION,
   } : { enabled })).digest("hex");

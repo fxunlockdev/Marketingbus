@@ -7,6 +7,7 @@ import { assertExecutionEnabled, configurationHash, selectRoute, routeSchema } f
 import { assertWorkerReady } from "../production/readiness";
 import { authorizeSupplier } from "../production/budget";
 import { reserveCreditsInTransaction, finishReservationInTransaction } from "../billing/wallet";
+import { procedureOutcomes } from "./procedure-outcomes";
 import { currentProcedureEpisodes, episodeRefs, hashProcedure, procedureChannel, procedureEpisodes, procedureEvidence, procedurePrompt, procedureSchema, procedureSystem, validProcedure } from "./procedure-evidence";
 
 export const reflectionConfigurationHash = () => hashProcedure({ rates: configurationHash(), system: procedureSystem, schema: procedureSchema, version: 1 });
@@ -25,13 +26,15 @@ export async function readProcedures(scope: Scope) {
     const rows = await tx.learningProposal.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId, status: { startsWith: "PROCEDURE_" } }, orderBy: { createdAt: "desc" }, take: 30 });
     const jobs = await tx.brandAnalysis.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId, purpose: "SKILL_REFLECTION" }, orderBy: { createdAt: "desc" }, take: 10 });
     const memories = await tx.memory.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId, kind: "REVIEWED_PROCEDURE" } });
+    const outcomes = await procedureOutcomes(tx, scope, rows);
     return { canEdit: ["OWNER", "ADMIN", "EDITOR"].includes(member.role),
+      outcomeWindow: { since: outcomes.since, sampled: outcomes.sampled },
       available: procedureChannel.options.map(channel => ({ channel, count: episodes.filter(e => e.channel === channel).length })),
       reflections: jobs.map(j => ({ id: j.id, status: j.status, credits: j.credits, expiresAt: j.expiresAt, errorCode: j.errorCode })),
       procedures: await Promise.all(rows.map(async r => {
         const parsed = procedureEvidence.safeParse(r.evidence);
         const retained = r.status !== "PROCEDURE_ACTIVE" || memories.some(m => m.id === r.memoryId && m.text === r.hypothesis);
-        return { id: r.id, status: r.status, instruction: r.hypothesis, candidate: parsed.success ? parsed.data.candidate : null,
+        return { id: r.id, status: r.status, instruction: r.hypothesis, candidate: parsed.success ? parsed.data.candidate : null, outcomes: outcomes.totals[r.id],
           valid: retained && !!business.confirmedAt && r.brandVersion === business.version && await validProcedure(tx, scope, business.version, r.evidence, r.hypothesis) };
       })) };
   });

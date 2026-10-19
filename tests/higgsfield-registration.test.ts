@@ -3,6 +3,8 @@ import { configuredShotAdapters, selectShotRoute, shotConfigurationHash } from "
 import { createHiggsfieldTransport } from "../src/lib/providers/higgsfield";
 
 function configuration() {
+  vi.stubEnv("HF_CREDENTIALS", "");
+  vi.stubEnv("HF_API_KEY", "");
   const settings = { keyId: "fixture-key-id", secret: "fixture-private-secret", verifiedUntil: new Date(Date.now() + 86400000).toISOString(), outputHosts: ["cdn.example.com"] };
   vi.stubEnv("HIGGSFIELD_API_KEY", settings.keyId); vi.stubEnv("HIGGSFIELD_API_SECRET", settings.secret);
   vi.stubEnv("HIGGSFIELD_VIDEO_ENABLED", "true"); vi.stubEnv("HIGGSFIELD_EXPENSE_POLICY", "account-quote-v1");
@@ -24,6 +26,31 @@ describe("explicit Higgsfield delivery registration", () => {
   it("does not activate with credentials alone or a truthy-looking nonliteral flag", () => {
     configuration();
     for (const enabled of ["", "false", "1", "TRUE", "yes"]) { vi.stubEnv("HIGGSFIELD_VIDEO_ENABLED", enabled); expect(configuredShotAdapters()).toEqual([]); }
+  });
+  it("accepts HF_CREDENTIALS in the real shot adapter with identical account and quote identity", () => {
+    const network = vi.fn(); vi.stubGlobal("fetch", network);
+    const { settings, rate } = configuration(), original = shotConfigurationHash();
+    vi.stubEnv("HF_CREDENTIALS", `${settings.keyId}:${settings.secret}`);
+    vi.stubEnv("HIGGSFIELD_API_KEY", ""); vi.stubEnv("HIGGSFIELD_API_SECRET", "");
+    expect(shotConfigurationHash()).toBe(original);
+    expect(selectShotRoute(5000, configuredShotAdapters())).toMatchObject(rate);
+    expect(network).not.toHaveBeenCalled();
+    vi.stubEnv("HF_CREDENTIALS", `${settings.keyId}:rotated-private-secret`);
+    expect(shotConfigurationHash()).not.toBe(original);
+    expect(() => selectShotRoute(5000, configuredShotAdapters())).toThrow("verified provider");
+  });
+  it.each(["HF_CREDENTIALS", "HF_API_KEY", "HIGGSFIELD_API_KEY"])("accepts a complete copied key unchanged through %s", variable => {
+    const { settings } = configuration();
+    vi.stubEnv("HIGGSFIELD_API_KEY", ""); vi.stubEnv("HIGGSFIELD_API_SECRET", "");
+    const apiKey = "fixture-opaque-complete-credential";
+    vi.stubEnv(variable, apiKey);
+    const accountId = createHiggsfieldTransport({ apiKey, verifiedUntil: settings.verifiedUntil, outputHosts: settings.outputHosts }).credentialFingerprint;
+    expect(configuredShotAdapters()[0].accountId).toBe(accountId);
+  });
+  it.each(["missing-separator", "key:secret:extra", "fixture-key-id:", "fixture-key-id:short", "fixture-key-id:secret-with-newline\n", "different-key-id:fixture-private-secret"])("rejects malformed or conflicting combined credentials without exposing them", value => {
+    const { settings } = configuration(); vi.stubEnv("HF_CREDENTIALS", value);
+    expect(() => configuredShotAdapters()).toThrow("operator configuration");
+    try { configuredShotAdapters(); } catch (error) { expect(String(error)).not.toContain(value); expect(String(error)).not.toContain(settings.secret); }
   });
   it.each([
     ["HIGGSFIELD_EXPENSE_POLICY", ""], ["HIGGSFIELD_EXPENSE_POLICY", "final"],

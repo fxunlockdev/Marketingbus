@@ -36,6 +36,17 @@ describe("Higgsfield fixed-model network transport", () => {
     expect(request.path).toBe("/kling-video/v3.0/std/text-to-video");
     expect(request.body).toEqual({ prompt: f.input.prompt, duration: 3, aspect_ratio: "9:16", sound: "off", cfg_scale: 0.5, multi_shots: false });
   });
+  it("preserves a complete opaque API key in authorization and signs receipts without leaking it", async () => {
+    const f = fixture(), apiKey = "fixture-opaque-complete-credential";
+    const settings = { apiKey, verifiedUntil: f.config.verifiedUntil, outputHosts: f.config.outputHosts };
+    const client = createHiggsfieldTransport(settings, f.fetcher, f.download);
+    const estimate = await client.estimate(f.input, f.signal()), receipt = await client.submit(f.input, estimate, 150000, f.signal());
+    expect(f.fetcher.mock.calls[0][1]?.headers).toMatchObject({ Authorization: `Key ${apiKey}` });
+    expect(f.fetcher.mock.calls[1][1]?.headers).toMatchObject({ Authorization: `Key ${apiKey}` });
+    expect(JSON.stringify({ estimate, receipt })).not.toContain(apiKey);
+    expect(client.bindSubmission(receipt, f.input)).toEqual(receipt);
+    expect(() => createHiggsfieldTransport({ ...settings, apiKey: "another-opaque-complete-credential" }).bindSubmission(receipt, f.input)).toThrow();
+  });
   it.each(["model", "duration", "fraction", "short", "long", "prompt", "empty", "operation", "extra"])("rejects invalid %s input before HTTP", async kind => {
     const f = fixture(), input: Record<string, unknown> = { ...f.input };
     if (kind === "model") input.model = "https://attacker.example";

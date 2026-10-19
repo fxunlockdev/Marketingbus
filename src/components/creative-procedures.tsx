@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-type Procedure = { id: string; status: string; instruction: string; valid: boolean; candidate: null | { channel: string; task: string; examples: { id: string; feedbackQuote: string; approvedQuote: string }[] } };
-type Data = { canEdit: boolean; available: { channel: string; count: number }[]; reflections: { id: string; status: string; credits: number; errorCode: string | null }[]; procedures: Procedure[] };
+import type { ProcedureOutcomes } from "../lib/harness/procedure-outcomes";
+type Procedure = { id: string; status: string; instruction: string; valid: boolean; outcomes: ProcedureOutcomes; candidate: null | { channel: string; task: string; examples: { id: string; feedbackQuote: string; approvedQuote: string }[] } };
+type Data = { canEdit: boolean; outcomeWindow: { since: string; sampled: boolean }; available: { channel: string; count: number }[]; reflections: { id: string; status: string; credits: number; errorCode: string | null }[]; procedures: Procedure[] };
 export function CreativeProcedures({ businessId }: { businessId: string }) {
   const [data, setData] = useState<Data | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState(""), [message, setMessage] = useState("");
   const [channel, setChannel] = useState("Instagram"), [reviewed, setReviewed] = useState<Record<string, boolean>>({});
@@ -33,6 +34,13 @@ export function CreativeProcedures({ businessId }: { businessId: string }) {
       {data.procedures.map(p => <article key={p.id}>
         <h3>{p.candidate?.channel} · {p.candidate?.task} · {p.status === "PROCEDURE_ACTIVE" && !p.valid ? "Inactive: evidence changed" : p.status.replace("PROCEDURE_", "").toLowerCase()}</h3>
         <p style={{ whiteSpace: "pre-line" }}>{p.instruction}</p>
+        <details><summary>Use and review outcomes · {p.outcomes.delivered} delivered outputs</summary>
+          <p>Retained outputs from the last 90 days where this exact procedure was included in the generation context. Training examples and manual edits are excluded. Multiple outputs may belong to one creative.</p>
+          <dl><dt>Distinct creatives</dt><dd>{p.outcomes.distinctCreatives}</dd><dt>Currently approved</dt><dd>{p.outcomes.approved}</dd><dt>Changes requested</dt><dd>{p.outcomes.changesRequested}</dd><dt>Rejected</dt><dd>{p.outcomes.rejected}</dd><dt>Awaiting review</dt><dd>{p.outcomes.awaitingReview}</dd><dt>Replaced or unavailable</dt><dd>{p.outcomes.replacedOrUnavailable}</dd></dl>
+          {!p.outcomes.delivered && <p>No retained delivered outputs with this procedure yet.</p>}
+          {data.outcomeWindow.sampled && <p>Partial window: the latest 200 records per format were inspected. These are not lifetime totals.</p>}
+          <p>These are current review states, not a complete decision history. Including a lesson does not prove the model followed it, and approval does not prove the lesson caused improvement. No automatic promotion or retirement occurs from these counts.</p>
+        </details>
         <details><summary>Review supporting corrections</summary><ol>{p.candidate?.examples.map(e => <li key={e.id}><p>Feedback: “{e.feedbackQuote}”</p><p>Approved result: “{e.approvedQuote}”</p></li>)}</ol></details>
         {p.status === "PROCEDURE_PROPOSED" && <>
           <label><input type="checkbox" checked={reviewed[p.id] || false} disabled={busy || !data.canEdit || !p.valid} onChange={e => setReviewed({ ...reviewed, [p.id]: e.target.checked })} /> I checked the meaning and evidence, including conflicts with my brand rules. Replace any active procedure for this task and destination.</label>

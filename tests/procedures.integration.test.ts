@@ -9,6 +9,8 @@ import { manageBrandAnalysis } from "../src/lib/knowledge/analysis";
 import { recoverBrandAnalysisLeases } from "../src/lib/knowledge/analysis-worker";
 import { reconcileBrandAnalysis } from "../src/lib/knowledge/reconcile";
 import { applyPilotCredit } from "../src/lib/billing/pilot-credit";
+import { actOnProduction } from "../src/lib/production/service";
+import { runOneJob } from "../src/lib/production/worker";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (process.env.TEST_DATABASE_URL && (process.env.TEST_DATABASE_URL !== process.env.DATABASE_URL || !["localhost", "127.0.0.1"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Local fixtures only");
 suite("semantic creative reflection lifecycle", () => {
@@ -20,7 +22,8 @@ suite("semantic creative reflection lifecycle", () => {
  });
  afterAll(async () => {
   const jobs = await db.brandAnalysis.findMany({ where: { organizationId: { in: orgs } }, select: { id: true } });
-  await db.supplierAuthorization.deleteMany({ where: { key: { in: jobs.map(j => j.id) } } });
+  const quotes = await db.generationQuote.findMany({ where: { organizationId: { in: orgs } }, select: { id: true } });
+  await db.supplierAuthorization.deleteMany({ where: { key: { in: [...jobs, ...quotes].map(j => j.id) } } });
   await db.organization.deleteMany({ where: { id: { in: orgs } } }); await db.user.deleteMany({ where: { id: { in: users } } }); await db.workerHeartbeat.deleteMany({ where: { id: worker } }); vi.unstubAllEnvs(); await db.$disconnect();
  });
  async function setup(count = 2) {
@@ -72,6 +75,35 @@ suite("semantic creative reflection lifecycle", () => {
   await runOneProcedureReflection(async () => ({ id: "fixture-invalid", text: JSON.stringify({ procedures: [c] }), usage: { input_tokens: 100, output_tokens: 100 } }));
   const row = await db.brandAnalysis.findUniqueOrThrow({ where: { id } }); expect(row.status).toBe("FAILED"); expect(row.supplierCostMicros).toBeGreaterThan(0);
   expect((await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } })).available).toBe(500); expect((await readProcedures(a.scope)).procedures).toEqual([]);
+ });
+ it("attributes actual worker output to recalled procedures through review, retirement and manual replacement", async () => {
+  const a = await setup(), { p } = await reflect(a.scope), other = await setup();
+  await manageProcedures(a.scope, { action: "activate", proposalId: p.id, reviewedEvidence: true, replaceCurrent: true });
+  const plan = await db.productionPlan.findFirstOrThrow({ where: { businessId: a.scope.businessId } });
+  const item = await db.productionItem.create({ data: { organizationId: a.scope.organizationId, planId: plan.id, title: "Independent later creative", format: "static", channel: "LinkedIn", brief: {} } });
+  const read = async () => (await readProcedures(a.scope)).procedures.find(row => row.id === p.id)!.outcomes;
+  expect((await read()).delivered).toBe(0);
+  const q = await actOnProduction(a.scope, { action: "quote", itemId: item.id, mode: "initial", direction: "Show the value of a considered design consultation." });
+  if (!("quote" in q) || !q.quote) throw Error("Missing generation quote");
+  await actOnProduction(a.scope, { action: "accept", quoteId: q.quote.id });
+  expect((await read()).delivered).toBe(0);
+  await db.job.updateMany({ where: { organizationId: a.scope.organizationId, status: "QUEUED", kind: "STATIC_COPY" }, data: { availableAt: new Date(0) } });
+  const generated = { headline: "Design with care", caption: "Consider the details of your home.", cta: "Meet us", visualDirection: "Quiet natural lighting and generous space.", rationale: "Specific offering without unsupported claims", evidenceUsed: [] };
+  expect(await runOneJob(async (_provider, request) => {
+   expect(request.input).toContain("thoughtful concrete detail");
+   return { id: "fixture-procedure-output", text: JSON.stringify(generated), usage: { input_tokens: 100, output_tokens: 100 } };
+  })).toBe(true);
+  expect(await read()).toMatchObject({ delivered: 1, distinctCreatives: 1, awaitingReview: 1, approved: 0 });
+  await actOnProduction(a.scope, { action: "approve", itemId: item.id, version: 1 });
+  expect(await read()).toMatchObject({ delivered: 1, changesRequested: 0, approved: 1 });
+  await actOnProduction(a.scope, { action: "revise", itemId: item.id, version: 1, feedback: "Keep the opening but make the next sentence clearer." });
+  expect(await read()).toMatchObject({ delivered: 1, changesRequested: 1, awaitingReview: 0 });
+  expect((await readProcedures(other.scope)).procedures).toEqual([]);
+  await expect(readProcedures({ ...a.scope, actorId: other.user.id })).rejects.toThrow();
+  await manageProcedures(a.scope, { action: "retire", proposalId: p.id });
+  expect(await read()).toMatchObject({ delivered: 1, changesRequested: 1 });
+  await actOnProduction(a.scope, { action: "edit", itemId: item.id, version: 1, headline: "A considered home", caption: generated.caption, cta: generated.cta });
+  expect(await read()).toMatchObject({ delivered: 1, approved: 0, replacedOrUnavailable: 1 });
  });
  it("withholds a result when the evidence changes during the call", async () => {
   const a = await setup(), id = await quote(a.scope), c = await candidate(a.scope); await manageProcedures(a.scope, { action: "accept", analysisId: id });

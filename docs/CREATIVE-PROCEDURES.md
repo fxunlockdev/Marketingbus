@@ -14,6 +14,14 @@ The existing `BrandAnalysis` job ledger now distinguishes `BRAND` from `SKILL_RE
 - Every recall rechecks the exact revision/content/feedback/approval fingerprints and brand version. Changed, removed or expired evidence excludes the procedure. Knowledge snapshots also invalidate stale generation quotes/jobs. Matching image/video requests receive only matching visual-direction procedures; planning does not inherit unvalidated strategy lessons.
 - Identical proposals on unchanged evidence are deduplicated, including retired proposals. No new proposals means no customer charge; actual supplier costs are still recorded. Unknown provider outcomes retain their hold and cannot auto-retry; use the existing `reconcile-brand-analysis` operator procedure after verifying expense.
 
+## Use and review outcomes
+
+The Memory panel shows retained delivered outputs whose saved generation knowledge snapshot contains the exact procedure text and evidence link. Attribution checks the snapshot fingerprint, organization, business, brand version, task, destination and proposal creation time. Source creatives used to derive the procedure are excluded from these independent-use counts. Manual edits, quotes and jobs without a delivered-provider receipt do not add AI outputs.
+
+Counts separate currently approved, changes requested, rejected, awaiting review, and replaced/unavailable outputs, alongside distinct creatives. This is a bounded 90-day projection of the newest 200 records per format; a warning indicates truncated samples. Retirement does not erase attribution from retained prior snapshots. Deletion, expiry or replacing a revision can change these current-state counts: they are not an immutable decision history or lifetime totals. There is no extra model call or paid background loop for this report.
+
+Context inclusion does not prove instruction compliance. Approval does not prove improved marketing performance or causation, and these counts do not automatically promote or retire procedures. Semantic/visual holdout evaluation remains outstanding.
+
 ## Pilot access
 
 An operator may temporarily configure `PILOT_CREDIT_GRANTS_JSON` on the web service as an array of up to five exact-email allocations: `{id,email,credits,expiresAt}`. Each id is unique; 1–1,000 credits; expiry within seven days. On a successful password/MFA login, a user with exactly one owned workspace can receive the allocation once. The wallet lock and globally unique ledger entry prevent duplicate grants and changed-amount replay. Other users receive nothing. Expiry stops claiming; it does not claw back credits already granted. Remove the configuration after confirming allocation.

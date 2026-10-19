@@ -11,10 +11,13 @@ const uuid = z.uuid();
 const model = z.enum(["seedance-2.5-text", "kling-3.0-standard-text"]);
 const inputSchema = z.object({ operationId: z.string().regex(/^[A-Za-z0-9_-]{8,160}$/), model, durationMs: z.number().int().min(3000).max(8000).multipleOf(1000), prompt: z.string().min(1).max(12000) }).strict();
 export type HiggsfieldInput = z.infer<typeof inputSchema>;
-export const higgsfieldSettings = z.object({
-  keyId: z.string().regex(/^[A-Za-z0-9_-]{8,256}$/), secret: z.string().regex(/^[\x21-\x7e]{16,512}$/).refine(v => !v.includes(":")),
+const verificationSettings = {
   verifiedUntil: z.iso.datetime(), outputHosts: z.array(z.string().refine(h => { try { mediaHost(h); return true; } catch { return false; } })).min(1).max(8),
-}).strict().refine(c => new Set(c.outputHosts).size === c.outputHosts.length);
+};
+export const higgsfieldSettings = z.union([
+  z.object({ keyId: z.string().regex(/^[A-Za-z0-9_-]{8,256}$/), secret: z.string().regex(/^[\x21-\x7e]{16,512}$/).refine(v => !v.includes(":")), ...verificationSettings }).strict(),
+  z.object({ apiKey: z.string().regex(/^[\x21-\x7e]{16,1024}$/), ...verificationSettings }).strict(),
+]).refine(c => new Set(c.outputHosts).size === c.outputHosts.length);
 export type HiggsfieldSettings = z.infer<typeof higgsfieldSettings>;
 const estimateSchema = z.object({ requestHash: hex, credentialFingerprint: hex, estimatedUsdMicros: z.number().int().nonnegative().max(80000000), credits: z.string().regex(/^(0|[1-9][0-9]{0,9})(\.[0-9]{1,6})?$/), observedAt: z.number().int().positive(), signature: hex }).strict();
 export type HiggsfieldEstimate = z.infer<typeof estimateSchema>;
@@ -41,13 +44,16 @@ export function higgsfieldRequest(raw: HiggsfieldInput) {
 // job integration must journal this receipt and verify final expense separately.
 export function createHiggsfieldTransport(raw: HiggsfieldSettings, fetcher: typeof fetch = fetch, download: MediaDownload = downloadProviderMedia) {
   const config = higgsfieldSettings.parse(raw);
-  const credentialFingerprint = hash({ keyId: config.keyId, secret: config.secret });
+  const credentialFingerprint = hash("apiKey" in config ? { apiKey: config.apiKey } : { keyId: config.keyId, secret: config.secret });
+  const credential = "apiKey" in config ? config.apiKey : `${config.keyId}:${config.secret}`;
+  const signingKey = "apiKey" in config ? config.apiKey : config.secret;
+  const signingIdentity = "apiKey" in config ? credentialFingerprint : config.keyId;
   function fresh() {
     const remaining = new Date(config.verifiedUntil).getTime() - Date.now();
     if (remaining <= 0 || remaining > 90 * 86400000) throw failure();
   }
   fresh();
-  const sign = (kind: string, value: unknown) => createHmac("sha256", config.secret).update(JSON.stringify({ kind, value, keyId: config.keyId, protocol: "higgsfield-network-v1" })).digest("hex");
+  const sign = (kind: string, value: unknown) => createHmac("sha256", signingKey).update(JSON.stringify({ kind, value, keyId: signingIdentity, protocol: "higgsfield-network-v1" })).digest("hex");
   function verify(kind: string, value: Record<string, unknown> & { signature: string }) {
     const { signature, ...rest } = value;
     if (!timingSafeEqual(Buffer.from(signature, "hex"), Buffer.from(sign(kind, rest), "hex")) || rest.credentialFingerprint !== credentialFingerprint) throw failure();
@@ -57,7 +63,7 @@ export function createHiggsfieldTransport(raw: HiggsfieldSettings, fetcher: type
     let response: Response | undefined;
     try {
       signal.throwIfAborted();
-      response = await fetcher(origin + path, { method, signal, redirect: "error", credentials: "omit", cache: "no-store", headers: { Authorization: `Key ${config.keyId}:${config.secret}`, Accept: "application/json", ...(method === "POST" ? { "Content-Type": "application/json" } : {}), ...(idempotency ? { "Idempotency-Key": idempotency } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      response = await fetcher(origin + path, { method, signal, redirect: "error", credentials: "omit", cache: "no-store", headers: { Authorization: `Key ${credential}`, Accept: "application/json", ...(method === "POST" ? { "Content-Type": "application/json" } : {}), ...(idempotency ? { "Idempotency-Key": idempotency } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
       signal.throwIfAborted();
       if (response.status !== 200 || !/^application\/json(?:\s*;|$)/i.test(response.headers.get("content-type") || "") || !response.body) throw failure();
       const declared = response.headers.get("content-length");
