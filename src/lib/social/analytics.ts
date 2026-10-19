@@ -20,6 +20,7 @@ const names = [
   "engagements",
   "clicks",
   "videoViews",
+  "views",
 ] as const;
 export function summarizePerformance(rows: Row[]) {
   const groups = new Map<string, Row[]>();
@@ -58,7 +59,9 @@ export function summarizePerformance(rows: Row[]) {
       })
     ),
     // Reach is deliberately not presented as distinct people across posts.
-    note: "Totals cover observed posts only. Reach is summed post reach, not unique audience. Engagement is not a conversion or causal result.",
+    note: group[0].reading?.definitionVersion.startsWith("instagram-feed-")
+      ? "Instagram native lifetime views, reach and total interactions for the observed feed images only. Views are not impressions or video views. No organic/paid separation is asserted. Reach is summed post reach, not unique audience. Missing metrics remain unavailable; these readings do not meet the impression-based learning policy."
+      : "Totals cover observed posts only. Reach is summed post reach, not unique audience. Engagement is not a conversion or causal result.",
   }));
 }
 async function performanceRows(scope: Scope) {
@@ -82,7 +85,7 @@ async function performanceRows(scope: Scope) {
     provider: p.connection.provider,
     format: p.revision.item.format,
     publishedAt: p.publishedAt!,
-    reading: p.metricsInvalidatedAt || (p.connection.provider === "LinkedIn" && !/^linkedin-organic-post-likes-comments-shares-[0-9]{6}-v2$/.test(p.metrics[0]?.definitionVersion ?? "")) ? null : p.metrics[0] ?? null,
+    reading: p.metricsInvalidatedAt || (p.connection.provider === "LinkedIn" && !/^linkedin-organic-post-likes-comments-shares-[0-9]{6}-v2$/.test(p.metrics[0]?.definitionVersion ?? "")) || (p.connection.provider === "Instagram" && !/^instagram-feed-views-reach-total-interactions-v[1-9][0-9]?\.0-v1$/.test(p.metrics[0]?.definitionVersion ?? "")) ? null : p.metrics[0] ?? null,
   }));
 }
 export async function readSocialDashboard(scope: Scope) {
@@ -145,7 +148,7 @@ export async function readSocialDashboard(scope: Scope) {
     proposals,
     summary: summarizePerformance(rows),
     window:
-      "Latest 500 published posts; latest eligible lifetime snapshot per post. Changed-source and legacy unverified LinkedIn readings are excluded. Not a date-range delta.",
+      "Latest 500 published posts; latest eligible lifetime snapshot per post. Changed-source and unverified LinkedIn/Instagram definitions are excluded. Views and impressions are separate. Not a date-range delta.",
   };
 }
 export async function manageLearning(scope: Scope, raw: unknown) {

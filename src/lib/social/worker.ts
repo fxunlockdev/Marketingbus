@@ -427,6 +427,10 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
         post.metricsLeaseUntil?.getTime() !== leaseUntil.getTime()
       )
         return;
+      if (freshConnection.authorizationVersion !== observedConnection.authorizationVersion) {
+        await tx.socialPublication.update({ where: { id: post.id }, data: { metricsLeaseUntil: null, nextMetricsAt: null, errorCode: "METRICS_CONTEXT_CHANGED" } });
+        return;
+      }
       const validPayload = (() => { try { frozenCopy(post.payload, post.payloadHash, observedConnection.provider); return post.payloadHash === candidate.payloadHash && post.connectionId === candidate.connectionId && post.revisionId === candidate.revisionId && post.brandVersion === candidate.brandVersion && post.businessId === candidate.businessId && post.organizationId === candidate.organizationId; } catch { return false; } })();
       if (!validPayload || post.mediaExternalId !== candidate.mediaExternalId || post.mediaTransferVersion !== candidate.mediaTransferVersion || post.mediaUploaded !== candidate.mediaUploaded || post.metricsInvalidatedAt || freshConnection.status !== "CONNECTED" || freshConnection.encryptedToken !== observedConnection.encryptedToken || freshConnection.externalAccountId !== observedConnection.externalAccountId || freshConnection.provider !== observedConnection.provider || freshConnection.expiresAt && freshConnection.expiresAt <= new Date() || post.status !== "PUBLISHED" || post.externalPostId !== candidate.externalPostId || post.publishedAt?.getTime() !== candidate.publishedAt?.getTime()) {
         await tx.socialPublication.update({ where: { id: post.id }, data: { metricsLeaseUntil: null, nextMetricsAt: null, errorCode: "METRICS_CONTEXT_CHANGED" } });
@@ -470,6 +474,10 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
         const post = await tx.socialPublication.findUniqueOrThrow({ where: { id: candidate.id } });
         if (post.metricsLeaseUntil?.getTime() !== leaseUntil.getTime()) return;
         const fresh = await tx.socialConnection.findUniqueOrThrow({ where: { id: observedConnection.id } });
+        if (fresh.authorizationVersion !== observedConnection.authorizationVersion) {
+          await tx.socialPublication.update({ where: { id: post.id }, data: { metricsLeaseUntil: null, nextMetricsAt: null, errorCode: "METRICS_CONTEXT_CHANGED" } });
+          return;
+        }
         const validPayload = (() => { try { frozenCopy(post.payload, post.payloadHash, fresh.provider); return post.payloadHash === candidate.payloadHash && post.connectionId === candidate.connectionId && post.revisionId === candidate.revisionId && post.brandVersion === candidate.brandVersion && post.businessId === candidate.businessId && post.organizationId === candidate.organizationId; } catch { return false; } })();
         const sameContext = validPayload && post.mediaExternalId === candidate.mediaExternalId && post.mediaTransferVersion === candidate.mediaTransferVersion && post.mediaUploaded === candidate.mediaUploaded && post.status === "PUBLISHED" && post.externalPostId === candidate.externalPostId && post.publishedAt?.getTime() === candidate.publishedAt?.getTime() && fresh.status === "CONNECTED" && fresh.encryptedToken === observedConnection.encryptedToken && fresh.externalAccountId === observedConnection.externalAccountId && fresh.provider === observedConnection.provider && (!fresh.expiresAt || fresh.expiresAt > new Date());
         await tx.socialPublication.update({ where: { id: post.id }, data: {

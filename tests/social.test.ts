@@ -51,6 +51,13 @@ describe("honest performance reporting", () => {
       )
     ).toBeNull();
   });
+  it("does not silently use Instagram views as impression-based learning evidence", () => {
+    const rows = ["static", "video"].flatMap(format => Array.from({ length: 5 }, (_, i) => ({ ...row, id: `${format}-${i}`, snapshotId: `native-${format}-${i}`, provider: "Instagram", format,
+      reading: { ...reading, definitionVersion: "instagram-feed-views-reach-total-interactions-v26.0-v1", impressions: null, views: 1000, engagements: format === "static" ? 50 : 10 } })));
+    expect(experimentCandidate(rows, now)).toBeNull();
+    expect(summarizePerformance(rows)[0].metrics.views).toEqual({ value: 10000, coveredPosts: 10 });
+    expect(summarizePerformance(rows)[0].metrics.impressions).toEqual({ value: null, coveredPosts: 0 });
+  });
   it("requires comparable accounts, mature measurements, and enough posts", () => {
     const a = Array.from({ length: 5 }, (_, i) => ({ ...row, id: `a-${i}`, snapshotId: `metric-a-${i}` }));
     const b = a.map((r) => ({

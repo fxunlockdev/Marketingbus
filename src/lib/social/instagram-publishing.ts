@@ -8,6 +8,7 @@ import { submissionJournal, type SubmissionContext, type SubmissionJournal } fro
 import { createImageTransfer, type SocialImageTransfer } from "./image-transfer";
 import { createInstagramDelivery, type InstagramDelivery } from "./instagram-delivery";
 import { instagramJpeg } from "./instagram-jpeg";
+import { instagramMetricReader } from "./instagram-metrics";
 
 const failure = () => Error("Instagram publication could not be verified.");
 export function createInstagramPublishingAdapter(raw: MetaSettings, fetcher: typeof fetch = fetch, journal: SubmissionJournal = submissionJournal,
@@ -45,8 +46,8 @@ export function createInstagramPublishingAdapter(raw: MetaSettings, fetcher: typ
     }, signal)).id;
   }
   return {
-    imagePublishingAvailable: true, metricsAvailable: false,
-    async metrics() { throw Error("Instagram post metrics are not implemented."); },
+    imagePublishingAvailable: true, metricsAvailable: process.env.INSTAGRAM_METRICS_ENABLED === "true",
+    metrics: instagramMetricReader(config, fetcher, authorize),
     async publish(account, payload, requestId, signal) {
       try { validate(account, payload); } catch { return { state: "failed", code: "INVALID_MEDIA" }; }
       try { await authorize(account, signal); } catch (error) {

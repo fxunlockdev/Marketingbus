@@ -44,11 +44,14 @@ export const metricReading = z
     engagements: metric,
     clicks: metric,
     videoViews: metric,
+    // Optional for existing providers; stored as NULL when unsupported, never renamed impressions.
+    views: metric.optional(),
   })
   .strict();
 export type MetricReading = z.infer<typeof metricReading>;
 // Metrics describe this immutable creative, not whichever text happens to be at its URL now.
-export const metricSubject = z.object({ payload: publicationPayload, publishedAt: z.date(), mediaExternalId: z.string().regex(/^urn:li:image:[A-Za-z0-9_-]{1,200}$/).optional() }).strict();
+export const metricSubject = z.object({ payload: publicationPayload, publishedAt: z.date(), mediaExternalId: z.string().min(1).max(220).optional() }).strict()
+  .refine(s => !s.mediaExternalId || !!s.payload.image && (s.payload.channel === "LinkedIn" ? /^urn:li:image:[A-Za-z0-9_-]{1,200}$/.test(s.mediaExternalId) : /^[1-9][0-9]{0,39}$/.test(s.mediaExternalId)), "Invalid provider media identity");
 export type MetricSubject = z.infer<typeof metricSubject>;
 export class MetricSourceChangedError extends Error {
   constructor() { super("Published creative changed; metrics cannot be attributed to the approved version."); }

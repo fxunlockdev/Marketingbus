@@ -1,5 +1,11 @@
 # Acceptance ledger — 19 October 2026
 
+## Instagram native post metrics — verification in progress
+
+Runtime `studio-v40-instagram-metrics`, additive migration 47: separately gated native Instagram feed-image views/reach/interactions, bounded real HTTP adapter, exact before/after source checks, late-result rejection after same-token reconnect, persisted nullable views, honest dashboard coverage and exclusion of invalidated/unverified sources. Views never become impressions or video views. Current impression-based experiments do not accept them. No paid generation, posting, email, payment, production data fixture, flag activation or new infrastructure is involved. See [the reader contract and live acceptance gates](INSTAGRAM-PUBLISHING.md#metrics-testing-and-release-limits).
+
+Focused transport/database tests and type checking pass. The first focused database run caught a test-fixture property typo, corrected before the passing rerun. Isolated restoration verifies 47 migrations, 52 tables and 104 synthetic rows, including views/zero/null preservation and its SQL nonnegative constraint; both temporary databases are removed. Full local/CI regression, production build/browser acceptance and deployment verification are in progress. Meta's reference/guide returned 429; official SDK schemas were inspected, but live account/API-version response mapping remains a separate pre-activation requirement. The full-product goal remains active, not complete.
+
 ## Deployed unified asset creation and platform review
 
 Runtime `studio-v39-unified-assets` combines images/design, video/motion and the original brand-asset library under Asset studio. Review inbox filters the selected plan by publishing destination and includes saved artwork, layouts, storyboards and final videos, including motion work without separate copy. On-demand private previews and exact-version review use the existing guarded endpoints; targeted editing returns to the correct creative. Format switching preserves editor drafts and pauses hidden media. A bounded read-only projection omits storage keys, supplier configuration and prompts. Changed copy IDs require reloading the plan before comparing media. See the revised information architecture in [the module plan](MODULE-PLAN.md).
