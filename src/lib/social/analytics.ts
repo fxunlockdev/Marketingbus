@@ -3,6 +3,7 @@ import { db } from "../db";
 import { AppError } from "../http";
 import { lockBusiness, type Scope } from "../production/service";
 import type { MetricReading } from "./contracts";
+import { frozenCopy } from "./integrity";
 import { experimentCandidate, learningRows, validLearningEvidence } from "./learning-evidence";
 export { experimentCandidate } from "./learning-evidence";
 
@@ -63,6 +64,8 @@ export function summarizePerformance(rows: Row[]) {
     // Reach is deliberately not presented as distinct people across posts.
     note: group[0].reading?.definitionVersion.startsWith("facebook-post-")
       ? "Facebook native lifetime views, unique viewers, clicks and reported reaction types. Views are not impressions; unique viewers are summed per post, not a deduplicated audience or reach. Reactions are not total engagement; clicks are not conversions. No organic/paid split is asserted. Missing metrics remain unavailable; these readings do not meet the impression-based learning policy."
+      : group[0].reading?.definitionVersion.startsWith("instagram-reel-")
+      ? "Instagram native lifetime views, reach and total interactions for the observed Reels only. Views are not impressions, completed plays or unique viewers. No organic/paid separation is asserted. Reach is summed post reach, not unique audience. Missing metrics remain unavailable; these readings do not meet the impression-based learning policy."
       : group[0].reading?.definitionVersion.startsWith("instagram-feed-")
       ? "Instagram native lifetime views, reach and total interactions for the observed feed images only. Views are not impressions or video views. No organic/paid separation is asserted. Reach is summed post reach, not unique audience. Missing metrics remain unavailable; these readings do not meet the impression-based learning policy."
       : "Totals cover observed posts only. Reach is summed post reach, not unique audience. Engagement is not a conversion or causal result.",
@@ -83,14 +86,25 @@ async function performanceRows(scope: Scope) {
       metrics: { orderBy: [{ observedAt: "desc" }, { id: "desc" }], take: 1 },
     },
   });
-  return posts.map((p) => ({
+  return posts.map((p) => {
+    let instagramDefinitionMatches = false;
+    let format = p.revision.item.format;
+    if (p.connection.provider === "Instagram") {
+      try {
+        const payload = frozenCopy(p.payload, p.payloadHash, "Instagram");
+        format = payload.format;
+        instagramDefinitionMatches = new RegExp(`^instagram-${payload.video ? "reel" : "feed"}-views-reach-total-interactions-v[1-9][0-9]?\\.0-v1$`).test(p.metrics[0]?.definitionVersion ?? "");
+      } catch { /* A definition cannot override an invalid immutable source. */ }
+    }
+    return {
     id: p.id,
     connectionId: p.connectionId,
     provider: p.connection.provider,
-    format: p.revision.item.format,
+    format,
     publishedAt: p.publishedAt!,
-    reading: p.metricsInvalidatedAt || (p.connection.provider === "LinkedIn" && !/^linkedin-organic-post-likes-comments-shares-[0-9]{6}-v2$/.test(p.metrics[0]?.definitionVersion ?? "")) || (p.connection.provider === "Instagram" && !/^instagram-feed-views-reach-total-interactions-v[1-9][0-9]?\.0-v1$/.test(p.metrics[0]?.definitionVersion ?? "")) || (p.connection.provider === "Facebook" && !/^facebook-post-views-unique-clicks-reactions-v[1-9][0-9]?\.0-v1$/.test(p.metrics[0]?.definitionVersion ?? "")) ? null : p.metrics[0] ?? null,
-  }));
+    reading: p.metricsInvalidatedAt || (p.connection.provider === "LinkedIn" && !/^linkedin-organic-post-likes-comments-shares-[0-9]{6}-v2$/.test(p.metrics[0]?.definitionVersion ?? "")) || (p.connection.provider === "Instagram" && !instagramDefinitionMatches) || (p.connection.provider === "Facebook" && !/^facebook-post-views-unique-clicks-reactions-v[1-9][0-9]?\.0-v1$/.test(p.metrics[0]?.definitionVersion ?? "")) ? null : p.metrics[0] ?? null,
+    };
+  });
 }
 export async function readSocialDashboard(scope: Scope) {
   const [connections, publications, proposals, rows] = await Promise.all([
@@ -155,7 +169,7 @@ export async function readSocialDashboard(scope: Scope) {
     proposals,
     summary: summarizePerformance(rows),
     window:
-      "Latest 500 published posts; latest eligible lifetime snapshot per post. Changed-source and unverified LinkedIn/Instagram definitions are excluded. Views and impressions are separate. Not a date-range delta.",
+      "Latest 500 published posts; latest eligible lifetime snapshot per post. Changed-source and unverified or mismatched metric definitions are excluded. Instagram feed images and Reels are reported separately. Views and impressions are separate. Not a date-range delta.",
   };
 }
 export async function manageLearning(scope: Scope, raw: unknown) {

@@ -121,7 +121,7 @@ suite("Instagram durable image publication and revocable delivery", () => {
     expect((await readSocialDashboard(f.scope)).summary[0].metrics.views.value).toBeNull();
     await expect(db.socialPublication.update({ where: { id: post.id }, data: { nextMetricsAt: new Date() } })).rejects.toThrow();
   });
-  it.each(["failure", "unavailable", "legacy"])("preserves %s as unknown instead of zero or trusted learning", async kind => {
+  it.each(["failure", "unavailable", "legacy", "reel definition"])("preserves %s as unknown instead of zero or trusted learning", async kind => {
     const { f, post, stats } = await metricFixture();
     if (kind === "failure") f.replies[3] = new Response("private upstream", { status: 403 });
     if (kind === "unavailable") stats.data = [];
@@ -131,6 +131,7 @@ suite("Instagram durable image publication and revocable delivery", () => {
       expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ metricsFailures: 1, metricsInvalidatedAt: null, nextMetricsAt: expect.any(Date) });
     } else {
       if (kind === "legacy") await db.metricSnapshot.updateMany({ where: { publicationId: post.id }, data: { definitionVersion: "unverified-legacy" } });
+      if (kind === "reel definition") await db.metricSnapshot.updateMany({ where: { publicationId: post.id }, data: { definitionVersion: `instagram-reel-views-reach-total-interactions-${f.config.apiVersion}-v1` } });
       expect((await readSocialDashboard(f.scope)).summary[0].metrics.views.value).toBeNull();
     }
   });

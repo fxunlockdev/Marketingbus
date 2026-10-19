@@ -11,6 +11,7 @@ import {
   MetricSourceChangedError,
   publishedReceipt,
   socialProvider,
+  supportsPublicationMetrics,
   type Account,
   type SocialAdapters,
   type PublishOutcome,
@@ -194,7 +195,7 @@ export async function runOnePublication(adapters: SocialAdapters) {
             permalink: safePermalink(claimed.token.provider, receipt.permalink),
             status: "PUBLISHED",
             leaseUntil: null,
-            nextMetricsAt: claimed.payload.video || adapter.metricsAvailable === false ? null : new Date(Date.now() + 3600000),
+            nextMetricsAt: supportsPublicationMetrics(adapter, claimed.payload) ? new Date(Date.now() + 3600000) : null,
             errorCode: null,
           },
         });
@@ -352,7 +353,7 @@ export async function reconcilePublication(publicationId: string, adapters: Soci
       }
       await tx.socialPublication.update({ where: { id: post.id }, data: {
         ...verified, permalink, status: "PUBLISHED", errorCode: null, leaseUntil: null, nextReconciliationAt: null,
-        nextMetricsAt: payload.video || adapters[provider]!.metricsAvailable === false ? null : new Date(Date.now() + 3600000),
+        nextMetricsAt: supportsPublicationMetrics(adapters[provider], payload) ? new Date(Date.now() + 3600000) : null,
       } });
       await tx.auditEvent.create({ data: { ...scope, action: "SOCIAL_RECONCILED", detail: `Provider read-back confirmed publication ${post.id}. No new post submitted.` } });
       return true;
@@ -361,7 +362,7 @@ export async function reconcilePublication(publicationId: string, adapters: Soci
 }
 
 export async function runOneMetricSync(adapters: SocialAdapters) {
-  const providers = Object.entries(adapters).filter(([, adapter]) => adapter.metricsAvailable !== false).map(([provider]) => provider);
+  const providers = Object.entries(adapters).filter(([, adapter]) => adapter.metricsAvailable !== false || adapter.videoMetricsAvailable === true).map(([provider]) => provider);
   if (!providers.length) return false;
   const candidate = await db.socialPublication.findFirst({
     where: {
@@ -414,7 +415,10 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
     )
       throw Error("Connection unavailable");
     const payload = frozenCopy(candidate.payload, candidate.payloadHash, connection.provider);
-    if (payload.video) throw Error("Verified Reel metrics are not enabled.");
+    if (!supportsPublicationMetrics(adapters[socialProvider.parse(connection.provider)], payload)) {
+      await db.socialPublication.updateMany({ where: { id: candidate.id, metricsLeaseUntil: leaseUntil }, data: { metricsLeaseUntil: null, nextMetricsAt: null, errorCode: "METRICS_NOT_ENABLED" } });
+      return true;
+    }
     if (!candidate.publishedAt || candidate.publishedAt > new Date()) throw Error("Publication time unavailable");
     const observedConnection = connection;
     const reading = metricReading.parse(
@@ -422,7 +426,7 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
         account(connection),
         candidate.externalPostId!,
         AbortSignal.timeout(30000),
-        { payload, publishedAt: candidate.publishedAt, ...(payload.image ? { mediaExternalId: candidate.mediaExternalId ?? undefined } : {}) }
+        { payload, publishedAt: candidate.publishedAt, ...(payload.mediaExportId ? { mediaExternalId: candidate.mediaExternalId ?? undefined } : {}) }
       )
     );
     if (

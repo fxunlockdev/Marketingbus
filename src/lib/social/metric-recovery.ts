@@ -3,7 +3,7 @@ import { db } from "../db";
 import { AppError } from "../http";
 import { openSecret } from "../secrets";
 import { authorizeSocialScope, type OAuthScope } from "./oauth";
-import { configuredSocialAdapters, socialProvider, type SocialAdapters } from "./contracts";
+import { configuredSocialAdapters, socialProvider, supportsPublicationMetrics, type PublicationPayload, type SocialAdapters } from "./contracts";
 import { frozenCopy } from "./integrity";
 
 export const metricRecoveryRequest = z.object({
@@ -22,12 +22,14 @@ export async function resumeMetricChecks(scope: OAuthScope, raw: unknown, adapte
     if (post.metricsInvalidatedAt) throw new AppError(409, "This creative changed on the network. Its metrics cannot be re-approved or resumed.");
     if (post.nextMetricsAt || post.metricsLeaseUntil && post.metricsLeaseUntil > now) throw new AppError(409, "Metric checks are already scheduled or running. Existing backoff cannot be bypassed.");
     const connection = post.connection, provider = socialProvider.parse(connection.provider), adapter = adapters()[provider];
-    if (!adapter || adapter.metricsAvailable === false) throw new AppError(503, "Verified post metrics are not enabled for this destination yet.");
+    if (!adapter || adapter.metricsAvailable === false && adapter.videoMetricsAvailable !== true) throw new AppError(503, "Verified post metrics are not enabled for this destination yet.");
     if (connection.status !== "CONNECTED" || connection.expiresAt && connection.expiresAt <= now) throw new AppError(409, "Reconnect this account before resuming metric checks.");
+    let payload: PublicationPayload;
     try {
-      if (frozenCopy(post.payload, post.payloadHash, provider).video) throw Error("Reel metrics are not enabled.");
+      payload = frozenCopy(post.payload, post.payloadHash, provider);
       openSecret(connection.encryptedToken, `social:${scope.organizationId}:${scope.businessId}:${connection.id}`);
     } catch { throw new AppError(409, "The publication snapshot or account credentials cannot be verified. Contact your operator."); }
+    if (!supportsPublicationMetrics(adapter, payload)) throw new AppError(503, "Verified post metrics are not enabled for this destination and media type yet.");
     if (post.metricsRequestedAt && now.getTime() - post.metricsRequestedAt.getTime() < 3600000) throw new AppError(429, "Wait one hour before resuming this publication again.");
     const dayStart = new Date(now); dayStart.setUTCHours(0, 0, 0, 0);
     const used = await tx.auditEvent.count({ where: { businessId: scope.businessId, organizationId: scope.organizationId, action: "SOCIAL_METRICS_RESUMED", createdAt: { gte: dayStart } } });

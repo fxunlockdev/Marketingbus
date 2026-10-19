@@ -26,28 +26,31 @@ export function parseInstagramInsights(raw: unknown, mediaId: string) {
 
 export function instagramMetricReader(config: MetaSettings, fetcher: typeof fetch, authorize: (account: Account, signal: AbortSignal) => Promise<void>): SocialAdapter["metrics"] {
   async function checkSource(account: Account, id: string, subject: MetricSubject, signal: AbortSignal) {
+    const reel = !!subject.payload.video;
     const post = z.object({ id: z.literal(id), owner: z.object({ id: metaId }), caption: z.string().max(10000).optional(),
-      alt_text: z.string().max(10000), media_type: z.string().max(30), media_product_type: z.string().max(30), timestamp: z.string().max(100),
-    }).parse(await metaClient(config, fetcher, signal)(id, account.token, { fields: "id,owner,caption,alt_text,media_type,media_product_type,timestamp" }));
+      alt_text: reel ? z.string().max(10000).optional() : z.string().max(10000), media_type: z.string().max(30), media_product_type: z.string().max(30), timestamp: z.string().max(100),
+    }).parse(await metaClient(config, fetcher, signal)(id, account.token, { fields: `id,owner,caption,${reel ? "" : "alt_text,"}media_type,media_product_type,timestamp` }));
     const time = new Date(post.timestamp).getTime();
     if (!Number.isFinite(time) || time <= 0 || time > Date.now() + 60_000) throw Error("Invalid Instagram publication time.");
-    if (post.owner.id !== account.externalAccountId || post.caption !== subject.payload.caption || post.alt_text !== subject.payload.image!.altText ||
-      post.media_type !== "IMAGE" || post.media_product_type !== "FEED" || time !== subject.publishedAt.getTime()) throw new MetricSourceChangedError();
+    if (post.owner.id !== account.externalAccountId || post.caption !== subject.payload.caption || !reel && post.alt_text !== subject.payload.image!.altText ||
+      post.media_type !== (reel ? "VIDEO" : "IMAGE") || post.media_product_type !== (reel ? "REELS" : "FEED") || time !== subject.publishedAt.getTime()) throw new MetricSourceChangedError();
   }
   return async (account, id, signal, rawSubject) => {
     try {
-      if (process.env.INSTAGRAM_METRICS_ENABLED !== "true") throw Error("Instagram metrics disabled.");
       const subject = metricSubject.parse(rawSubject);
+      const reel = !!subject.payload.video;
+      const gate = reel ? "INSTAGRAM_REELS_METRICS_ENABLED" : "INSTAGRAM_METRICS_ENABLED";
+      if (process.env[gate] !== "true") throw Error("Instagram metrics disabled.");
       metaId.parse(id); metaId.parse(account.externalAccountId); metaId.parse(subject.mediaExternalId);
-      if (account.provider !== "Instagram" || subject.payload.channel !== "Instagram" || !subject.payload.image || subject.payload.format !== "static" || subject.publishedAt.getTime() <= 0 || subject.publishedAt > new Date()) throw Error("Unsupported Instagram metric source.");
+      if (account.provider !== "Instagram" || subject.payload.channel !== "Instagram" || !(reel || subject.payload.image) || subject.publishedAt.getTime() <= 0 || subject.publishedAt > new Date()) throw Error("Unsupported Instagram metric source.");
       await authorize(account, signal);
       await checkSource(account, id, subject, signal);
       const metrics = parseInstagramInsights(await metaClient(config, fetcher, signal)(`${id}/insights`, account.token, { metric: names.join(","), period: "lifetime" }), id);
       // A valid response cannot attach measurements to copy edited during the read.
       await checkSource(account, id, subject, signal);
       signal.throwIfAborted(); assertMetaFresh(config);
-      if (process.env.INSTAGRAM_METRICS_ENABLED !== "true") throw Error("Instagram metrics disabled.");
-      return metricReading.parse({ observedAt: new Date(), definitionVersion: `instagram-feed-views-reach-total-interactions-${config.apiVersion}-v1`,
+      if (process.env[gate] !== "true") throw Error("Instagram metrics disabled.");
+      return metricReading.parse({ observedAt: new Date(), definitionVersion: `instagram-${reel ? "reel" : "feed"}-views-reach-total-interactions-${config.apiVersion}-v1`,
         ...metrics, impressions: null, clicks: null, videoViews: null });
     } catch (error) {
       if (error instanceof MetricSourceChangedError) throw error;

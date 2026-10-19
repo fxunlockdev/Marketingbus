@@ -60,7 +60,7 @@ export const metricReading = z
 export type MetricReading = z.infer<typeof metricReading>;
 // Metrics describe this immutable creative, not whichever text happens to be at its URL now.
 export const metricSubject = z.object({ payload: publicationPayload, publishedAt: z.date(), mediaExternalId: z.string().min(1).max(220).optional() }).strict()
-  .refine(s => !s.mediaExternalId || !!s.payload.image && (s.payload.channel === "LinkedIn" ? /^urn:li:image:[A-Za-z0-9_-]{1,200}$/.test(s.mediaExternalId) : /^[1-9][0-9]{0,39}$/.test(s.mediaExternalId)), "Invalid provider media identity");
+  .refine(s => !s.mediaExternalId || (!!s.payload.image || s.payload.channel === "Instagram" && !!s.payload.video) && (s.payload.channel === "LinkedIn" ? /^urn:li:image:[A-Za-z0-9_-]{1,200}$/.test(s.mediaExternalId) : /^[1-9][0-9]{0,39}$/.test(s.mediaExternalId)), "Invalid provider media identity");
 export type MetricSubject = z.infer<typeof metricSubject>;
 export class MetricSourceChangedError extends Error {
   constructor() { super("Published creative changed; metrics cannot be attributed to the approved version."); }
@@ -89,6 +89,8 @@ export interface SocialAdapter {
   videoPublishingAvailable?: boolean;
   // False means no certified mapping: do not schedule polling or fabricate empty observations.
   metricsAvailable?: boolean;
+  // Video needs its own verified mapping; an image capability never opts it in.
+  videoMetricsAvailable?: boolean;
   // Must honor aborts and bound response size. Retryable means definitively NOT submitted.
   publish(
     account: Account,
@@ -111,6 +113,9 @@ export interface SocialAdapter {
   ): Promise<MetricReading>;
 }
 export type SocialAdapters = Partial<Record<SocialProvider, SocialAdapter>>;
+export function supportsPublicationMetrics(adapter: SocialAdapter | undefined, payload: PublicationPayload) {
+  return !!adapter && (payload.video ? adapter.videoMetricsAvailable === true : adapter.metricsAvailable !== false);
+}
 // No mock adapter is registered in application/worker runtime. Official adapters are a separate gate.
 export function configuredSocialAdapters(): SocialAdapters {
   if (process.env.SOCIAL_EXECUTION_ENABLED !== "true") return {};

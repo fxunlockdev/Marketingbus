@@ -49,6 +49,7 @@ export function createInstagramPublishingAdapter(raw: MetaSettings, fetcher: typ
   }
   return {
     imagePublishingAvailable: true, videoPublishingAvailable: process.env.INSTAGRAM_REELS_ENABLED === "true", metricsAvailable: process.env.INSTAGRAM_METRICS_ENABLED === "true",
+    videoMetricsAvailable: process.env.INSTAGRAM_REELS_METRICS_ENABLED === "true",
     metrics: instagramMetricReader(config, fetcher, authorize),
     async publish(account, payload, requestId, signal) {
       try { validate(account, payload); } catch { return { state: "failed", code: "INVALID_MEDIA" }; }

@@ -7,6 +7,7 @@ type Dashboard = {
   videoChoices?: { id: string; itemId: string; revisionVersion: number; durationMs: number; expiresAt: string; bytes: number }[];
   mediaChoices?: { id: string; itemId: string; revisionVersion: number; placement: string; expiresAt: string; bytes: number }[];
   enabledMetricProviders: string[];
+  enabledVideoMetricProviders?: string[];
   canManageMetrics: boolean;
   window: string;
   connections: {
@@ -293,7 +294,7 @@ export function SocialDashboard({
                 </p>
                 {p.errorCode && <p>{p.errorCode.replaceAll("_", " ")}</p>}
                 {p.includesImage && <p>Includes an approved image. {p.imageUploadAcknowledged ? "Image upload acknowledged by the destination; publication is confirmed only when a provider post ID is shown below." : "Image upload has not been acknowledged. No completed post is implied."}</p>}
-                {p.includesVideo && <p>Includes an approved Reel. {p.videoUploadAcknowledged ? "Video container acknowledged; processing is not proof of publication. Confirmation requires the verified provider post ID below." : "Video container has not been acknowledged. No completed post is implied."} Verified Reel metrics are not available yet.</p>}
+                {p.includesVideo && <p>Includes an approved Reel. {p.videoUploadAcknowledged ? "Video container acknowledged; processing is not proof of publication. Confirmation requires the verified provider post ID below." : "Video container has not been acknowledged. No completed post is implied."} {data.enabledVideoMetricProviders?.includes(p.connection.provider) ? "Reel metrics can be checked after verified publication. Views are not impressions or proof of completed playback." : "Reel metric collection is not enabled for this destination. Previously verified readings remain visible unless invalidated."}</p>}
                 {p.status === "NEEDS_RECONCILIATION" && <div>
                   <p>Publication is unconfirmed. This post will not be sent again automatically.</p>
                   <p>Lookup checks: {p.reconciliationAttempts}. {p.nextReconciliationAt
@@ -319,9 +320,9 @@ export function SocialDashboard({
                     {p.nextMetricsAt ? `Metrics refresh is delayed. Next eligible check: ${new Date(p.nextMetricsAt).toLocaleString()}.` : "Automatic metric checks have stopped. Review account access before resuming."} Previously observed data is retained.
                   </p>
                 )}
-                {p.status === "PUBLISHED" && !p.includesVideo && !p.metricsInvalidatedAt && !p.nextMetricsAt && p.metricsFailures > 0 && <div>
+                {p.status === "PUBLISHED" && !p.metricsInvalidatedAt && !p.nextMetricsAt && (p.metricsFailures > 0 || p.includesVideo && p.publishedAt && Date.now() - new Date(p.publishedAt).getTime() < 30 * 86400000) && <div>
                   <p>Recovery only reads existing post metrics; it does not repost content, spend creative credits or change approvals. Limited to posts from the last 30 days, once per post per hour and six requests per business per UTC day.</p>
-                  {!data.canManageMetrics ? <p>A workspace owner or admin can resume checks.</p> : !data.enabledMetricProviders.includes(p.connection.provider) ? <p>Verified post metrics are not enabled for this destination yet.</p> : <button className="button" disabled={busy} onClick={() => {
+                  {!data.canManageMetrics ? <p>A workspace owner or admin can resume checks.</p> : !(p.includesVideo ? data.enabledVideoMetricProviders ?? [] : data.enabledMetricProviders).includes(p.connection.provider) ? <p>{p.includesVideo ? "Verified post metrics are not enabled for this destination and media type yet." : "Verified post metrics are not enabled for this destination yet."}</p> : <button className="button" disabled={busy} onClick={() => {
                     if (window.confirm("Resume read-only metric checks for this existing post? No content will be posted and no credits will be spent.")) void act("social/metrics", { publicationId: p.id, expectedRequestedAt: p.metricsRequestedAt });
                   }}>Resume metric checks</button>}
                 </div>}

@@ -14,7 +14,7 @@ import { createInstagramPublishingAdapter } from "../src/lib/social/instagram-pu
 import { createInstagramDelivery, readInstagramMediaDelivery } from "../src/lib/social/instagram-delivery";
 import { submissionJournal } from "../src/lib/social/submission-journal";
 import { instagramFixture } from "./helpers/instagram-publishing";
-import { readSocialDashboard } from "../src/lib/social/analytics";
+import { readSocialDashboard, manageLearning } from "../src/lib/social/analytics";
 import { listPublicationVideos } from "../src/lib/social/video-transfer";
 import { stopUnsubmittedImage } from "../src/lib/social/prepost-recovery";
 import { resumeMetricChecks } from "../src/lib/social/metric-recovery";
@@ -30,11 +30,13 @@ suite("Instagram approved Reel database lifecycle", () => {
     vi.stubEnv("SECRET_ENCRYPTION_KEYS_JSON", JSON.stringify({ test: randomBytes(32).toString("base64") })); vi.stubEnv("SECRET_ENCRYPTION_ACTIVE_KEY", "test");
     for (const key of ["SOCIAL_EXECUTION_ENABLED", "INSTAGRAM_CONNECTIONS_ENABLED", "INSTAGRAM_PUBLISHING_ENABLED", "INSTAGRAM_REELS_ENABLED", "INSTAGRAM_METRICS_ENABLED", "MOTION_RENDERING_ENABLED"]) vi.stubEnv(key, "true");
     vi.stubEnv("MOTION_RENDER_DAILY_LIMIT", "100"); vi.stubEnv("PAID_EXECUTION_ENABLED", "false");
+    vi.stubEnv("INSTAGRAM_REELS_METRICS_ENABLED", "false");
     if (!process.env.TEST_FFMPEG_PATH || !process.env.TEST_FFPROBE_PATH) throw Error("Explicit local FFmpeg tools required for playable Reel verification");
     vi.stubEnv("FFMPEG_PATH", process.env.TEST_FFMPEG_PATH); vi.stubEnv("FFPROBE_PATH", process.env.TEST_FFPROBE_PATH);
   });
   afterEach(async () => {
     vi.stubEnv("INSTAGRAM_REELS_ENABLED", "true");
+    vi.stubEnv("INSTAGRAM_REELS_METRICS_ENABLED", "false"); vi.stubEnv("INSTAGRAM_METRICS_ENABLED", "true");
     await db.socialPublication.deleteMany({ where: { organizationId: { in: orgs } } });
   });
   afterAll(async () => {
@@ -104,7 +106,7 @@ suite("Instagram approved Reel database lifecycle", () => {
     for (const secret of ["mediaDelivery", f.token(), f.account.token, f.render.objectKey]) expect(JSON.stringify(dashboard)).not.toContain(secret);
     expect(await listPublicationVideos(f.scope)).toEqual([expect.objectContaining({ id: f.render.id, itemId: f.item.id, revisionVersion: 1 })]);
     const session = await db.session.create({ data: { id: crypto.randomUUID(), userId: f.scope.actorId, expiresAt: new Date(Date.now() + 60000) } });
-    await expect(resumeMetricChecks({ ...f.scope, sessionId: session.id }, { publicationId: post.id, expectedRequestedAt: null }, () => ({ Instagram: f.adapter }))).rejects.toThrow("snapshot");
+    await expect(resumeMetricChecks({ ...f.scope, sessionId: session.id }, { publicationId: post.id, expectedRequestedAt: null }, () => ({ Instagram: f.adapter }))).rejects.toThrow("media type");
   }, 60000);
   it("allows more than three processing reads but makes exactly one container and one post", async () => {
     const { f, post } = await processing();
@@ -166,5 +168,93 @@ suite("Instagram approved Reel database lifecycle", () => {
     f.replies.push({ data: f.inspectedPage }, f.identity, f.post); await runOneReconciliation({ Instagram: f.adapter });
     expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "PUBLISHED", nextMetricsAt: null });
     expect(f.fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(2);
+  });
+  async function metricFixture(reconcile = false) {
+    vi.stubEnv("INSTAGRAM_REELS_METRICS_ENABLED", "true"); vi.stubEnv("INSTAGRAM_METRICS_ENABLED", "false");
+    const f = await setup(), queued = await queue(f);
+    if (reconcile) f.replies[5] = Error("Lost receipt response");
+    await runOnePublication({ Instagram: f.adapter });
+    if (reconcile) {
+      f.replies.push({ data: f.inspectedPage }, f.identity, f.post);
+      await runOneReconciliation({ Instagram: f.adapter });
+    }
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: queued.id } })).toMatchObject({ status: "PUBLISHED", nextMetricsAt: expect.any(Date) });
+    const publishedAt = new Date(Date.now() - 3600000); f.post.timestamp = publishedAt.toISOString();
+    const post = await db.socialPublication.update({ where: { id: queued.id }, data: { publishedAt, nextMetricsAt: new Date(0) } });
+    const stats = { data: ["views", "reach", "total_interactions"].map((name, n) => ({ id: `${f.id}/insights/${name}/lifetime`, name, period: "lifetime", values: [{ value: [1500, 0, 60][n] }] })) };
+    f.replies.splice(0, f.replies.length, { data: f.inspectedPage }, f.identity, f.post, stats, f.post);
+    f.fetcher.mockClear();
+    return { f, post, stats };
+  }
+  it.each([false, true])("collects Reel metrics after publication (recovered receipt: %s) without reposting or spending", async reconcile => {
+    const { f, post } = await metricFixture(reconcile);
+    expect(await runOneMetricSync({ Instagram: f.adapter })).toBe(true);
+    const reading = await db.metricSnapshot.findFirstOrThrow({ where: { publicationId: post.id } });
+    expect(reading).toMatchObject({ definitionVersion: `instagram-reel-views-reach-total-interactions-${f.config.apiVersion}-v1`, views: 1500, reach: 0, engagements: 60, impressions: null, videoViews: null, clicks: null });
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "PUBLISHED", externalPostId: f.id, metricsFailures: 0, metricsLeaseUntil: null, nextMetricsAt: expect.any(Date) });
+    const dashboard = await readSocialDashboard(f.scope);
+    expect(dashboard.summary[0].metrics.views).toEqual({ value: 1500, coveredPosts: 1 });
+    expect(dashboard.summary[0].note).toContain("Reels only");
+    expect(dashboard.summary[0].metrics.impressions.value).toBeNull();
+    await expect(manageLearning(f.scope, { action: "evaluate" })).rejects.toThrow("Insufficient comparable evidence");
+    expect(f.fetcher).toHaveBeenCalledTimes(5);
+    expect(f.fetcher.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+    expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(0);
+  });
+  it("stops source-edited Reel metrics, retains historical snapshots and denies their recovery", async () => {
+    const { f, post } = await metricFixture(); await runOneMetricSync({ Instagram: f.adapter });
+    f.replies.push({ data: f.inspectedPage }, f.identity, { ...f.post, caption: "Changed on Instagram" });
+    await db.socialPublication.update({ where: { id: post.id }, data: { nextMetricsAt: new Date(0) } });
+    await runOneMetricSync({ Instagram: f.adapter });
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ metricsInvalidatedAt: expect.any(Date), errorCode: "METRICS_SOURCE_CHANGED", nextMetricsAt: null, metricsLeaseUntil: null });
+    expect(await db.metricSnapshot.count({ where: { publicationId: post.id } })).toBe(1);
+    expect((await readSocialDashboard(f.scope)).summary[0].metrics.views.value).toBeNull();
+    const session = await db.session.create({ data: { id: crypto.randomUUID(), userId: f.scope.actorId, expiresAt: new Date(Date.now() + 60000) } });
+    await expect(resumeMetricChecks({ ...f.scope, sessionId: session.id }, { publicationId: post.id, expectedRequestedAt: null }, () => ({ Instagram: f.adapter }))).rejects.toThrow("changed on the network");
+  });
+  it.each(["empty", "permission", "reconnect", "wrong definition", "corrupt snapshot"])("handles Reel %s without false evidence", async kind => {
+    const { f, post, stats } = await metricFixture();
+    if (kind === "empty") stats.data = [];
+    if (kind === "permission") f.replies[3] = new Response("private provider detail", { status: 403 });
+    if (kind === "reconnect") {
+      const read = f.adapter.metrics;
+      f.adapter.metrics = async (...args) => {
+        const result = await read(...args);
+        await db.socialConnection.update({ where: { id: f.connection.id }, data: { authorizationVersion: { increment: 1 } } });
+        return result;
+      };
+    }
+    await runOneMetricSync({ Instagram: f.adapter });
+    if (kind === "permission" || kind === "reconnect") {
+      expect(await db.metricSnapshot.count({ where: { publicationId: post.id } })).toBe(0);
+      const current = await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } });
+      expect(current.metricsInvalidatedAt).toBeNull();
+      if (kind === "permission") expect(current).toMatchObject({ metricsFailures: 1, nextMetricsAt: expect.any(Date) });
+      else expect(current).toMatchObject({ errorCode: "METRICS_CONTEXT_CHANGED", nextMetricsAt: null });
+    }
+    if (kind === "wrong definition") await db.metricSnapshot.updateMany({ where: { publicationId: post.id }, data: { definitionVersion: `instagram-feed-views-reach-total-interactions-${f.config.apiVersion}-v1` } });
+    if (kind === "corrupt snapshot") await db.socialPublication.update({ where: { id: post.id }, data: { payloadHash: "a".repeat(64) } });
+    expect((await readSocialDashboard(f.scope)).summary[0].metrics.views.value).toBeNull();
+  });
+  it("does not route a stale Reel metric task through the feed-image capability", async () => {
+    const { f, post } = await metricFixture();
+    f.adapter.videoMetricsAvailable = false; f.adapter.metricsAvailable = true;
+    await runOneMetricSync({ Instagram: f.adapter });
+    expect(f.fetcher).not.toHaveBeenCalled();
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ nextMetricsAt: null, metricsLeaseUntil: null, metricsFailures: 0, errorCode: "METRICS_NOT_ENABLED" });
+    expect(await db.metricSnapshot.count({ where: { publicationId: post.id } })).toBe(0);
+  });
+  it("resumes never-started Reel metrics after separate activation with bounded owner authorization", async () => {
+    const { f, post } = await metricFixture();
+    await db.socialPublication.update({ where: { id: post.id }, data: { nextMetricsAt: null } });
+    const session = await db.session.create({ data: { id: crypto.randomUUID(), userId: f.scope.actorId, expiresAt: new Date(Date.now() + 60000) } });
+    const scope = { ...f.scope, sessionId: session.id }, input = { publicationId: post.id, expectedRequestedAt: null };
+    const result = await resumeMetricChecks(scope, input, () => ({ Instagram: f.adapter }));
+    expect(result.ok).toBe(true);
+    await expect(resumeMetricChecks(scope, input, () => ({ Instagram: f.adapter }))).rejects.toThrow("changed");
+    expect(await runOneMetricSync({ Instagram: f.adapter })).toBe(true);
+    await db.socialPublication.update({ where: { id: post.id }, data: { nextMetricsAt: null } });
+    await expect(resumeMetricChecks(scope, { ...input, expectedRequestedAt: result.requestedAt }, () => ({ Instagram: f.adapter }))).rejects.toThrow("one hour");
+    expect(await db.auditEvent.count({ where: { businessId: f.scope.businessId, action: "SOCIAL_METRICS_RESUMED" } })).toBe(1);
   });
 });
