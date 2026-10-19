@@ -1,0 +1,45 @@
+diff --git a/apps/api/src/scraper/scrapeURL/engines/playwright/index.ts b/apps/api/src/scraper/scrapeURL/engines/playwright/index.ts
+--- a/apps/api/src/scraper/scrapeURL/engines/playwright/index.ts
++++ b/apps/api/src/scraper/scrapeURL/engines/playwright/index.ts
+@@ -8,10 +8,15 @@
+ export async function scrapeURLWithPlaywright(
+   meta: Meta,
+ ): Promise<EngineScrapeResult> {
++  const token = process.env.PLAYWRIGHT_MICROSERVICE_TOKEN;
++  if (!token || !/^[\x21-\x7e]{24,256}$/.test(token)) {
++    throw new Error("Private browser credential required");
++  }
+   const response = await robustFetch({
+     url: config.PLAYWRIGHT_MICROSERVICE_URL!,
+     headers: {
+       "Content-Type": "application/json",
++      Authorization: `Bearer ${token}`,
+     },
+     body: {
+       url: meta.rewrittenUrl ?? meta.url,
+@@ -25,5 +30,6 @@
+     schema: z.object({
+       content: z.string(),
++      url: z.string().url(),
+       pageStatusCode: z.number(),
+       pageError: z.string().optional(),
+       contentType: z.string().optional(),
+@@ -39,5 +45,5 @@
+   return {
+-    url: meta.rewrittenUrl ?? meta.url, // TODO: impove redirect following
++    url: response.url,
+     html: response.content,
+     statusCode: response.pageStatusCode,
+     error: response.pageError,
+diff --git a/apps/api/src/scraper/scrapeURL/index.ts b/apps/api/src/scraper/scrapeURL/index.ts
+--- a/apps/api/src/scraper/scrapeURL/index.ts
++++ b/apps/api/src/scraper/scrapeURL/index.ts
+@@ -330,7 +330,7 @@
+   const specParams =
+     urlSpecificParams[new URL(url).hostname.replace(/^www\./, "")];
+-  if (specParams !== undefined) {
++  if (specParams !== undefined && process.env.MARKETINGBUS_PRIVATE_INTAKE !== "true") {
+     options = Object.assign(options, specParams.scrapeOptions);
+     internalOptions = Object.assign(
+       internalOptions,
+       specParams.internalOptions,

@@ -1,0 +1,1 @@
+exports.CostTracking = class CostTracking {};
