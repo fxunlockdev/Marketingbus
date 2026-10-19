@@ -203,10 +203,12 @@ export async function runOnePublication(adapters: SocialAdapters) {
       } else if (outcome.state === "processing") {
         // Processing is safe to poll only after acknowledgement of a known Reel container,
         // before any publish attempt. Never recreate the container or extend its capability.
-        const acknowledged = claimed.payload.video && claimed.token.provider === "Instagram" && fresh.mediaTransferVersion?.endsWith(":reel-v1") &&
+        const instagramAcknowledged = claimed.payload.video && claimed.token.provider === "Instagram" && fresh.mediaTransferVersion?.endsWith(":reel-v1") &&
           fresh.mediaUploaded && /^[1-9][0-9]{0,39}$/.test(fresh.mediaExternalId ?? "") &&
           !fresh.submissionAdapterVersion && !fresh.candidatePostId && fresh.mediaDeliveryExpiresAt;
-        const canPoll = acknowledged && fresh.attempts < 15 && fresh.mediaDeliveryExpiresAt!.getTime() > Date.now() + 60_000;
+        const linkedInAcknowledged = claimed.payload.video && claimed.token.provider === "LinkedIn" && fresh.mediaTransferVersion?.endsWith(":publish-v1:video-v1") &&
+          fresh.mediaUploaded && /^urn:li:video:[A-Za-z0-9_-]{1,200}$/.test(fresh.mediaExternalId ?? "") && !fresh.submissionAdapterVersion && !fresh.candidatePostId;
+        const canPoll = fresh.attempts < 15 && (linkedInAcknowledged || instagramAcknowledged && fresh.mediaDeliveryExpiresAt!.getTime() > Date.now() + 60_000);
         await tx.socialPublication.update({ where: { id: fresh.id }, data: {
           status: canPoll ? "SCHEDULED" : "NEEDS_RECONCILIATION", leaseUntil: null,
           ...(canPoll ? { scheduledFor: new Date(Date.now() + 60_000) } : {}),

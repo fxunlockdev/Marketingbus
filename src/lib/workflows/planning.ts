@@ -6,6 +6,7 @@ import { brandInput, proposePlan } from "../brand";
 import { actOnProduction, lockBusiness, type Scope } from "../production/service";
 import { stopWeeklyImages } from "./weekly-image-policy";
 import { stopWeeklyVideos } from "./weekly-video-policy";
+import { businessKnowledge } from "../harness/knowledge-graph";
 
 export function nextWeekly(weekday: number, hourUTC: number, now: Date) {
   const next = new Date(now); next.setUTCHours(hourUTC, 0, 0, 0);
@@ -113,7 +114,7 @@ export async function createDuePlan(now = new Date()) {
     const periodKey = weekKey(now);
     if (await tx.weeklyCycle.findUnique({ where: { businessId_periodKey: { businessId: business.id, periodKey } } })) return true;
     const brand = brandInput.parse(Object.fromEntries(Object.keys(brandInput.shape).map(k => [k, business[k as keyof typeof business]])));
-    const templates = proposePlan(brand);
+    const templates = await Promise.all(proposePlan(brand).map(async template => ({ ...template, brief: { ...template.brief, knowledgeContext: await businessKnowledge(tx, scope, "planning", template.channel) } })));
     // Null preserves legacy platform defaults and spending consent until an admin saves a mix.
     const legacy = policy.videoItems === null;
     const plan = await tx.productionPlan.create({ data: { businessId: business.id, organizationId: scope.organizationId, brandVersion: business.version, title: `Week of ${periodKey} · review required`, creditCeiling: policy.creditsPerWeek, items: { create: Array.from({ length: policy.maxItems }, (_, i) => ({ ...templates[i % templates.length], format: legacy ? templates[i % templates.length].format : i < policy.videoItems! ? "motion" : "static", title: `${templates[i % templates.length].title} · ${i + 1}` })) } }, include: { items: true } });

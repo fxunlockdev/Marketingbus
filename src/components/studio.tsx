@@ -28,6 +28,7 @@ import type { BrandInput } from "@/lib/brand";
 import { brandSuggestions } from "@/lib/brand";
 import { BrandForm, presets } from "./brand-form";
 import { BusinessSetup } from "./business-setup";
+import { LearnedSkills } from "./learned-skills";
 import { AssetLibrary } from "./asset-library";
 import { KnowledgeLibrary } from "./knowledge-library";
 import { SocialDashboard } from "./social-dashboard";
@@ -862,6 +863,7 @@ export function Studio({
                         nonexistent performance data.
                       </p>
                     )}
+                    <LearnedSkills key={business.id} businessId={business.id} />
                   </>
                 ) : (
                   <Empty

@@ -219,8 +219,8 @@ export async function manageSocial(
           throw new AppError(409, "Resolve factual checks before publishing.");
         if (input.mediaExportId && !adapters[provider]?.imagePublishingAvailable) throw new AppError(409, "Image publishing is not enabled for this destination.");
         // Each media type needs a verified export and a corresponding platform transport.
-        if (input.videoRenderId && (!adapters[provider]?.videoPublishingAvailable || !["Instagram", "Facebook"].includes(provider) || !["static", "motion", "video"].includes(item.format) || input.mediaExportId))
-          throw new AppError(409, "Choose one approved final Reel for an enabled video destination.");
+        if (input.videoRenderId && (!adapters[provider]?.videoPublishingAvailable || !["static", "motion", "video"].includes(item.format) || input.mediaExportId))
+          throw new AppError(409, "Choose one approved final video for an enabled video destination.");
         if (input.shareToFeed !== undefined && (!input.videoRenderId || provider !== "Instagram")) throw new AppError(400, "Feed placement applies only to Instagram Reels.");
         if (!input.videoRenderId && (item.format !== "static" || provider === "Instagram" && !input.mediaExportId))
           throw new AppError(

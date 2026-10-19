@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 import { db } from "../src/lib/db";
 import { manageImage, previewImage, listImages } from "../src/lib/images/service";
@@ -15,11 +15,13 @@ suite("image production lifecycle", () => {
   const orgs: string[] = [], users: string[] = [], workerId = `image-fixture-${crypto.randomUUID()}`, objects = new Map<string, Buffer>();
   const store: AssetStore = { put: async (key, bytes, _mime, immutable) => { if (immutable && objects.has(key)) throw Error("immutable"); objects.set(key, Buffer.from(bytes)); }, get: async key => { const value = objects.get(key); if (!value) throw Error("missing"); return value; }, remove: async key => { objects.delete(key); } };
   beforeEach(async () => {
+    vi.stubEnv("IMAGE_PROVIDER", "");
     vi.stubEnv("GEMINI_API_KEY", "fixture-never-network"); vi.stubEnv("PAID_EXECUTION_ENABLED", "true");
     vi.stubEnv("DAILY_SUPPLIER_BUDGET_MICROS", "50000000"); vi.stubEnv("TOTAL_SUPPLIER_BUDGET_MICROS", "1000000000");
     vi.stubEnv("IMAGE_RATE_CARD_JSON", JSON.stringify([{ model: "gemini-fixture", lane: "creative", inputUsdPerMillion: 2, outputUsdPerMillion: 8, maxOutputTokens: 4096, verifiedUntil: "2099-01-01T00:00:00Z" }, { model: "gemini-fixture-revision", lane: "revision", inputUsdPerMillion: 1, outputUsdPerMillion: 4, maxOutputTokens: 4096, verifiedUntil: "2099-01-01T00:00:00Z" }]));
     await heartbeat(workerId);
   });
+  afterEach(() => vi.unstubAllGlobals());
   afterAll(async () => {
     const rows = await db.imageGeneration.findMany({ where: { organizationId: { in: orgs } } });
     await db.supplierAuthorization.deleteMany({ where: { key: { in: rows.map(r => r.id) } } });
@@ -45,6 +47,36 @@ suite("image production lifecycle", () => {
   }
   async function row(id: string) { return db.imageGeneration.findUniqueOrThrow({ where: { id }, include: { output: true } }); }
   async function wallet(f: Awaited<ReturnType<typeof setup>>) { return db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } }); }
+  it("recalls business visual preferences and rejects a stale knowledge quote before spending", async () => {
+    const f = await setup();
+    const memory = await db.memory.create({ data: { businessId: f.scope.businessId, organizationId: f.scope.organizationId, text: "Prefer warm side lighting." } });
+    const id = await quote(f); expect((await row(id)).prompt).toContain(memory.text);
+    expect((await row(id)).knowledgeContext).toMatchObject({ task: "image", businessId: f.scope.businessId });
+    await db.memory.delete({ where: { id: memory.id } });
+    await expect(manageImage(f.scope, { action: "accept", generationId: id }, () => store)).rejects.toThrow("knowledge changed");
+    expect((await row(id)).reservationId).toBeNull(); expect(f.generate).not.toHaveBeenCalled();
+  });
+  it("withholds artwork and releases customer credits if knowledge changes during generation", async () => {
+    const f = await setup(), id = await accept(f);
+    await runOneImage(async () => {
+      await db.memory.create({ data: { businessId: f.scope.businessId, organizationId: f.scope.organizationId, text: "Use cool light instead." } });
+      return f.generate();
+    }, () => store);
+    expect((await row(id)).status).toBe("FAILED"); expect((await wallet(f)).available).toBe(1000);
+  });
+  it("runs OpenAI through the real worker transport, private storage, approval and exact-asset export", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "synthetic-openai"); vi.stubEnv("GEMINI_API_KEY", ""); vi.stubEnv("IMAGE_PROVIDER", "openai");
+    vi.stubEnv("IMAGE_RATE_CARD_JSON", JSON.stringify([{ model: "gpt-image-2.5-sunburst", lane: "creative", quality: "high", textInputUsdPerMillion: 5, inputUsdPerMillion: 8, outputUsdPerMillion: 30, maxOutputTokens: 32768, verifiedUntil: "2099-01-01T00:00:00Z" }])); await heartbeat(workerId);
+    const f = await setup(), id = await accept(f), artwork = await sharp({ create: { width: 2048, height: 2048, channels: 3, background: "#aa9977" } }).webp().toBuffer();
+    const fetcher = vi.fn(async () => Response.json({ usage: { input_tokens: 100, input_tokens_details: { text_tokens: 100, image_tokens: 0 }, output_tokens: 100, total_tokens: 200 }, data: [{ b64_json: artwork.toString("base64") }] }, { headers: { "x-request-id": "req-image-fixture" } })); vi.stubGlobal("fetch", fetcher);
+    await runOneImage(undefined, () => store); expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(await row(id)).toMatchObject({ status: "READY", supplierCostMicros: 3500, providerResponseId: "req-image-fixture", output: { approvedForGeneration: false } });
+    expect((fetcher.mock.calls[0] as unknown as [string])[0]).toBe("https://api.openai.com/v1/images/generations");
+    await manageImage(f.scope, { action: "approve", generationId: id, fidelityReviewed: true }, () => store);
+    const composition = await manageComposition(f.scope, { action: "create", itemId: f.item.id, revisionVersion: 1 });
+    await manageComposition(f.scope, { action: "approve", rendererVersion: "static-outlines-v2", itemId: f.item.id, version: composition.composition.version });
+    expect((await exportComposition(f.scope, composition.composition.id, "square", false, store)).width).toBe(1080);
+  });
   it("shares the creative limit across media, counts once and blocks parent-free replacement bypass", async () => {
     const f = await setup(), original = await accept(f); await runOneImage(f.generate, () => store);
     await db.productionItem.update({ where: { id: f.item.id }, data: { revisionRequests: 2 } });

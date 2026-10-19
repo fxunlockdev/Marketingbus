@@ -225,6 +225,7 @@ model BrandSnapshot {
 
 model ImageGeneration {
   id String @id @default(cuid())
+  knowledgeContext Json @default("{}")
   businessId String
   organizationId String
   actorId String
@@ -553,6 +554,7 @@ model VideoClip {
 
 model VideoGeneration {
   id String @id @default(cuid())
+  knowledgeContext Json @default("{}")
   businessId String
   organizationId String
   actorId String

@@ -15,9 +15,9 @@ export const publicationImage = z.object({
 }).strict();
 export const publicationVideo = z.object({
   sha256: z.string().regex(/^[a-f0-9]{64}$/), bytes: z.number().int().min(1).max(20 * 1024 * 1024),
-  width: z.literal(720), height: z.literal(1280), durationMs: z.number().int().min(3000).max(30000),
+  width: z.number().int(), height: z.number().int(), durationMs: z.number().int().min(3000).max(30000),
   shareToFeed: z.boolean(),
-}).strict();
+}).strict().refine(v => [[720, 1280], [720, 720], [720, 900], [1280, 720]].some(([w, h]) => v.width === w && v.height === h), "Use a supported final-video export layout.");
 export const publicationPayload = z
   .object({
     caption: z.string().min(1).max(3000),
@@ -29,13 +29,14 @@ export const publicationPayload = z
     video: publicationVideo.optional(),
   })
   .strict().refine(p => p.mediaExportId === null ? p.image === undefined && p.video === undefined :
-    !!p.image && !p.video && p.format === "static" || !!p.video && !p.image && p.format === "video" && ["Instagram", "Facebook"].includes(p.channel), "Unsupported media binding")
+    !!p.image && !p.video && p.format === "static" || !!p.video && !p.image && p.format === "video", "Unsupported media binding")
+  .refine(p => !p.video || (p.channel === "LinkedIn" ? p.video.bytes >= 75 * 1024 && !p.video.shareToFeed : p.video.width === 720 && p.video.height === 1280), "LinkedIn needs at least 75 KB and no Reel feed placement; Meta Reels require portrait 720×1280.")
   .refine(p => p.channel !== "Facebook" || !p.video || p.video.durationMs >= 4000 && !p.video.shareToFeed, "Facebook Reels require at least four seconds and cannot use Instagram feed placement.")
   .refine(p => p.channel !== "Facebook" || !p.image || p.image.bytes <= 4 * 1024 * 1024, "Facebook image exports must be 4 MB or smaller.")
   .refine(p => p.channel !== "Instagram" || p.caption.length <= 2200 && (!!p.video || p.image?.width === 1080 && [1080, 1350].includes(p.image.height)), "Instagram requires an approved image or Reel and a caption of 2,200 characters or fewer.");
 export type PublicationPayload = z.infer<typeof publicationPayload>;
 export function reelPublishingEnabled(provider: string) {
-  return provider === "Instagram" ? process.env.INSTAGRAM_REELS_ENABLED === "true" : provider === "Facebook" && process.env.FACEBOOK_REELS_ENABLED === "true";
+  return provider === "Instagram" ? process.env.INSTAGRAM_REELS_ENABLED === "true" : provider === "Facebook" ? process.env.FACEBOOK_REELS_ENABLED === "true" : provider === "LinkedIn" && process.env.LINKEDIN_VIDEO_PUBLISHING_ENABLED === "true";
 }
 export const publishedReceipt = z
   .object({
@@ -64,7 +65,7 @@ export const metricReading = z
 export type MetricReading = z.infer<typeof metricReading>;
 // Metrics describe this immutable creative, not whichever text happens to be at its URL now.
 export const metricSubject = z.object({ payload: publicationPayload, publishedAt: z.date(), mediaExternalId: z.string().min(1).max(220).optional() }).strict()
-  .refine(s => !s.mediaExternalId || (!!s.payload.image || s.payload.channel === "Instagram" && !!s.payload.video) && (s.payload.channel === "LinkedIn" ? /^urn:li:image:[A-Za-z0-9_-]{1,200}$/.test(s.mediaExternalId) : /^[1-9][0-9]{0,39}$/.test(s.mediaExternalId)), "Invalid provider media identity");
+  .refine(s => !s.mediaExternalId || (!!s.payload.image || ["Instagram", "LinkedIn"].includes(s.payload.channel) && !!s.payload.video) && (s.payload.channel === "LinkedIn" ? (s.payload.video ? /^urn:li:video:[A-Za-z0-9_-]{1,200}$/ : /^urn:li:image:[A-Za-z0-9_-]{1,200}$/).test(s.mediaExternalId) : /^[1-9][0-9]{0,39}$/.test(s.mediaExternalId)), "Invalid provider media identity");
 export type MetricSubject = z.infer<typeof metricSubject>;
 export class MetricSourceChangedError extends Error {
   constructor() { super("Published creative changed; metrics cannot be attributed to the approved version."); }

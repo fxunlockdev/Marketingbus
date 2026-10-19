@@ -3,12 +3,12 @@ import type { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { AppError } from "../http";
 import { assertExecutionEnabled, configurationHash, configuredModels, keyFor } from "./router";
-import { imageConfigurationHash, imageRates } from "../images/contracts";
+import { imageConfigurationHash, imageRates, imageKey } from "../images/contracts";
 import { motionConfigurationHash } from "../video/limits";
 import { motionRendererAvailable } from "../video/render";
 import { shotConfigurationHash, shotRates, configuredShotAdapters } from "../video/generation-contracts";
 
-export const WORKER_RUNTIME = "studio-v48-social-access-lifecycle";
+export const WORKER_RUNTIME = "studio-v52-business-knowledge";
 export const HEARTBEAT_TTL_MS = 120_000;
 export function workerConfigurationHash() {
   return createHash("sha256").update(JSON.stringify({
@@ -26,7 +26,7 @@ export async function heartbeat(id: string, lastSeenAt = new Date()) {
   let executionEnabled = false;
   try {
     assertExecutionEnabled();
-    executionEnabled = configuredModels().some(m => !!keyFor(m.provider) && new Date(m.verifiedUntil).getTime() > Date.now()) || (!!process.env.GEMINI_API_KEY && imageRates().some(m => new Date(m.verifiedUntil).getTime() > Date.now()));
+    executionEnabled = configuredModels().some(m => !!keyFor(m.provider) && new Date(m.verifiedUntil).getTime() > Date.now()) || imageRates().some(m => !!imageKey(m.model) && new Date(m.verifiedUntil).getTime() > Date.now());
     executionEnabled ||= shotRates().some(r => new Date(r.verifiedUntil).getTime() > Date.now() && configuredShotAdapters().some(a => a.id === r.provider && a.accountId === r.accountId && a.version === r.adapterVersion));
   } catch { /* A paused worker is still operationally healthy. */ }
   const data = { runtimeVersion: WORKER_RUNTIME, configurationHash: workerConfigurationHash(), executionEnabled, motionReady: await motionRendererAvailable(), lastSeenAt };

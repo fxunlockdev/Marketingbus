@@ -16,6 +16,9 @@ import { approvedFactText, evaluateCreative } from "./quality";
 import { productionMemories, preferenceFingerprint } from "../social/learning-evidence";
 import { calendarExpectation, checkCalendarChange } from "./calendar";
 import { checkCreativeRevision } from "./revision-limit";
+import { learnedRule, rulesFromMemories } from "../harness/learned-rules";
+import { reflectLearnedSkills } from "../harness/learning";
+import { businessKnowledge, graphPrompt, graphSnapshot, assertKnowledgeCurrent } from "../harness/knowledge-graph";
 
 export type Scope = { businessId: string; organizationId: string; actorId: string };
 export const productionAction = z.discriminatedUnion("action", [
@@ -32,6 +35,8 @@ export const requestSchema = z.object({
   previous: creativeSchema.nullable(), feedback: z.string(), skillVersion: z.string(),
   approvedFacts: z.string().max(10000).default(""),
   preferenceFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  learnedRules: z.array(learnedRule).max(3).default([]),
+  knowledgeContext: graphSnapshot.optional(),
   sourceHashes: z.array(z.object({ file: z.string(), sha256: z.string() })),
 }).strict();
 export async function lockBusiness(tx: Prisma.TransactionClient, scope: Scope) {
@@ -69,28 +74,30 @@ export async function actOnProduction(scope: Scope, raw: unknown, internal?: { w
       if (previous) await checkCreativeRevision(tx, scope, item.id);
       if (input.mode === "initial" ? !!previous : previous?.status !== "CHANGES_REQUESTED") throw new AppError(409, "For an existing creative, request changes before quoting a revision.");
       const memories = await productionMemories(tx, scope, business.version);
-      return { business, item, previous, memories };
+      const knowledgeContext = await businessKnowledge(tx, scope, "copy", item.channel);
+      return { business, item, previous, memories, knowledgeContext };
     });
-    const { business, item, previous, memories } = context;
+    const { business, item, previous, memories, knowledgeContext } = context;
     const brand = brandInput.parse(Object.fromEntries(Object.keys(brandInput.shape).map(k => [k, business[k as keyof typeof business]])));
     const harness = await compileHarness({ organizationId: scope.organizationId, businessId: business.id, planItemId: item.id,
       brandVersion: business.version, discipline: item.format === "motion" ? "video" : item.channel === "LinkedIn" ? "linkedin" : "static", objective: brand.goal,
       audienceTension: `Address this audience: ${brand.audience}`.slice(0, 1000), proposition: (brand.difference || brand.offering).slice(0, 1000),
       evidence: brand.proof ? [{ id: "approved-brand-proof", claim: brand.proof.slice(0, 1000) }] : [],
-      concept: item.title, direction: input.direction, brand, brandConfirmed: true, creditCeiling: 8000, preferences: memories.map(m => m.text),
+      concept: item.title, direction: input.direction, brand, brandConfirmed: true, creditCeiling: 8000, preferences: [],
     }, scope);
     const prior = previous ? creativeSchema.parse(previous.content) : null;
     const system = `${harness.system}\nReturn JSON ONLY matching this schema: ${JSON.stringify(creativeJsonSchema)}. evidenceUsed must contain only verbatim excerpts of approved brand proof, or be empty. No invented testimonials, numerical results or guarantees. Caption limits including any CTA/hashtags: X 280, Instagram 2200, LinkedIn 3000, Facebook 3000 characters. The caption is the complete publishable text. Headline/cta are for the visual. This deliverable is copy plus visual direction, NOT a generated image. ${input.mode === "copy" ? "Revise headline, caption and CTA only; retain the previous visual direction, rationale and evidence." : "Develop a specific audience insight and one ownable creative idea; apply the reference editorial checks before final output."}`;
-    const prompt = JSON.stringify({ brief: JSON.parse(harness.input), format: item.format, deliverable: item.format === "motion" ? "Video concept and publishable caption. Keep headline within 120 characters for the opening scene; visualDirection describes a finite shot sequence, not completed footage. Storyboard, footage and final render require separate human review." : "Static social creative", mode: input.mode, previous: prior, feedback: previous?.feedback || "" });
+    const prompt = JSON.stringify({ brief: JSON.parse(harness.input), knowledge: graphPrompt(knowledgeContext), format: item.format, deliverable: item.format === "motion" ? "Video concept and publishable caption. Keep headline within 120 characters for the opening scene; visualDirection describes a finite shot sequence, not completed footage. Storyboard, footage and final render require separate human review." : "Static social creative", mode: input.mode, previous: prior, feedback: previous?.feedback || "" });
     if (system.length + prompt.length > 150000) throw new AppError(409, "Brand context exceeds the safe production limit. Shorten the saved preferences.");
     const hash = configurationHash();
     const route = selectRoute(input.mode, Buffer.byteLength(system + prompt + JSON.stringify(creativeJsonSchema), "utf8"));
     const request = requestSchema.parse({ system, input: prompt, route, channel: item.channel, proof: brand.proof, brandName: brand.name, color: brand.color, preset: brand.designPreset,
-      previous: prior, feedback: previous?.feedback || "", approvedFacts: approvedFactText(brand), preferenceFingerprint: preferenceFingerprint(memories), skillVersion: harness.skillVersion, sourceHashes: harness.sourceHashes });
+      previous: prior, feedback: previous?.feedback || "", approvedFacts: approvedFactText(brand), preferenceFingerprint: preferenceFingerprint(memories), learnedRules: rulesFromMemories(memories, item.channel), knowledgeContext, skillVersion: harness.skillVersion, sourceHashes: harness.sourceHashes });
     return db.$transaction(async tx => {
       const fresh = await lockBusiness(tx, scope);
       const latest = await currentItem(tx, scope, item.id);
       const latestMemories = await productionMemories(tx, scope, fresh.version);
+      await assertKnowledgeCurrent(tx, scope, knowledgeContext);
       if (JSON.stringify(latestMemories) !== JSON.stringify(memories)) throw new AppError(409, "Brand preferences changed. Request a fresh quote.");
       if (!fresh.confirmedAt || fresh.version !== business.version || (latest.revisions[0]?.version || 0) !== (previous?.version || 0) || (latest.revisions[0]?.feedback || "") !== (previous?.feedback || "")) throw new AppError(409, "The brand or creative changed. Request a fresh quote.");
       await assertIdle(tx, item.id, scope.organizationId);
@@ -113,6 +120,7 @@ export async function actOnProduction(scope: Scope, raw: unknown, internal?: { w
       const item = await currentItem(tx, scope, quote.itemId);
       if (!business.confirmedAt || quote.brandVersion !== business.version || item.plan.status !== "PROPOSED" || (item.revisions[0]?.version || 0) !== quote.baseVersion) throw new AppError(409, "The brand or creative changed. Request a fresh quote.");
       if (requestSchema.parse(quote.request).preferenceFingerprint !== preferenceFingerprint(await productionMemories(tx, scope, business.version))) throw new AppError(409, "Brand preferences or experiment evidence changed. Request a fresh quote.");
+      await assertKnowledgeCurrent(tx, scope, requestSchema.parse(quote.request).knowledgeContext);
       if (quote.baseVersion && item.revisions[0]?.status !== "CHANGES_REQUESTED") throw new AppError(409, "This revision is no longer awaiting changes.");
       await assertIdle(tx, item.id, scope.organizationId);
       if (quote.baseVersion > 0) await checkCreativeRevision(tx, scope, item.id, true);
@@ -179,6 +187,7 @@ export async function actOnProduction(scope: Scope, raw: unknown, internal?: { w
       if (await tx.memory.count({ where: { businessId: scope.businessId } }) >= 100) throw new AppError(409, "Remove an unused preference before saving another.");
       await tx.memory.create({ data: { organizationId: scope.organizationId, businessId: scope.businessId, text: input.feedback } });
     }
+    if (input.action === "approve") await reflectLearnedSkills(tx, scope, business.version);
     await audit(tx, scope, `CREATIVE_${status}`, `Version ${revision.version}: ${status.toLowerCase().replaceAll("_", " ")}. No generation or credit charge triggered.`);
     return { ok: true };
   });

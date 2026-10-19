@@ -1,6 +1,6 @@
 # LinkedIn company publishing and post metrics
 
-The transport supports organic company text posts and, behind a separate disabled-by-default gate, one approved PNG export. It does not upload video, publish personal-profile posts, enable Instagram publishing, or establish live platform acceptance. Facebook has its own text-only adapter.
+The transport supports organic company text posts, separately gated approved PNG exports, and [approved final-video uploads](LINKEDIN-VIDEO.md). It does not publish personal-profile posts or establish live platform acceptance. Facebook and Instagram have their own separately gated adapters.
 
 ## Approved image transfer
 

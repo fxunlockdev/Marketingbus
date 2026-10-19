@@ -20,11 +20,11 @@ export async function publicationRender(client: Prisma.TransactionClient | typeo
       ctx.document.shots.some(shot => !reviews.some(r => r.shotId === shot.id && r.hash === shotHash(ctx.document, shot))))
     throw new AppError(409, "Review and export the current complete storyboard before publishing.");
   const video = publicationVideo.safeParse({ sha256: row.sha256, bytes: row.bytes, width: dimensions.width, height: dimensions.height, durationMs: row.durationMs, shareToFeed: false });
-  if (!video.success) throw new AppError(409, "Reels require a portrait 720×1280 export, 3–30 seconds, at most 20 MB; Facebook requires at least four seconds.");
+  if (!video.success) throw new AppError(409, "Use a supported reviewed final export, 3–30 seconds and at most 20 MB.");
   return { row, video: video.data, storyboard: ctx.row };
 }
 export async function assertPublicationVideo(client: Prisma.TransactionClient | typeof db, scope: Scope, revisionId: string, payload: PublicationPayload) {
-  if (!payload.video || !payload.mediaExportId || !["Instagram", "Facebook"].includes(payload.channel)) throw new AppError(409, "An approved final Reel is required.");
+  if (!payload.video || !payload.mediaExportId) throw new AppError(409, "An approved final video is required.");
   const current = await publicationRender(client, scope, payload.mediaExportId, revisionId);
   const { shareToFeed: _placement, ...expected } = payload.video;
   const { shareToFeed: _default, ...actual } = current.video;
@@ -38,9 +38,9 @@ export async function listPublicationVideos(scope: Scope) {
   for (const candidate of candidates) {
     if (!candidate.storyboard.copyRevisionId) continue;
     try {
-      const { row, storyboard } = await publicationRender(db, scope, candidate.id, candidate.storyboard.copyRevisionId);
+      const { row, storyboard, video } = await publicationRender(db, scope, candidate.id, candidate.storyboard.copyRevisionId);
       const revision = await db.creativeRevision.findUniqueOrThrow({ where: { id: storyboard.copyRevisionId! } });
-      result.push({ id: row.id, itemId: storyboard.itemId, revisionVersion: revision.version, durationMs: row.durationMs, expiresAt: row.purgeAfter, bytes: row.bytes });
+      result.push({ id: row.id, itemId: storyboard.itemId, revisionVersion: revision.version, durationMs: row.durationMs, width: video.width, height: video.height, expiresAt: row.purgeAfter, bytes: row.bytes });
     } catch (error) { if (!(error instanceof AppError)) throw error; }
   }
   return result;

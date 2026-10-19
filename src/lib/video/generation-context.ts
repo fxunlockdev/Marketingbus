@@ -5,7 +5,8 @@ import { storyboardDocument } from "./document";
 import { finishReservationInTransaction } from "../billing/wallet";
 import { shotRoute } from "./generation-contracts";
 import { validateShotBriefBinding } from "./creative-brief";
-export type ShotContextClient = Pick<Prisma.TransactionClient, "business" | "productionItem" | "reviewComment" | "videoStoryboard" | "videoGeneration">;
+import { assertKnowledgeCurrent, type GraphClient } from "../harness/knowledge-graph";
+export type ShotContextClient = GraphClient & Pick<Prisma.TransactionClient, "reviewComment" | "videoStoryboard" | "videoGeneration">;
 export const generationScope = (r: VideoGeneration) => ({ businessId: r.businessId, organizationId: r.organizationId, actorId: r.actorId });
 type RevisionScope = Pick<VideoGeneration, "revisionOfId" | "businessId" | "organizationId" | "itemId" | "copyRevisionId" | "brandVersion" | "shotId">;
 export async function assertShotRevisionSource(client: ShotContextClient, row: RevisionScope) {
@@ -26,6 +27,7 @@ export async function assertShotContext(client: ShotContextClient, row: VideoGen
   const business = await client.business.findFirst({ where: { id: row.businessId, organizationId: row.organizationId } });
   const item = await client.productionItem.findFirst({ where: { id: row.itemId, organizationId: row.organizationId, plan: { businessId: row.businessId, brandVersion: row.brandVersion, status: "PROPOSED" } }, include: { revisions: { orderBy: { version: "desc" }, take: 1 } } });
   if (!business?.confirmedAt || business.version !== row.brandVersion || !item || (item.revisions[0]?.id ?? null) !== row.copyRevisionId || row.copyRevisionId && item.revisions[0]?.status !== "APPROVED") throw new AppError(409, "Generated footage source brand or approved copy changed.");
+  if (row.status !== "READY") await assertKnowledgeCurrent(client, generationScope(row), row.knowledgeContext);
   if (row.copyRevisionId && await client.reviewComment.count({ where: { revisionId: row.copyRevisionId, blocking: true, resolvedAt: null } })) throw new AppError(409, "Generated footage has unresolved source-copy comments.");
   const board = await client.videoStoryboard.findFirst({ where: { id: row.storyboardId, businessId: row.businessId, organizationId: row.organizationId, itemId: row.itemId, status: { in: requireStoryboard ? ["APPROVED"] : ["APPROVED", "SUPERSEDED"] }, approvedBy: { not: null } } });
   if (!board || motionHash(storyboardDocument.parse(board.document)) !== row.documentHash) throw new AppError(409, "The approved generation storyboard changed.");

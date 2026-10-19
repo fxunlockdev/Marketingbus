@@ -337,7 +337,7 @@ suite("storyboard and motion lifecycle", () => {
     if (reason === "rejected") await db.imageGeneration.update({ where: { id: image.generation.id }, data: { status: "REJECTED" } });
     if (reason === "copy-edited") await db.creativeRevision.create({ data: { organizationId: f.scope.organizationId, itemId: image.item.id, version: 2, status: "READY", authorId: f.scope.actorId, content: {} } });
     if (reason === "copy-blocked") await db.reviewComment.create({ data: { businessId: f.scope.businessId, organizationId: f.scope.organizationId, revisionId: image.generation.revisionId, actorId: f.scope.actorId, body: "Check source claims", blocking: true } });
-    if (reason === "newer-authorized") await db.imageGeneration.create({ data: { ...image.generation, references: [], route: {}, usage: undefined, id: crypto.randomUUID(), version: 2, status: "QUEUED", approvedBy: null } });
+    if (reason === "newer-authorized") await db.imageGeneration.create({ data: { ...image.generation, knowledgeContext: {}, references: [], route: {}, usage: undefined, id: crypto.randomUUID(), version: 2, status: "QUEUED", approvedBy: null } });
     if (reason === "reference-revoked") await changeAsset(f.scope, original.id, { action: "approve", approved: false });
     if (reason === "reference-tampered") await db.brandAsset.update({ where: { id: original.id }, data: { sha256: "0".repeat(64) } });
     if (reason === "archived") await db.brandAsset.update({ where: { id: image.asset.id }, data: { status: "ARCHIVED" } });

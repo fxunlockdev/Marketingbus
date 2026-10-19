@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
+import { mediaSkillContext } from "../harness/contracts";
+import { businessKnowledge, graphPrompt, assertKnowledgeCurrent } from "../harness/knowledge-graph";
 import type { ImageGeneration, Prisma } from "@prisma/client";
 import { z } from "zod";
 import { db } from "../db";
@@ -33,6 +35,7 @@ export async function imageReferenceAssets(client: Pick<Prisma.TransactionClient
 export async function currentImageContext(tx: Prisma.TransactionClient, row: ImageGeneration) {
   const scope = imageScope(row), business = await lockBusiness(tx, scope), item = await currentItem(tx, scope, row.itemId), revision = item.revisions[0];
   if (!business.confirmedAt || business.version !== row.brandVersion || item.plan.brandVersion !== business.version || item.plan.status !== "PROPOSED" || revision?.id !== row.revisionId || revision.status !== "APPROVED") throw new AppError(409, "Brand or approved copy changed. Request a new image quote.");
+  if (["OFFERED", "QUEUED", "RUNNING", "SUBMITTING"].includes(row.status)) await assertKnowledgeCurrent(tx, scope, row.knowledgeContext);
   const newer = await tx.imageGeneration.count({ where: { itemId: row.itemId, version: { gt: row.version }, acceptedAt: { not: null } } });
   if (newer) throw new AppError(409, "A newer image version was authorized.");
   const assets = await imageReferenceAssets(tx, row);
@@ -78,10 +81,11 @@ export async function manageImage(scope: Scope, raw: unknown, storage: () => Ass
         refs.push({ id: parent.output.id, sha256: parent.output.sha256, parent: true });
       } else if (input.feedback) throw new AppError(400, "Feedback belongs to a specific image revision.");
       const copy = creativeSchema.parse(revision.content);
-      const prompt = IMAGE_HARNESS + "\nBRIEF DATA:\n" + JSON.stringify({ business: business.name, offering: business.offering, audience: business.audience, tone: business.tone, restrictions: business.restrictions, contentPreferences: business.contentPreferences, palette: business.color, preset: business.designPreset, direction: copy.visualDirection, feedback: input.feedback, referenceOrder: refs.map(r => r.parent ? "previous artwork to revise" : "style reference") });
+      const knowledgeContext = await businessKnowledge(tx, scope, "image", item.channel, refs.map(r => r.id));
+      const prompt = IMAGE_HARNESS + await mediaSkillContext("image") + graphPrompt(knowledgeContext) + "\nBRIEF DATA:\n" + JSON.stringify({ business: business.name, offering: business.offering, audience: business.audience, tone: business.tone, restrictions: business.restrictions, contentPreferences: business.contentPreferences, palette: business.color, preset: business.designPreset, direction: copy.visualDirection, feedback: input.feedback, referenceOrder: refs.map(r => r.parent ? "previous artwork to revise" : "style reference") });
       const route = selectImageRoute(!!input.parentId, prompt, refs.length);
       await tx.imageGeneration.updateMany({ where: { itemId: item.id, status: "OFFERED" }, data: { status: "CANCELLED" } });
-      const row = await tx.imageGeneration.create({ data: { ...scope, itemId: item.id, revisionId: revision.id, brandVersion: business.version, version: (previous?.version || 0) + 1, parentId: input.parentId, feedback: input.feedback, prompt, references: refs, route, configurationHash: imageConfigurationHash(), credits: route.credits, supplierCeilingMicros: route.supplierCeilingMicros, expiresAt: new Date(Date.now() + 600000) } });
+      const row = await tx.imageGeneration.create({ data: { ...scope, knowledgeContext, itemId: item.id, revisionId: revision.id, brandVersion: business.version, version: (previous?.version || 0) + 1, parentId: input.parentId, feedback: input.feedback, prompt, references: refs, route, configurationHash: imageConfigurationHash(), credits: route.credits, supplierCeilingMicros: route.supplierCeilingMicros, expiresAt: new Date(Date.now() + 600000) } });
       if (internal) await tx.weeklyTask.update({ where: { id: internal.taskId }, data: { imageGenerationId: row.id, imageStatus: "QUOTED" } });
       await audit("IMAGE_QUOTED", "Supporting artwork quoted against approved copy and immutable reference hashes. No charge or provider call.");
       return { ok: true, generationId: row.id };

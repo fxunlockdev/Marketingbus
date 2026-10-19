@@ -22,13 +22,17 @@ export const routeSchema = z.object({
 }).strict();
 export type Route = z.infer<typeof routeSchema>;
 export type Mode = "initial" | "copy" | "concept";
+export function reasoningProviders() {
+  try { return z.array(z.enum(["openai", "anthropic"])).min(1).max(2).parse(JSON.parse(process.env.REASONING_PROVIDERS_JSON || '["openai"]')); }
+  catch { throw new AppError(503, "The reasoning provider allowlist needs operator verification."); }
+}
 export function configuredModels() {
   try {
-    return z.array(modelSchema).max(12).parse(JSON.parse(process.env.REASONING_RATE_CARD_JSON || "[]")).filter(m => m.provider === "openai");
+    return z.array(modelSchema).max(12).parse(JSON.parse(process.env.REASONING_RATE_CARD_JSON || "[]")).filter(m => reasoningProviders().includes(m.provider));
   } catch { throw new AppError(503, "The model rate card needs operator verification."); }
 }
 export function configurationHash() {
-  return createHash("sha256").update(JSON.stringify({ policy: "openai-text-v1", models: configuredModels() })).digest("hex");
+  return createHash("sha256").update(JSON.stringify({ policy: "shared-harness-text-v2", providers: reasoningProviders(), models: configuredModels() })).digest("hex");
 }
 export function keyFor(provider: "openai" | "anthropic") {
   return provider === "openai" ? process.env.OPENAI_API_KEY : process.env.ANTHROPIC_API_KEY;
@@ -46,7 +50,8 @@ export function totalSupplierBudget() {
   return total;
 }
 export function selectRoute(mode: Mode, contextBytes: number, models = configuredModels(), now = Date.now()): Route {
-  const eligible = models.filter(m => m.provider === "openai" && new Date(m.verifiedUntil).getTime() > now && !!keyFor(m.provider));
+  const allowed = reasoningProviders();
+  const eligible = models.filter(m => allowed.includes(m.provider) && new Date(m.verifiedUntil).getTime() > now && !!keyFor(m.provider));
   // A cheap model is eligible only for a scoped copy revision. New concepts require the creative lane.
   const lane = mode === "copy" && eligible.some(m => m.lane === "routine") ? "routine" : "creative";
   const maxOutputTokens = mode === "copy" ? 2000 : 4000;

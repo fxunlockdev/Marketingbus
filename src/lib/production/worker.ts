@@ -7,6 +7,8 @@ import { requestSchema, lockBusiness, currentItem } from "./service";
 import { creativeJsonSchema, validateCreative } from "./content";
 import { evaluateCreative } from "./quality";
 import { productionMemories, preferenceFingerprint } from "../social/learning-evidence";
+import { followsRule } from "../harness/learned-rules";
+import { assertKnowledgeCurrent } from "../harness/knowledge-graph";
 
 type Reasoner = typeof reason;
 // A test can inject a fixture transport. No environment switch can enable fake results in the application.
@@ -32,6 +34,7 @@ export async function runOneJob(reasoner: Reasoner = reason) {
       const item = await currentItem(tx, scope, quote.itemId);
       if (!business.confirmedAt || business.version !== quote.brandVersion || item.plan.status !== "PROPOSED" || (item.revisions[0]?.version || 0) !== quote.baseVersion) throw Error("Stale brand or revision");
       if (request.preferenceFingerprint !== preferenceFingerprint(await productionMemories(tx, scope, business.version))) throw Error("Preferences or experiment evidence changed");
+      await assertKnowledgeCurrent(tx, scope, request.knowledgeContext);
       assertExecutionEnabled();
       const changed = await tx.job.updateMany({ where: { id: job.id, status: "RUNNING" }, data: { status: "SUBMITTING", submittedAt: new Date() } });
       if (changed.count !== 1) throw Error("Job no longer owned");
@@ -46,14 +49,16 @@ export async function runOneJob(reasoner: Reasoner = reason) {
       content = validateCreative(JSON.parse(result.text), request.channel, request.proof);
       if (quote.mode === "copy" && request.previous) content = { ...request.previous, headline: content.headline, caption: content.caption, cta: content.cta };
       quality = evaluateCreative(content, { facts: request.approvedFacts, feedback: request.feedback, previous: request.previous });
-      if (!quality.eligible) content = null;
+      if (!quality.eligible || request.learnedRules.some(rule => rule.channel !== request.channel || !followsRule(rule.id, content!))) content = null;
     } catch { /* Invalid deliverables do not reach customer review. Record cost and release customer credits. */ }
     await db.$transaction(async tx => {
       const business = await lockBusiness(tx, scope);
       const item = await currentItem(tx, scope, quote.itemId);
       const current = await tx.job.findUniqueOrThrow({ where: { id: job.id } });
       if (current.status !== "SUBMITTING") throw Error("Lost submission lease; reconcile instead of duplicating output");
-      const fresh = !!business.confirmedAt && business.version === quote.brandVersion && item.plan.status === "PROPOSED" && (item.revisions[0]?.version || 0) === quote.baseVersion && request.preferenceFingerprint === preferenceFingerprint(await productionMemories(tx, scope, business.version));
+      let knowledgeCurrent = true;
+      try { await assertKnowledgeCurrent(tx, scope, request.knowledgeContext); } catch { knowledgeCurrent = false; }
+      const fresh = knowledgeCurrent && !!business.confirmedAt && business.version === quote.brandVersion && item.plan.status === "PROPOSED" && (item.revisions[0]?.version || 0) === quote.baseVersion && request.preferenceFingerprint === preferenceFingerprint(await productionMemories(tx, scope, business.version));
       const deliver = fresh && content !== null;
       const consumed = deliver ? Math.max(1, Math.ceil(micros / 10_000)) : 0;
       if (deliver && content) {
@@ -63,6 +68,8 @@ export async function runOneJob(reasoner: Reasoner = reason) {
             providerResponseId: result.id, skillVersion: request.skillVersion, sourceHashes: request.sourceHashes,
             brandVersion: quote.brandVersion, brandName: request.brandName, color: request.color, preset: request.preset,
             preferenceFingerprint: request.preferenceFingerprint,
+            learnedRules: request.learnedRules,
+            ...(request.knowledgeContext ? { knowledgeContext: request.knowledgeContext } : {}),
             supplierCostMicros: micros, usage: result.usage as Prisma.InputJsonValue,
             quality } } });
         await tx.calendarEntry.deleteMany({ where: { itemId: item.id, organizationId: scope.organizationId } });

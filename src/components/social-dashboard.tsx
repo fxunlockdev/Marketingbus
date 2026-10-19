@@ -4,7 +4,7 @@ type Dashboard = {
   enabledProviders: string[];
   imageProviders?: string[];
   videoProviders?: string[];
-  videoChoices?: { id: string; itemId: string; revisionVersion: number; durationMs: number; expiresAt: string; bytes: number }[];
+  videoChoices?: { id: string; itemId: string; revisionVersion: number; durationMs: number; width: number; height: number; expiresAt: string; bytes: number }[];
   mediaChoices?: { id: string; itemId: string; revisionVersion: number; placement: string; expiresAt: string; bytes: number }[];
   enabledMetricProviders: string[];
   enabledVideoMetricProviders?: string[];
@@ -211,21 +211,21 @@ export function SocialDashboard({
                   </option>
                 ))}
               </select>
-              {selected && ["Instagram", "Facebook"].includes(selected.channel) && <div>
+              {selected && ["Instagram", "Facebook", "LinkedIn"].includes(selected.channel) && <div>
                 <label htmlFor="social-media-kind">Publishing media</label>
                 <select id="social-media-kind" value={useVideo ? "video" : "image"} aria-describedby="social-media-kind-help" onChange={e => { setUseVideo(e.target.value === "video"); setMediaExportId(""); setVideoRenderId(""); setShareToFeed(false); }}>
-                  <option value="image" disabled={!!selected.format && selected.format !== "static"}>{selected.channel === "Facebook" ? "Text or approved image" : "Approved image"}</option>
-                  <option value="video">Approved Reel</option>
+                  <option value="image" disabled={!!selected.format && selected.format !== "static"}>{selected.channel !== "Instagram" ? "Text or approved image" : "Approved image"}</option>
+                  <option value="video">{selected.channel === "LinkedIn" ? "Approved video" : "Approved Reel"}</option>
                 </select>
                 <p id="social-media-kind-help">Choose the reviewed output for this creative. One approved copy version can be published once per account; changing media after saving requires a new approved version.</p>
               </div>}
               {selected && useVideo && <div>
                 <label htmlFor="social-video">Approved final video</label>
                 <select id="social-video" required aria-describedby="social-video-help" value={videoRenderId} disabled={!data.videoProviders?.includes(selected.channel)} onChange={e => setVideoRenderId(e.target.value)}>
-                  <option value="">Choose an approved Reel</option>
-                  {(data.videoChoices ?? []).filter(video => video.itemId === selected.id && video.revisionVersion === selected.revisions[0].version && (selected.channel !== "Facebook" || video.durationMs >= 4000)).map(video => <option key={video.id} value={video.id}>{video.durationMs / 1000} seconds · {video.id.slice(-6)} · expires {new Date(video.expiresAt).toLocaleDateString()}</option>)}
+                  <option value="">Choose an approved video</option>
+                  {(data.videoChoices ?? []).filter(video => video.itemId === selected.id && video.revisionVersion === selected.revisions[0].version && (selected.channel === "LinkedIn" ? video.bytes >= 75 * 1024 : video.width === 720 && video.height === 1280 && (selected.channel !== "Facebook" || video.durationMs >= 4000))).map(video => <option key={video.id} value={video.id}>{video.durationMs / 1000} seconds · {video.width}×{video.height} · {video.id.slice(-6)} · expires {new Date(video.expiresAt).toLocaleDateString()}</option>)}
                 </select>
-                <p id="social-video-help">{data.videoProviders?.includes(selected.channel) ? selected.channel === "Facebook" ? "Only reviewed final portrait videos for this exact copy version are listed: 4–30 seconds, up to 20 MB. Schedule before the export expires. Video bytes are uploaded directly to Meta; your storage bucket stays private." : "Only reviewed final portrait videos for this exact copy version are listed: 3–30 seconds, up to 20 MB. Schedule before the export expires. Meta receives a temporary, download-limited link; your storage bucket stays private." : "Video publishing is not activated for this destination. No video will be sent."} Changing approved work cancels queued publication. Published copies must be managed on the network.</p>
+                <p id="social-video-help">{data.videoProviders?.includes(selected.channel) ? selected.channel === "LinkedIn" ? "Only reviewed final portrait, square, feed or landscape videos for this exact copy version are listed: 3–30 seconds, 75 KB–20 MB. Schedule before the export expires. Video parts are uploaded directly to LinkedIn; your storage bucket stays private." : selected.channel === "Facebook" ? "Only reviewed final portrait videos for this exact copy version are listed: 4–30 seconds, up to 20 MB. Schedule before the export expires. Video bytes are uploaded directly to Meta; your storage bucket stays private." : "Only reviewed final portrait videos for this exact copy version are listed: 3–30 seconds, up to 20 MB. Schedule before the export expires. Meta receives a temporary, download-limited link; your storage bucket stays private." : "Video publishing is not activated for this destination. No video will be sent."} Changing approved work cancels queued publication. Published copies must be managed on the network.</p>
                 {selected.channel === "Instagram" && <><label htmlFor="social-share-feed"><input id="social-share-feed" type="checkbox" checked={shareToFeed} onChange={e => setShareToFeed(e.target.checked)} aria-describedby="social-feed-help" /> Also share this Reel to the Instagram feed</label>
                 <p id="social-feed-help">Unchecked means the Reels tab only. This choice is saved with your approved publication.</p></>}
                 {videoRenderId && <a href={`/api/businesses/${businessId}/video/${encodeURIComponent(videoRenderId)}?download=true`} target="_blank" rel="noopener noreferrer">Download selected approved video</a>}
@@ -294,7 +294,7 @@ export function SocialDashboard({
                 </p>
                 {p.errorCode && <p>{p.errorCode.replaceAll("_", " ")}</p>}
                 {p.includesImage && <p>Includes an approved image. {p.imageUploadAcknowledged ? "Image upload acknowledged by the destination; publication is confirmed only when a provider post ID is shown below." : "Image upload has not been acknowledged. No completed post is implied."}</p>}
-                {p.includesVideo && <p>Includes an approved Reel. {p.connection.provider === "Facebook" ? p.videoUploadAcknowledged ? "Video upload acknowledged; processing is not proof of publication. Confirmation requires the verified provider post ID below." : "Video upload has not been acknowledged. No completed post is implied." : p.videoUploadAcknowledged ? "Video container acknowledged; processing is not proof of publication. Confirmation requires the verified provider post ID below." : "Video container has not been acknowledged. No completed post is implied."} {data.enabledVideoMetricProviders?.includes(p.connection.provider) ? "Reel metrics can be checked after verified publication. Views are not impressions or proof of completed playback." : "Reel metric collection is not enabled for this destination. Previously verified readings remain visible unless invalidated."}</p>}
+                {p.includesVideo && <p>Includes an approved {p.connection.provider === "LinkedIn" ? "video" : "Reel"}. {p.connection.provider !== "Instagram" ? p.videoUploadAcknowledged ? "Video upload acknowledged; processing is not proof of publication. Confirmation requires the verified provider post ID below." : "Video upload has not been acknowledged. No completed post is implied." : p.videoUploadAcknowledged ? "Video container acknowledged; processing is not proof of publication. Confirmation requires the verified provider post ID below." : "Video container has not been acknowledged. No completed post is implied."} {data.enabledVideoMetricProviders?.includes(p.connection.provider) ? p.connection.provider === "LinkedIn" ? "Organic post metrics can be checked after verified publication. Video views and completed playback measurements remain unavailable." : "Reel metrics can be checked after verified publication. Views are not impressions or proof of completed playback." : `${p.connection.provider === "LinkedIn" ? "Video" : "Reel"} metric collection is not enabled for this destination. Previously verified readings remain visible unless invalidated.`}</p>}
                 {p.status === "NEEDS_RECONCILIATION" && <div>
                   <p>Publication is unconfirmed. This post will not be sent again automatically.</p>
                   <p>Lookup checks: {p.reconciliationAttempts}. {p.nextReconciliationAt

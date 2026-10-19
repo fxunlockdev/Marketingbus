@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ImageRoute } from "../images/contracts";
 import { MAX_IMAGE_BYTES } from "../assets/images";
-export type ImageRequest = { route: ImageRoute; prompt: string; references: Buffer[] };
+export type ImageRequest = { route: ImageRoute; prompt: string; references: Buffer[]; safetyIdentifier?: string };
 export type ImageResult = { id: string; usage: unknown; image: Buffer | null };
 export type ImageGenerator = (request: ImageRequest, key: string) => Promise<ImageResult>;
 // Official generateContent REST contract. One request, no SDK or transport retries.

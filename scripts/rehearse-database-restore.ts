@@ -104,6 +104,9 @@ async function main() {
     const invalidatedRevision = await source.creativeRevision.create({ data: { itemId: publicationPlan.items[0].id, organizationId: a.id, version: 2, status: "APPROVED", content: { caption: frozenPayload.caption } } });
     const reelItem = await source.productionItem.create({ data: { planId: publicationPlan.id, organizationId: a.id, title: "Synthetic Instagram Reel", channel: "Instagram", format: "video", brief: {}, revisions: { create: { version: 1, status: "APPROVED", content: { caption: frozenPayload.caption } } } }, include: { revisions: true } });
     const reelPayload = { caption: frozenPayload.caption, channel: "Instagram", format: "video", mediaExportId: "synthetic-render-reference", video: { sha256: "b".repeat(64), bytes: 5242880, width: 720, height: 1280, durationMs: 5000, shareToFeed: false } };
+    const linkedInVideoItem = await source.productionItem.create({ data: { planId: publicationPlan.id, organizationId: a.id, title: "Synthetic LinkedIn video", channel: "LinkedIn", format: "video", brief: {}, revisions: { create: { version: 1, status: "APPROVED", content: { caption: frozenPayload.caption } } } }, include: { revisions: true } });
+    const linkedInVideoPayload = { ...reelPayload, channel: "LinkedIn", video: { ...reelPayload.video, width: 1280, height: 720 } };
+    await source.socialPublication.create({ data: { id: "synthetic-linkedin-video", organizationId: a.id, businessId: business.id, connectionId: publicationConnection.id, revisionId: linkedInVideoItem.revisions[0].id, brandVersion: 3, payload: linkedInVideoPayload, payloadHash: payloadHash(linkedInVideoPayload), scheduledFor: new Date(), timezone: "UTC", status: "NEEDS_RECONCILIATION", mediaTransferVersion: "synthetic:publish-v1:video-v1", mediaExternalId: "urn:li:video:SYNTHETIC", mediaUploaded: true, submissionAdapterVersion: "synthetic:publish-v1:video-v1", candidatePostId: "urn:li:share:457" } });
     const facebookReelItem = await source.productionItem.create({ data: { planId: publicationPlan.id, organizationId: a.id, title: "Synthetic Facebook Reel", channel: "Facebook", format: "static", brief: {}, revisions: { create: { version: 1, status: "APPROVED", content: { caption: frozenPayload.caption } } } }, include: { revisions: true } });
     const facebookReelPayload = { ...reelPayload, channel: "Facebook" };
     await source.socialPublication.create({ data: { id: "synthetic-facebook-reel", organizationId: a.id, businessId: business.id, connectionId: facebookConnection.id, revisionId: facebookReelItem.revisions[0].id, brandVersion: 3, payload: facebookReelPayload, payloadHash: payloadHash(facebookReelPayload), scheduledFor: new Date(), timezone: "UTC", status: "NEEDS_RECONCILIATION", mediaTransferVersion: "synthetic:fb:reel-v1", mediaExternalId: "456790", mediaUploaded: true, submissionAdapterVersion: "synthetic:fb:reel-v1", candidatePostId: null, errorCode: "PROVIDER_OUTCOME_UNKNOWN" } });
@@ -126,6 +129,7 @@ async function main() {
     await source.supplierAuthorization.create({ data: { key: "synthetic-provisional-video", ceilingMicros: 70000 } });
     await source.videoGeneration.create({ data: {
       id: "synthetic-provisional-video", businessId: business.id, organizationId: a.id, actorId: user.id,
+      knowledgeContext: { version: 1, fixture: "Restore exact authorized knowledge, not a live model request" },
       storyboardId: "synthetic-board", itemId: "synthetic-item", brandVersion: 3, shotId: "synthetic-shot", shotLabel: "Restore fixture",
       documentHash: "synthetic-hash", prompt: "Synthetic fixture; never submitted", route: { expensePolicy: "account-quote-v1" }, configurationHash: "synthetic-config",
       durationMs: 5000, status: "FAILED", credits: 7, supplierCeilingMicros: 70000, supplierEstimateMicros: 60000, expenseBasis: "ACCOUNT_QUOTE_V1",
@@ -148,6 +152,8 @@ async function main() {
       revisionOfId: "synthetic-provisional-video", creativeBrief: { version: 1, direction: "Warm side lighting.", revisions: [{ parentId: "synthetic-provisional-video", feedback: "Slower camera movement." }] },
     } });
     await source.videoClip.create({ data: { id: "synthetic-audio", businessId: business.id, organizationId: a.id, brandVersion: 3, label: "Synthetic audio metadata only", mediaKind: "AUDIO", instrumentalConfirmedAt: new Date(), createdBy: user.id, rightsConfirmedAt: new Date(), status: "READY", sourceKey: "synthetic/audio-source.wav", sourceHash: "a".repeat(64), sourceBytes: 1024, objectKey: "synthetic/audio-normalized.wav", sha256: "b".repeat(64), bytes: 2048, durationMs: 3000, processorVersion: "instrumental-pcm-v1", purgeAfter: new Date(Date.now() + 86400000) } });
+    const learnedMemory = await source.memory.create({ data: { businessId: business.id, organizationId: a.id, kind: "APPROVED_SKILL", text: "Synthetic learned-skill restore fixture, not eligible runtime evidence." } });
+    await source.learningProposal.create({ data: { id: "synthetic-learned-skill", businessId: business.id, organizationId: a.id, brandVersion: 3, status: "SKILL_ACTIVE", memoryId: learnedMemory.id, hypothesis: learnedMemory.text, evidence: { kind: "FEEDBACK_SKILL_V1", fixture: true } } });
     phase = "backup checkpoint";
     const before = await recoverySnapshot(source), dumpStarted = Date.now();
     const archive = await pg("pg_dump", names.source, ["--format=custom", "--no-owner", "--no-privileges"], undefined, MAX_ARCHIVE_BYTES);
@@ -164,6 +170,9 @@ async function main() {
     const restoreMs = Date.now() - restoreStarted;
     phase = "schema and row verification";
     assertSnapshot(before, await recoverySnapshot(target));
+    const learnedSkill = await target.learningProposal.findUniqueOrThrow({ where: { id: "synthetic-learned-skill" } });
+    check(learnedSkill.status === "SKILL_ACTIVE" && learnedSkill.memoryId === learnedMemory.id && (await target.memory.findUniqueOrThrow({ where: { id: learnedMemory.id } })).kind === "APPROVED_SKILL", "Learned-skill state or recall linkage lost.");
+    await mustReject(() => target.learningProposal.update({ where: { id: learnedSkill.id }, data: { evidence: {} } }));
     const weekly = await target.weeklyCycle.findUniqueOrThrow({ where: { id: "synthetic-weekly-images" }, include: { tasks: true } });
     check(weekly.status === "COMPLETE" && weekly.mediaStatus === "OPEN" && weekly.creditsAuthorized === 40 && weekly.mediaLeaseUntil?.toISOString() === "2026-10-18T12:00:00.000Z" && weekly.nextMediaAt?.toISOString() === "2026-10-18T12:03:00.000Z" && weekly.tasks[0].imageStatus === "WAITING", "Weekly image authorization, budget or lease not preserved.");
     check((await target.weeklyPolicy.findUniqueOrThrow({ where: { businessId: business.id } })).imagesAfterApproval, "Weekly image consent lost.");
@@ -185,6 +194,7 @@ async function main() {
     await mustReject(() => target.videoClip.update({ where: { id: audio.id }, data: { instrumentalConfirmedAt: null } }));
     await mustReject(() => target.videoClip.update({ where: { id: audio.id }, data: { durationMs: 30001 } }));
     const video = await target.videoGeneration.findUniqueOrThrow({ where: { id: "synthetic-provisional-video" } });
+    check(isDeepStrictEqual(video.knowledgeContext, { version: 1, fixture: "Restore exact authorized knowledge, not a live model request" }), "Authorized knowledge snapshot not restored.");
     check(video.status === "FAILED" && video.supplierEstimateMicros === 60000 && video.expenseBasis === "ACCOUNT_QUOTE_V1" && video.supplierCostMicros === null && video.supplierReconciledAt === null, "Provisional expense was misrepresented as a final invoice.");
     await mustReject(() => target.videoGeneration.update({ where: { id: video.id }, data: { expenseBasis: null } }));
     const take = await target.videoGeneration.findUniqueOrThrow({ where: { id: "synthetic-new-take" } });
@@ -219,6 +229,10 @@ async function main() {
     await mustReject(() => target.socialPublication.update({ where: { id: facebookImage.id }, data: { mediaExternalId: "urn:li:image:WRONG_PROVIDER" } }));
     const instagramImage = await target.socialPublication.findUniqueOrThrow({ where: { id: "synthetic-instagram-image" } });
     const facebookReel = await target.socialPublication.findUniqueOrThrow({ where: { id: "synthetic-facebook-reel" } });
+    const linkedInVideo = await target.socialPublication.findUniqueOrThrow({ where: { id: "synthetic-linkedin-video" } });
+    check(linkedInVideo.status === "NEEDS_RECONCILIATION" && linkedInVideo.mediaUploaded && linkedInVideo.mediaExternalId === "urn:li:video:SYNTHETIC" && linkedInVideo.submissionAdapterVersion === "synthetic:publish-v1:video-v1" && linkedInVideo.candidatePostId === "urn:li:share:457" && linkedInVideo.payloadHash === payloadHash(linkedInVideoPayload), "LinkedIn final-video journal not preserved.");
+    await mustReject(() => target.socialPublication.update({ where: { id: linkedInVideo.id }, data: { mediaExternalId: "urn:li:image:WRONG_FAMILY" } }));
+    await mustReject(() => target.socialPublication.update({ where: { id: restoredPublication.id }, data: { mediaExternalId: "urn:li:video:WRONG_FAMILY" } }));
     check(facebookReel.status === "NEEDS_RECONCILIATION" && facebookReel.mediaUploaded && facebookReel.mediaExternalId === "456790" && facebookReel.submissionAdapterVersion === "synthetic:fb:reel-v1" && facebookReel.candidatePostId === null && facebookReel.mediaDeliveryTokenHash === null && facebookReel.payloadHash === payloadHash(facebookReelPayload), "Facebook asynchronous Reel journal not preserved.");
     await mustReject(() => target.socialPublication.update({ where: { id: facebookReel.id }, data: { mediaExternalId: "urn:li:video:INVALID" } }));
     await mustReject(() => target.socialPublication.update({ where: { id: facebookReel.id }, data: { mediaDeliveryTokenHash: "a".repeat(64) } }));

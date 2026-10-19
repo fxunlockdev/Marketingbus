@@ -7,11 +7,12 @@ import { assertBrandEditor } from "../knowledge/analysis";
 import { finishReservationInTransaction } from "../billing/wallet";
 import { assetStore, type AssetStore } from "../assets/storage";
 import { normalizeImage } from "../assets/images";
-import { generateGeminiImage, type ImageGenerator, type ImageResult } from "../providers/gemini-image";
-import { imageConfigurationHash, imageCost, imageRoute } from "./contracts";
+import { type ImageGenerator, type ImageResult } from "../providers/gemini-image";
+import { generateImage } from "../providers/openai-image";
+import { imageConfigurationHash, imageCost, imageRoute, imageKey, imageProvider } from "./contracts";
 import { currentImageContext, imageScope } from "./service";
 
-export async function runOneImage(generate: ImageGenerator = generateGeminiImage, storage: () => AssetStore = assetStore) {
+export async function runOneImage(generate: ImageGenerator = generateImage, storage: () => AssetStore = assetStore) {
   const claimed = await db.$transaction(async tx => {
     const rows = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "ImageGeneration" WHERE status='QUEUED' ORDER BY "createdAt" FOR UPDATE SKIP LOCKED LIMIT 1`;
     if (!rows[0]) return null;
@@ -25,7 +26,7 @@ export async function runOneImage(generate: ImageGenerator = generateGeminiImage
       await lockBusiness(tx, scope); await assertBrandEditor(tx, scope); assertExecutionEnabled();
       const row = await tx.imageGeneration.findUniqueOrThrow({ where: { id: claimed.id }, include: { output: true } });
       const route = imageRoute.parse(row.route);
-      if (row.status !== "RUNNING" || row.leaseUntil?.getTime() !== claimed.leaseUntil?.getTime() || row.leaseUntil!.getTime() <= Date.now() || row.configurationHash !== imageConfigurationHash() || !process.env.GEMINI_API_KEY || new Date(route.model.verifiedUntil).getTime() <= Date.now() || row.output?.status !== "PENDING") throw Error("Image preflight changed");
+      if (row.status !== "RUNNING" || row.leaseUntil?.getTime() !== claimed.leaseUntil?.getTime() || row.leaseUntil!.getTime() <= Date.now() || row.configurationHash !== imageConfigurationHash() || !imageKey(route.model.model) || new Date(route.model.verifiedUntil).getTime() <= Date.now() || row.output?.status !== "PENDING") throw Error("Image preflight changed");
       const context = await currentImageContext(tx, row); return { row, route, context };
     });
     const request = await preflight(), references: Buffer[] = [];
@@ -47,10 +48,11 @@ export async function runOneImage(generate: ImageGenerator = generateGeminiImage
       await tx.imageGeneration.update({ where: { id: row.id }, data: { status: "SUBMITTING", submittedAt: new Date() } });
     });
     submitted = true;
-    result = await generate({ prompt: request.row.prompt, route: request.route, references }, process.env.GEMINI_API_KEY!);
+    result = await generate({ prompt: request.row.prompt, route: request.route, references, safetyIdentifier: createHash("sha256").update(`${scope.organizationId}:${scope.actorId}`).digest("hex") }, imageKey(request.route.model.model)!);
     cost = imageCost(request.route, result.usage);
     if (!result.image) throw Error("Provider returned no eligible still image");
     const normalized = await normalizeImage(result.image), asset = request.row.output!;
+    if (imageProvider(request.route.model.model) === "openai" && (normalized.width !== 2048 || normalized.height !== 2048)) throw Error("OpenAI image did not match the authorized native 2K output");
     await db.$transaction(async tx => {
       await lockBusiness(tx, scope);
       const row = await tx.imageGeneration.findUniqueOrThrow({ where: { id: claimed.id } });

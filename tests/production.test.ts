@@ -8,6 +8,12 @@ const models = [
 ];
 afterEach(() => vi.unstubAllEnvs());
 describe("bounded model routing", () => {
+  it("routes to Claude only with an explicit allowlist and verified lane", () => {
+    vi.stubEnv("REASONING_PROVIDERS_JSON", '["openai","anthropic"]'); vi.stubEnv("ANTHROPIC_API_KEY", "fixture-only");
+    const claude = { ...models[0], provider: "anthropic" as const };
+    expect(selectRoute("initial", 1000, [claude]).model.provider).toBe("anthropic");
+    vi.stubEnv("REASONING_PROVIDERS_JSON", '["unknown"]'); expect(() => selectRoute("initial", 1000, [claude])).toThrow("allowlist");
+  });
   it("keeps text on OpenAI even if a cheaper Claude key and model exist", () => {
     vi.stubEnv("OPENAI_API_KEY", "fixture-only"); vi.stubEnv("ANTHROPIC_API_KEY", "fixture-only");
     const claude = { ...models[0], provider: "anthropic" as const, inputUsdPerMillion: 0.001, outputUsdPerMillion: 0.001 };

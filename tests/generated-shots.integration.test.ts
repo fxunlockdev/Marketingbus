@@ -59,6 +59,15 @@ suite("generated-shot authorization, asynchronous receipts and delivery", () => 
   const wallet = (f: Fixture) => db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } });
   async function quote(f: Fixture) { return (await manageShotGeneration(f.scope, { action: "quote", storyboardId: f.boardId, shotId: f.shotId }, f.adapters, () => store)).generationId!; }
   async function accept(f: Fixture, existing?: string) { const id = existing || await quote(f); await manageShotGeneration(f.scope, { action: "accept", generationId: id, rightsConfirmed: true }, f.adapters, () => store); return id; }
+  it("recalls business knowledge for footage and stops queued work after a preference changes", async () => {
+    const f = await setup();
+    const memory = await db.memory.create({ data: { businessId: f.scope.businessId, organizationId: f.scope.organizationId, text: "Use quiet, steady camera movement." } });
+    const id = await accept(f); expect((await row(id)).prompt).toContain(memory.text);
+    expect((await row(id)).knowledgeContext).toMatchObject({ task: "video", businessId: f.scope.businessId });
+    await db.memory.delete({ where: { id: memory.id } });
+    await runOneShotGeneration(f.adapters, () => store);
+    expect(f.submit).not.toHaveBeenCalled(); expect((await row(id)).status).toBe("FAILED");
+  });
   async function due(id: string) { await db.videoGeneration.update({ where: { id }, data: { nextPollAt: new Date(0) } }); }
   async function ingested(f: Fixture) { const id = await accept(f); await runOneShotGeneration(f.adapters, () => store); await due(id); await runOneShotGeneration(f.adapters, () => store); return id; }
   async function readyTake(f: Fixture, body: Record<string, unknown> = {}) {

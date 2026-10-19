@@ -4,6 +4,8 @@ The target is a working multi-tenant marketing product, with only explicitly ide
 
 ## Completion rules
 
+Current LinkedIn final-video increment (`studio-v49-linkedin-video`): reviewed exports in four finite layouts have private multipart upload, exact-post read-back/recovery, bounded processing, organic post metrics and the existing scheduling controls. Separate live-account acceptance is still required; this does not add dedicated video-view metrics, generated voice, external deauthorization callbacks or complete the product. See [video workflow and limits](LINKEDIN-VIDEO.md).
+
 Reels publishing (`studio-v42-instagram-reels`): approved final portrait videos can be selected alongside images for an ordinary Instagram creative, scheduled with explicit feed placement, delivered privately, processed with bounded polling and published with a durable acknowledgement/readback journal. Exact-version approval, source rights, retention and hash checks remain required. The feature is gated pending live-account acceptance. The subsequent `studio-v43-reel-metrics` increment implements separately gated views/reach/interactions and recovery; neither release completes Facebook/LinkedIn video, broader video analytics, mixed-media autopilot, generated voice or production capacity/recovery. See [implementation boundary](INSTAGRAM-PUBLISHING.md#approved-reels) and [current verification evidence](BUILD-STATUS.md).
 
 Every module needs scoped persistence, role checks, usable screens, failure/recovery behavior, cost bounds where applicable, database tests, browser tests and deployment verification. Fixture transports must never be registered as production providers. Customer Connections contains publishing destinations only; AI providers are operator-managed.

@@ -162,6 +162,7 @@ export async function readSocialDashboard(scope: Scope) {
       where: {
         businessId: scope.businessId,
         organizationId: scope.organizationId,
+        NOT: { status: { startsWith: "SKILL_" } },
       },
       orderBy: { createdAt: "desc" },
       take: 20,
@@ -235,6 +236,7 @@ export async function manageLearning(scope: Scope, raw: unknown) {
         id: input.proposalId,
         businessId: scope.businessId,
         organizationId: scope.organizationId,
+        status: { not: { startsWith: "SKILL_" } },
       },
     });
     if (!proposal) throw new AppError(404, "Experiment not found.");

@@ -14,6 +14,7 @@ import { assertPublicationVideo } from "./video-transfer";
 import { MAX_VIDEO_BYTES } from "../video/limits";
 
 export const linkedInImageId = z.string().regex(/^urn:li:image:[A-Za-z0-9_-]{1,200}$/);
+export const linkedInVideoId = z.string().regex(/^urn:li:video:[A-Za-z0-9_-]{1,200}$/);
 export const facebookImageId = z.string().regex(/^[1-9][0-9]{0,39}$/);
 // A private export is selected by local ID. Clients cannot provide a URL, key or fingerprint.
 export async function publicationExport(client: Prisma.TransactionClient | typeof db, scope: Scope, id: string, revisionId: string) {
@@ -96,7 +97,7 @@ export function createImageTransfer(store: () => AssetStore = () => assetStore(M
     }),
     record: (ctx, id) => withSubmissionContext(ctx, async (tx, post) => {
       await current(tx, post, ctx);
-      if (ctx.account.provider === "LinkedIn") linkedInImageId.parse(id);
+      if (ctx.account.provider === "LinkedIn") (ctx.payload.video ? linkedInVideoId : linkedInImageId).parse(id);
       else if (["Facebook", "Instagram"].includes(ctx.account.provider)) facebookImageId.parse(id);
       else throw Error("Unsupported image destination.");
       if (post.mediaTransferVersion !== ctx.adapterVersion || post.mediaExternalId || post.mediaUploaded) throw Error("Image registration already recorded or unavailable.");

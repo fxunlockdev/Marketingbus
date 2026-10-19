@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import type { Scope } from "../production/service";
 import { publicationPayload, type MetricReading } from "./contracts";
 import { payloadHash } from "./integrity";
+import { validSkillMemories } from "../harness/learning";
 
 const DAY = 86400000;
 const ref = z.string().min(1).max(200);
@@ -89,7 +90,9 @@ export async function validLearningEvidence(tx: Prisma.TransactionClient, scope:
 }
 
 export async function productionMemories(tx: Prisma.TransactionClient, scope: Scope, brandVersion: number, now = new Date()) {
-  const memories = await tx.memory.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId }, orderBy: { id: "asc" }, take: 100 });
+  const stored = await tx.memory.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId }, orderBy: { id: "asc" }, take: 100 });
+  const validSkills = stored.some(m => m.kind === "APPROVED_SKILL") ? await validSkillMemories(tx, scope, brandVersion, stored) : new Set<string>();
+  const memories = stored.filter(m => m.kind !== "APPROVED_SKILL" || validSkills.has(m.id));
   const experiments = memories.filter(m => m.kind === "APPROVED_EXPERIMENT");
   if (!experiments.length) return memories;
   const proposals = await tx.learningProposal.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId, brandVersion, status: "PROMOTED", memoryId: { in: experiments.map(m => m.id) } }, take: 21 });

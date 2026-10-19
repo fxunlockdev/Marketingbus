@@ -8,7 +8,7 @@ const local = process.env.TEST_DATABASE_URL;
 test.skip(!local, "Requires explicit localhost fixture database.");
 if (local && (process.env.DATABASE_URL !== local || !["127.0.0.1", "localhost"].includes(new URL(local).hostname))) throw Error("Refusing non-local fixture writes");
 test.afterAll(async () => db.$disconnect());
-for (const provider of ["Instagram", "Facebook"]) test(`${provider} approved Reel selection is accessible, exact-version scoped and fails closed without activation`, async ({ page, browser }) => {
+for (const provider of ["Instagram", "Facebook", "LinkedIn"]) test(`${provider} approved video selection is accessible, exact-version scoped and fails closed without activation`, async ({ page, browser }) => {
   const email = `reel-ui-${crypto.randomUUID()}@example.test`, headers = { Origin: "http://127.0.0.1:3000" };
   let organizationId: string | undefined;
   try {
@@ -26,7 +26,7 @@ for (const provider of ["Instagram", "Facebook"]) test(`${provider} approved Ree
     for (const shot of document.shots) await manageVideo(scope, { action: "review-shot", storyboardId, shotId: shot.id, approved: true });
     await manageVideo(scope, { action: "approve-storyboard", storyboardId });
     // Metadata-only UI fixture; playable generation/delivery is verified in the DB integration suite.
-    const render = await db.motionRender.create({ data: { organizationId, businessId: id, storyboardId, rendererVersion: MOTION_RENDERER_VERSION, documentHash: motionHash(document), objectKey: "private-ui-fixture/not-downloadable.mp4", sha256: "a".repeat(64), bytes: 1024, durationMs: totalDuration(document), status: "APPROVED", createdBy: user.id, approvedBy: user.id, purgeAfter: new Date(Date.now() + 86400000) } });
+    const render = await db.motionRender.create({ data: { organizationId, businessId: id, storyboardId, rendererVersion: MOTION_RENDERER_VERSION, documentHash: motionHash(document), objectKey: "private-ui-fixture/not-downloadable.mp4", sha256: "a".repeat(64), bytes: 100000, durationMs: totalDuration(document), status: "APPROVED", createdBy: user.id, approvedBy: user.id, purgeAfter: new Date(Date.now() + 86400000) } });
     const connection = await db.socialConnection.create({ data: { organizationId, businessId: id, provider, externalAccountId: "987", label: "Design company", encryptedToken: "never-return-this-fixture", permissions: [], expiresAt: new Date(Date.now() + 3600000) } });
     const endpoint = `/api/businesses/${id}/social`, actual = await (await page.request.get(endpoint)).json();
     expect(actual.videoProviders).toEqual([]);
@@ -49,7 +49,7 @@ for (const provider of ["Instagram", "Facebook"]) test(`${provider} approved Ree
     await page.getByLabel("Approved final video", { exact: true }).selectOption(render.id);
     const feed = page.getByRole("checkbox", { name: "Also share this Reel to the Instagram feed" });
     if (provider === "Instagram") { await expect(feed).not.toBeChecked(); await feed.focus(); await page.keyboard.press("Space"); await expect(feed).toBeChecked(); }
-    else { await expect(feed).toHaveCount(0); await expect(page.locator("#social-video-help")).toContainText("4–30 seconds"); await expect(page.locator("#social-video-help")).toContainText("uploaded directly"); }
+    else { await expect(feed).toHaveCount(0); await expect(page.locator("#social-video-help")).toContainText(provider === "LinkedIn" ? "75 KB–20 MB" : "4–30 seconds"); await expect(page.locator("#social-video-help")).toContainText("uploaded directly"); }
     await expect(page.getByRole("link", { name: "Download selected approved video" })).toHaveAttribute("href", `/api/businesses/${id}/video/${render.id}?download=true`);
     await page.getByLabel("Destination account", { exact: true }).selectOption(connection.id);
     await page.getByLabel("Publish at (your local timezone)", { exact: true }).fill("2026-11-01T12:00");
@@ -63,6 +63,7 @@ for (const provider of ["Instagram", "Facebook"]) test(`${provider} approved Ree
     const alert = page.getByRole("main").getByRole("alert"); await expect(alert).toContainText("not connected"); await expect(alert).toBeFocused();
     expect(await db.socialPublication.count({ where: { businessId: id } })).toBe(0);
     expect((await new AxeBuilder({ page }).include("main").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+    if (provider === "LinkedIn") await page.screenshot({ path: "../outputs/marketingbus-linkedin-video.png", fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => window.document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.getByLabel("Approved creative", { exact: true }).selectOption("");
     await page.getByLabel("Approved creative", { exact: true }).selectOption(item.id);
