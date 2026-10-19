@@ -10,7 +10,7 @@ vi.mock("../src/lib/providers/url-policy", async importOriginal => {
 const base = new URL("http://firecrawl.railway.internal:3002");
 const source = "https://example.com/about";
 const markdown = "Our ceramics are handmade in our own studio.";
-const result = (changes = {}) => ({ success: true, data: { markdown, metadata: { statusCode: 200, sourceURL: source }, ...changes } });
+const result = (changes = {}) => ({ success: true, data: { markdown, metadata: { statusCode: 200, sourceURL: source, url: source }, ...changes } });
 const transport = (response: Response) => vi.fn(async () => response) as unknown as typeof fetch;
 afterEach(() => vi.unstubAllEnvs());
 
@@ -60,11 +60,22 @@ describe("private scraper contract", () => {
   it.each([
     ["https://127.0.0.1/private", "SOURCE_ADDRESS_RESTRICTED"],
     ["https://other.example/about", "SOURCE_REDIRECT_CHANGED"],
-  ])("rejects unsafe final page %s", async (sourceURL, code) => {
-    await expect(readWebsite(base, source, {}, transport(Response.json(result({ metadata: { statusCode: 200, sourceURL } }))))).rejects.toMatchObject({ code });
+    ["http://example.com/about", "SOURCE_ADDRESS_RESTRICTED"],
+  ])("rejects unsafe final page %s even when sourceURL still matches the request", async (url, code) => {
+    await expect(readWebsite(base, source, {}, transport(Response.json(result({ metadata: { statusCode: 200, sourceURL: source, url } }))))).rejects.toMatchObject({ code });
+  });
+  it("does not infer a final URL from the submitted sourceURL", async () => {
+    await expect(readWebsite(base, source, {}, transport(Response.json(result({ metadata: { statusCode: 200, sourceURL: source } }))))).rejects.toMatchObject({ code: "SOURCE_INVALID_RESULT" });
+  });
+  it("accepts a verified same-origin redirect and retains its final URL", async () => {
+    const url = "https://example.com/about/";
+    expect(await readWebsite(base, source, {}, transport(Response.json(result({ metadata: { statusCode: 200, sourceURL: source, url } }))))).toMatchObject({ metadata: { url } });
+  });
+  it("rejects inconsistent source attribution even when the final URL matches", async () => {
+    await expect(readWebsite(base, source, {}, transport(Response.json(result({ metadata: { statusCode: 200, sourceURL: "https://other.example/about", url: source } }))))).rejects.toMatchObject({ code: "SOURCE_REDIRECT_CHANGED" });
   });
   it("rejects a failed target page despite a successful scraper HTTP response", async () => {
-    await expect(readWebsite(base, source, {}, transport(Response.json(result({ metadata: { statusCode: 403 } }))))).rejects.toMatchObject({ code: "SOURCE_PAGE_UNAVAILABLE" });
+    await expect(readWebsite(base, source, {}, transport(Response.json(result({ metadata: { statusCode: 403, url: source } }))))).rejects.toMatchObject({ code: "SOURCE_PAGE_UNAVAILABLE" });
   });
   it.each(["<html>Not JSON</html>", JSON.stringify(result({ markdown: "" })), JSON.stringify(result({ markdown: "\u0000" + markdown })), JSON.stringify(result({ markdown: "\ufffd" + markdown }))])("rejects unusable evidence (%#)", async body => {
     await expect(readWebsite(base, source, {}, transport(new Response(body)))).rejects.toMatchObject({ code: "SOURCE_INVALID_RESULT" });

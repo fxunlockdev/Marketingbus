@@ -41,7 +41,7 @@ suite("source ingestion boundaries", () => {
     const first = await manageSource(scope, request); expect(await manageSource(scope, request)).toMatchObject({ sourceId: first.sourceId, cached: true });
     const transport = vi.fn(async (_url, init) => {
       expect(JSON.parse(String(init?.body))).toMatchObject({ formats: ["markdown"], maxAge: 604800000 });
-      return Response.json({ success: true, data: { markdown: input.text, metadata: { statusCode: 200, sourceURL: request.url, title: "About" } } });
+      return Response.json({ success: true, data: { markdown: input.text, metadata: { statusCode: 200, sourceURL: request.url, url: request.url, title: "About" } } });
     }) as unknown as typeof fetch;
     await runOneSourceJob(transport); await runOneSourceJob(transport);
     expect(transport).toHaveBeenCalledTimes(1);
@@ -69,5 +69,16 @@ suite("source ingestion boundaries", () => {
     expect(sources[0]).toMatchObject({ status: "FAILED", body: "", failureMessage: expect.stringContaining("administrator") });
     expect(JSON.stringify(sources)).not.toContain("private-test-key");
     expect(await listSources({ businessId: scope.businessId, organizationId: other.organizationId })).toEqual([]);
+  });
+  it("never stores redirected third-party content as business evidence", async () => {
+    enable(); const scope = await setup(); const url = "https://example.com";
+    const created = await manageSource(scope, { action: "website", url, rightsConfirmed: true });
+    const fetcher = vi.fn(async () => Response.json({ success: true, data: { markdown: input.text,
+      metadata: { statusCode: 200, sourceURL: url, url: "https://other.example/" } } }));
+    await runOneSourceJob(fetcher); await runOneSourceJob(fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(await db.job.findUnique({ where: { key: `source:${created.sourceId}` } })).toMatchObject({ status: "FAILED", errorCode: "SOURCE_REDIRECT_CHANGED", attempts: 1 });
+    expect(await db.knowledgeSource.findUniqueOrThrow({ where: { id: created.sourceId } })).toMatchObject({ status: "FAILED", body: "", retrievedAt: null });
+    expect((await db.business.findUniqueOrThrow({ where: { id: scope.businessId } })).proof).toBe("");
   });
 });

@@ -4,7 +4,7 @@ import { SourceImportError } from "./import-errors";
 
 const resultSchema = z.object({ success: z.literal(true), data: z.object({
   markdown: z.string().trim().min(20).max(80000).refine(value => !/[\u0000\uFFFD]/.test(value)),
-  metadata: z.object({ statusCode: z.number().int(), sourceURL: z.string().optional(), title: z.string().max(1000).optional() }),
+  metadata: z.object({ statusCode: z.number().int(), url: z.string(), sourceURL: z.string().optional(), title: z.string().max(1000).optional() }),
 }) });
 
 export function scraperHeaders(): Record<string, string> {
@@ -56,8 +56,13 @@ export async function readWebsite(base: URL, input: string, headers: Record<stri
     const { data } = parsed.data;
     if (Buffer.byteLength(data.markdown) > 80000) throw new SourceImportError("SOURCE_TOO_LARGE");
     if (data.metadata.statusCode < 200 || data.metadata.statusCode >= 300) throw new SourceImportError("SOURCE_PAGE_UNAVAILABLE");
-    const finalUrl = data.metadata.sourceURL ? await publicAddress(data.metadata.sourceURL) : url;
+    // Firecrawl sourceURL is the submitted URL; metadata.url is the engine's
+    // actual final URL. Require it instead of inferring that no redirect occurred.
+    const finalUrl = await publicAddress(data.metadata.url);
     if (finalUrl.origin !== url.origin) throw new SourceImportError("SOURCE_REDIRECT_CHANGED");
+    if (data.metadata.sourceURL && (await publicAddress(data.metadata.sourceURL)).origin !== url.origin) {
+      throw new SourceImportError("SOURCE_REDIRECT_CHANGED");
+    }
     return data;
   } catch (error) {
     if (error instanceof SourceImportError) throw error;
