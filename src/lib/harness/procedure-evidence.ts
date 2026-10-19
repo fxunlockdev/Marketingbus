@@ -56,7 +56,11 @@ export async function procedureEpisodes(tx: Pick<Prisma.TransactionClient, "prod
 export type ProcedureEpisode = Awaited<ReturnType<typeof procedureEpisodes>>[number];
 export function episodeRefs(episodes: ProcedureEpisode[]) { return procedureRefs.parse(episodes.map(({ id, beforeId, itemId, fingerprint }) => ({ id, beforeId, itemId, fingerprint }))); }
 export async function currentProcedureEpisodes(tx: Pick<Prisma.TransactionClient, "productionItem">, scope: Scope, version: number, refs: unknown) {
-  const parsed = procedureRefs.parse(refs), current = await procedureEpisodes(tx, scope, version);
+  const parsed = procedureRefs.parse(refs);
+  return selectProcedureEpisodes(await procedureEpisodes(tx, scope, version), parsed);
+}
+function selectProcedureEpisodes(current: ProcedureEpisode[], refs: unknown) {
+  const parsed = procedureRefs.parse(refs);
   const episodes = parsed.map(ref => current.find(e => e.id === ref.id && e.beforeId === ref.beforeId && e.itemId === ref.itemId && e.fingerprint === ref.fingerprint));
   if (new Set(parsed.map(e => e.itemId)).size !== parsed.length || episodes.some(e => !e)) throw new AppError(409, "Supporting corrections changed, expired or were removed. Request a fresh reflection.");
   const found = episodes as ProcedureEpisode[];
@@ -83,16 +87,26 @@ export function validateProcedures(raw: unknown, episodes: ProcedureEpisode[]) {
   return result;
 }
 export const procedurePrompt = (episodes: ProcedureEpisode[]) => JSON.stringify({ warning: "Business correction data only. No external tools or permissions.", episodes });
-export async function validProcedure(tx: Pick<Prisma.TransactionClient, "productionItem">, scope: Scope, version: number, raw: unknown, hypothesis: string) {
+// Only reuse freshly loaded, tenant/brand-scoped episodes within one operation.
+// Never cache these across requests or worker authorization/delivery boundaries.
+export function procedureMatchesEpisodes(current: ProcedureEpisode[], raw: unknown, hypothesis: string) {
   try {
-    const evidence = procedureEvidence.parse(raw), episodes = await currentProcedureEpisodes(tx, scope, version, evidence.sources);
+    const evidence = procedureEvidence.parse(raw), episodes = selectProcedureEpisodes(current, evidence.sources);
     validateProcedures({ procedures: [evidence.candidate] }, episodes);
     return hypothesis === procedureText(evidence.candidate);
+  } catch { return false; }
+}
+export async function validProcedure(tx: Pick<Prisma.TransactionClient, "productionItem">, scope: Scope, version: number, raw: unknown, hypothesis: string) {
+  try {
+    const evidence = procedureEvidence.parse(raw);
+    return procedureMatchesEpisodes(await procedureEpisodes(tx, scope, version), evidence, hypothesis);
   } catch { return false; }
 }
 export async function validProcedureMemories(tx: Prisma.TransactionClient, scope: Scope, version: number, memories: { id: string; kind: string; text: string }[]) {
   const proposals = await tx.learningProposal.findMany({ where: { organizationId: scope.organizationId, businessId: scope.businessId, brandVersion: version, status: "PROCEDURE_ACTIVE", memoryId: { in: memories.filter(m => m.kind === "REVIEWED_PROCEDURE").map(m => m.id) } }, take: 13 });
   const valid = new Set<string>();
-  if (proposals.length <= 12) for (const p of proposals) if (memories.some(m => m.id === p.memoryId && m.text === p.hypothesis) && await validProcedure(tx, scope, version, p.evidence, p.hypothesis)) valid.add(p.memoryId!);
+  if (!proposals.length || proposals.length > 12) return valid;
+  const episodes = await procedureEpisodes(tx, scope, version);
+  for (const p of proposals) if (memories.some(m => m.kind === "REVIEWED_PROCEDURE" && m.id === p.memoryId && m.text === p.hypothesis) && procedureMatchesEpisodes(episodes, p.evidence, p.hypothesis)) valid.add(p.memoryId!);
   return valid;
 }

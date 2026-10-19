@@ -8,7 +8,7 @@ import { assertWorkerReady } from "../production/readiness";
 import { authorizeSupplier } from "../production/budget";
 import { reserveCreditsInTransaction, finishReservationInTransaction } from "../billing/wallet";
 import { procedureOutcomes } from "./procedure-outcomes";
-import { currentProcedureEpisodes, episodeRefs, hashProcedure, procedureChannel, procedureEpisodes, procedureEvidence, procedurePrompt, procedureSchema, procedureSystem, validProcedure } from "./procedure-evidence";
+import { currentProcedureEpisodes, episodeRefs, hashProcedure, procedureChannel, procedureEpisodes, procedureEvidence, procedureMatchesEpisodes, procedurePrompt, procedureSchema, procedureSystem, validProcedure } from "./procedure-evidence";
 
 export const reflectionConfigurationHash = () => hashProcedure({ rates: configurationHash(), system: procedureSystem, schema: procedureSchema, version: 1 });
 const actions = z.discriminatedUnion("action", [
@@ -31,12 +31,12 @@ export async function readProcedures(scope: Scope) {
       outcomeWindow: { since: outcomes.since, sampled: outcomes.sampled },
       available: procedureChannel.options.map(channel => ({ channel, count: episodes.filter(e => e.channel === channel).length })),
       reflections: jobs.map(j => ({ id: j.id, status: j.status, credits: j.credits, expiresAt: j.expiresAt, errorCode: j.errorCode })),
-      procedures: await Promise.all(rows.map(async r => {
+      procedures: rows.map(r => {
         const parsed = procedureEvidence.safeParse(r.evidence);
         const retained = r.status !== "PROCEDURE_ACTIVE" || memories.some(m => m.id === r.memoryId && m.text === r.hypothesis);
         return { id: r.id, status: r.status, instruction: r.hypothesis, candidate: parsed.success ? parsed.data.candidate : null, outcomes: outcomes.totals[r.id],
-          valid: retained && !!business.confirmedAt && r.brandVersion === business.version && await validProcedure(tx, scope, business.version, r.evidence, r.hypothesis) };
-      })) };
+          valid: retained && !!business.confirmedAt && r.brandVersion === business.version && procedureMatchesEpisodes(episodes, r.evidence, r.hypothesis) };
+      }) };
   });
 }
 export async function manageProcedures(scope: Scope, raw: unknown) {

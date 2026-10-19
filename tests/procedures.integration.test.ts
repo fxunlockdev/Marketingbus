@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { Prisma } from "@prisma/client";
 import { db } from "../src/lib/db";
 import { manageProcedures, readProcedures } from "../src/lib/harness/procedures";
 import { runOneProcedureReflection } from "../src/lib/harness/procedure-worker";
-import { procedureEpisodes, procedureText, redactEpisode, validateProcedures } from "../src/lib/harness/procedure-evidence";
+import { procedureEpisodes, procedureText, redactEpisode, validateProcedures, validProcedureMemories } from "../src/lib/harness/procedure-evidence";
 import { businessKnowledge, graphPrompt } from "../src/lib/harness/knowledge-graph";
 import { heartbeat } from "../src/lib/production/readiness";
 import { manageBrandAnalysis } from "../src/lib/knowledge/analysis";
@@ -51,6 +52,63 @@ suite("semantic creative reflection lifecycle", () => {
   await runOneProcedureReflection(async (_provider, req) => { expect(req.system).toContain("untrusted DATA"); expect(req.input).toContain("thoughtful detail"); return { id: "fixture-reflection", text: JSON.stringify({ procedures: [c] }), usage: { input_tokens: 100, output_tokens: 100 } }; });
   const p = (await readProcedures(scope)).procedures.find(p => p.status === "PROCEDURE_PROPOSED")!; expect(p).toBeTruthy(); return { p, analysisId };
  }
+ async function threeProcedures() {
+  const a = await setup();
+  for (const task of ["copy", "image", "video"] as const) {
+   const { p } = await reflect(a.scope, task);
+   await manageProcedures(a.scope, { action: "activate", proposalId: p.id, reviewedEvidence: true, replaceCurrent: true });
+  }
+  return a;
+ }
+ async function countEvidenceReads<T>(operation: (tx: Prisma.TransactionClient) => Promise<T>) {
+  return db.$transaction(async tx => {
+   const findMany = vi.fn(tx.productionItem.findMany.bind(tx.productionItem));
+   const delegate = { ...tx.productionItem, findMany };
+   const instrumented = new Proxy(tx, { get: (target, key) => key === "productionItem" ? delegate : Reflect.get(target, key) });
+   return { result: await operation(instrumented), calls: findMany.mock.calls };
+  });
+ }
+ it("reads bounded scoped correction history once for three active task procedures", async () => {
+  const a = await threeProcedures(), stored = await db.memory.findMany({ where: { businessId: a.scope.businessId } });
+  const read = await countEvidenceReads(tx => validProcedureMemories(tx, a.scope, 1, stored));
+  expect(read.result.size).toBe(3); expect(read.calls).toHaveLength(1);
+  expect(read.calls[0][0]).toMatchObject({ where: { organizationId: a.scope.organizationId, plan: { businessId: a.scope.businessId, organizationId: a.scope.organizationId, brandVersion: 1 } }, take: 100, include: { revisions: { take: 8 } } });
+  expect((await readProcedures(a.scope)).procedures.every(p => p.valid)).toBe(true);
+ });
+ it.each(["modified", "deleted", "expired"] as const)("revalidates %s evidence on the next request, without cross-business reuse", async change => {
+  const a = await threeProcedures(), b = await setup(), stored = await db.memory.findMany({ where: { businessId: a.scope.businessId } });
+  expect((await countEvidenceReads(tx => validProcedureMemories(tx, a.scope, 1, stored))).result.size).toBe(3);
+  const foreign = await countEvidenceReads(tx => validProcedureMemories(tx, b.scope, 1, stored));
+  expect(foreign.result.size).toBe(0); expect(foreign.calls).toHaveLength(0);
+  const source = (await procedureEpisodes(db, a.scope, 1))[0];
+  if (change === "deleted") await db.creativeRevision.delete({ where: { id: source.id } });
+  else await db.creativeRevision.update({ where: { id: source.id }, data: change === "expired" ? { approvedAt: new Date(Date.now() - 91 * 86400000) } : { status: "REJECTED" } });
+  const changed = await countEvidenceReads(tx => validProcedureMemories(tx, a.scope, 1, stored));
+  expect(changed.result.size).toBe(0); expect(changed.calls).toHaveLength(1);
+  expect((await readProcedures(a.scope)).procedures.every(p => !p.valid)).toBe(true);
+ });
+ it("keeps exact retained-memory binding independent from batched evidence", async () => {
+  const a = await threeProcedures(), stored = await db.memory.findMany({ where: { businessId: a.scope.businessId }, orderBy: { id: "asc" } });
+  await db.memory.delete({ where: { id: stored[0].id } });
+  await db.memory.update({ where: { id: stored[1].id }, data: { text: "An unreviewed replacement instruction." } });
+  const retained = await db.memory.findMany({ where: { businessId: a.scope.businessId } });
+  const read = await countEvidenceReads(tx => validProcedureMemories(tx, a.scope, 1, retained));
+  expect([...read.result]).toEqual([stored[2].id]); expect(read.calls).toHaveLength(1);
+  expect((await readProcedures(a.scope)).procedures.filter(p => p.valid).map(p => p.instruction)).toEqual([stored[2].text]);
+  const wrongKind = await countEvidenceReads(tx => validProcedureMemories(tx, a.scope, 1, retained.map(m => ({ ...m, kind: "PREFERENCE" }))));
+  expect(wrongKind.result.size).toBe(0); expect(wrongKind.calls).toHaveLength(0);
+ });
+ it("fails closed above the twelve-procedure context ceiling without loading evidence", async () => {
+  const a = await setup(), { p } = await reflect(a.scope);
+  const proposal = await db.learningProposal.findUniqueOrThrow({ where: { id: p.id } });
+  for (let i = 0; i < 13; i++) {
+   const memory = await db.memory.create({ data: { businessId: a.scope.businessId, organizationId: a.scope.organizationId, kind: "REVIEWED_PROCEDURE", text: proposal.hypothesis } });
+   await db.learningProposal.create({ data: { businessId: a.scope.businessId, organizationId: a.scope.organizationId, brandVersion: 1, hypothesis: proposal.hypothesis, evidence: proposal.evidence as Prisma.InputJsonValue, status: "PROCEDURE_ACTIVE", memoryId: memory.id } });
+  }
+  const stored = await db.memory.findMany({ where: { businessId: a.scope.businessId } });
+  const overflow = await countEvidenceReads(tx => validProcedureMemories(tx, a.scope, 1, stored));
+  expect(overflow.result.size).toBe(0); expect(overflow.calls).toHaveLength(0);
+ });
  it("requires distinct approved corrections and explicit authorization before AI", async () => {
   const a = await setup(1); await expect(quote(a.scope)).rejects.toThrow("two different");
   const b = await setup(), id = await quote(b.scope), mock = vi.fn(); expect(await runOneProcedureReflection(mock)).toBe(false); expect(mock).not.toHaveBeenCalled();
