@@ -81,9 +81,9 @@ describe("Facebook Page text publishing transport", () => {
     expect(await f.adapter.publish(f.account, f.payload, "request", f.signal())).toEqual({ state: "uncertain" });
     expect(f.fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
   });
-  it("has no metrics mapping, makes no metrics requests and invents no snapshot", async () => {
+  it("keeps metrics disabled by default, makes no requests and invents no snapshot", async () => {
     const f = fixture(); expect(f.adapter.metricsAvailable).toBe(false);
-    await expect(f.adapter.metrics(f.account, f.id, f.signal(), { payload: f.payload, publishedAt: new Date() })).rejects.toThrow("not implemented"); expect(f.fetcher).not.toHaveBeenCalled();
+    await expect(f.adapter.metrics(f.account, f.id, f.signal(), { payload: f.payload, publishedAt: new Date() })).rejects.toThrow("Facebook post metrics could not be verified."); expect(f.fetcher).not.toHaveBeenCalled();
   });
   it("omits unsafe permalinks without disguising a verified publication as missing", async () => {
     const f = fixture(); f.post.permalink_url = "https://attacker.example/secret";
