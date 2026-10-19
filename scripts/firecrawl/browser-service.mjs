@@ -66,8 +66,8 @@ export function createBrowserService({ token, proxyServer, proxyPassword, launch
           || Object.keys(input).some(key => !["url", "timeout", "headers", "wait_after_load", "skip_tls_verification"].includes(key))) throw Error("invalid");
       } catch { reply(400, { error: "Invalid or restricted request" }); return; }
       timer = setTimeout(() => { timedOut = true; void browser?.close().catch(() => {}); }, timeout);
-      browser = await launch({ headless: true, timeout, proxy: { server: proxy.href, username: "scraper", password: proxyPassword },
-        args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-quic", "--proxy-bypass-list=<-loopback>", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"] });
+      browser = await launch({ headless: true, chromiumSandbox: true, timeout, proxy: { server: proxy.href, username: "scraper", password: proxyPassword },
+        args: ["--disable-dev-shm-usage", "--disable-quic", "--proxy-bypass-list=<-loopback>", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"] });
       if (timedOut || stopping || cancelled) throw Error("cancelled");
       context = await browser.newContext({ serviceWorkers: "block", acceptDownloads: false, ignoreHTTPSErrors: false });
       await context.route("**/*", async route => {

@@ -56,7 +56,8 @@ describe("isolated on-demand scraper browser", () => {
     const response = await post({ url: "https://example.com", timeout: 1000 });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ url: "https://example.com/final", pageStatusCode: 200, content: "<html>Business evidence</html>" });
-    expect(fake.launch).toHaveBeenCalledWith(expect.objectContaining({ proxy: { server: "http://private-proxy:8899/", username: "scraper", password: proxyPassword } }));
+    expect(fake.launch).toHaveBeenCalledWith(expect.objectContaining({ chromiumSandbox: true, proxy: { server: "http://private-proxy:8899/", username: "scraper", password: proxyPassword } }));
+    expect(fake.launch).not.toHaveBeenCalledWith(expect.objectContaining({ args: expect.arrayContaining(["--no-sandbox"]) }));
     expect(fake.browser.newContext).toHaveBeenCalledWith({ serviceWorkers: "block", acceptDownloads: false, ignoreHTTPSErrors: false });
     await vi.waitFor(() => expect(fake.browser.close).toHaveBeenCalled()); expect(fake.context.close).toHaveBeenCalled();
   });

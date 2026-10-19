@@ -1,0 +1,7 @@
+{
+  "name": "marketingbus-private-scraper-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "engines": { "node": ">=22 <23" },
+  "dependencies": { "ipaddr.js": "2.3.0", "playwright": "1.64.0" }
+}

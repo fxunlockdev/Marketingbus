@@ -1,0 +1,6 @@
+*
+!Dockerfile
+!package.json
+!package-lock.json
+!browser-service.mjs
+!public-egress-proxy.mjs
