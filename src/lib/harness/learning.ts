@@ -14,12 +14,13 @@ const evidenceSchema = z.object({ kind: z.literal("FEEDBACK_SKILL_V1"), rule: le
 }).strict();
 type Episode = z.infer<typeof evidenceSchema>["episodes"][number];
 async function episodes(tx: Prisma.TransactionClient, scope: Scope, brandVersion: number) {
+  const now = Date.now();
   const items = await tx.productionItem.findMany({ where: { organizationId: scope.organizationId, plan: { businessId: scope.businessId, brandVersion }, revisions: { some: { status: "APPROVED" } } }, orderBy: { id: "desc" }, take: 100,
     include: { revisions: { orderBy: { version: "desc" }, take: 8 } } });
   const groups = new Map<string, { rule: z.infer<typeof learnedRule>; episodes: Episode[] }>();
   for (const item of items) {
     const after = item.revisions[0], current = creativeSchema.safeParse(after?.content);
-    if (!after || after.status !== "APPROVED" || !current.success || !after.approvedAt || after.approvedAt.getTime() > Date.now() || Date.now() - after.approvedAt.getTime() > 90 * DAY) continue;
+    if (!after || after.status !== "APPROVED" || !current.success || !after.approvedAt || after.approvedAt.getTime() > now || now - after.approvedAt.getTime() > 90 * DAY) continue;
     const before = item.revisions.find(r => r.version < after.version && r.feedback.trim());
     const original = creativeSchema.safeParse(before?.content);
     if (!before || !original.success) continue;
@@ -34,33 +35,45 @@ async function episodes(tx: Prisma.TransactionClient, scope: Scope, brandVersion
   }
   return [...groups.values()].filter(g => g.episodes.length >= 2).map(g => ({ kind: "FEEDBACK_SKILL_V1" as const, ...g }));
 }
+function matchesSkill(sources: Awaited<ReturnType<typeof episodes>>, evidence: unknown, hypothesis: string) {
+  const parsed = evidenceSchema.safeParse(evidence);
+  if (!parsed.success || hypothesis !== ruleText(parsed.data.rule.id, parsed.data.rule.channel)) return false;
+  const source = sources.find(g => g.rule.id === parsed.data.rule.id && g.rule.channel === parsed.data.rule.channel);
+  return !!source && new Set(parsed.data.episodes.map(e => e.itemId)).size === parsed.data.episodes.length && parsed.data.episodes.every(e => source.episodes.some(s => s.itemId === e.itemId && s.beforeId === e.beforeId && s.afterId === e.afterId && s.fingerprint === e.fingerprint));
+}
 export async function validSkill(tx: Prisma.TransactionClient, scope: Scope, brandVersion: number, evidence: unknown, hypothesis: string) {
   const parsed = evidenceSchema.safeParse(evidence);
   if (!parsed.success || hypothesis !== ruleText(parsed.data.rule.id, parsed.data.rule.channel)) return false;
-  const source = (await episodes(tx, scope, brandVersion)).find(g => g.rule.id === parsed.data.rule.id && g.rule.channel === parsed.data.rule.channel);
-  return !!source && new Set(parsed.data.episodes.map(e => e.itemId)).size === parsed.data.episodes.length && parsed.data.episodes.every(e => source.episodes.some(s => s.itemId === e.itemId && s.beforeId === e.beforeId && s.afterId === e.afterId && s.fingerprint === e.fingerprint));
+  return matchesSkill(await episodes(tx, scope, brandVersion), evidence, hypothesis);
 }
 export async function validSkillMemories(tx: Prisma.TransactionClient, scope: Scope, brandVersion: number, memories: { id: string; text: string; kind: string }[]) {
   const rows = await tx.learningProposal.findMany({ where: { ...{ businessId: scope.businessId, organizationId: scope.organizationId }, brandVersion, status: "SKILL_ACTIVE", memoryId: { in: memories.filter(m => m.kind === "APPROVED_SKILL").map(m => m.id) } }, take: 21 });
   const valid = new Set<string>();
-  if (rows.length <= 20) for (const row of rows) if (memories.some(m => m.id === row.memoryId && m.text === row.hypothesis) && await validSkill(tx, scope, brandVersion, row.evidence, row.hypothesis)) valid.add(row.memoryId!);
+  if (!rows.length || rows.length > 20) return valid;
+  // Request-local only: each recall re-reads scoped source evidence. Do not cache
+  // this across quotes, approval changes, brands, businesses or worker fences.
+  const sources = await episodes(tx, scope, brandVersion);
+  for (const row of rows) if (memories.some(m => m.kind === "APPROVED_SKILL" && m.id === row.memoryId && m.text === row.hypothesis) && matchesSkill(sources, row.evidence, row.hypothesis)) valid.add(row.memoryId!);
   return valid;
 }
 async function access(tx: Prisma.TransactionClient, scope: Scope, write: boolean) {
   const member = await tx.membership.findUnique({ where: { organizationId_userId: { organizationId: scope.organizationId, userId: scope.actorId } } });
   if (!member || write && !["OWNER", "ADMIN", "EDITOR"].includes(member.role)) throw new AppError(403, "Your workspace role cannot manage learned skills.");
+  return member;
 }
 export async function readLearnedSkills(scope: Scope) {
   return db.$transaction(async tx => {
-    const business = await lockBusiness(tx, scope); await access(tx, scope, false);
-    const member = await tx.membership.findUniqueOrThrow({ where: { organizationId_userId: { organizationId: scope.organizationId, userId: scope.actorId } } });
+    const business = await lockBusiness(tx, scope), member = await access(tx, scope, false);
     const rows = await tx.learningProposal.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId, status: { startsWith: "SKILL_" } }, orderBy: { createdAt: "desc" }, take: 50 });
-    return { canEdit: ["OWNER", "ADMIN", "EDITOR"].includes(member.role), skills: await Promise.all(rows.map(async row => {
+    const activeIds = rows.flatMap(r => r.status === "SKILL_ACTIVE" && r.memoryId ? [r.memoryId] : []);
+    const retainedMemories = activeIds.length ? await tx.memory.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId, kind: "APPROVED_SKILL", id: { in: activeIds } }, select: { id: true, text: true }, take: 50 }) : [];
+    const sources = business.confirmedAt && rows.some(r => r.brandVersion === business.version) ? await episodes(tx, scope, business.version) : [];
+    return { canEdit: ["OWNER", "ADMIN", "EDITOR"].includes(member.role), skills: rows.map(row => {
       const evidence = evidenceSchema.safeParse(row.evidence);
-      const retained = row.status !== "SKILL_ACTIVE" || !!await tx.memory.findFirst({ where: { id: row.memoryId ?? "", businessId: scope.businessId, organizationId: scope.organizationId, kind: "APPROVED_SKILL", text: row.hypothesis } });
-      const valid = retained && row.brandVersion === business.version && !!business.confirmedAt && await validSkill(tx, scope, business.version, row.evidence, row.hypothesis);
+      const retained = row.status !== "SKILL_ACTIVE" || retainedMemories.some(m => m.id === row.memoryId && m.text === row.hypothesis);
+      const valid = retained && row.brandVersion === business.version && !!business.confirmedAt && matchesSkill(sources, row.evidence, row.hypothesis);
       return { id: row.id, instruction: row.hypothesis, status: row.status, valid, channel: evidence.success ? evidence.data.rule.channel : "Unknown", examples: evidence.success ? evidence.data.episodes.length : 0, createdAt: row.createdAt };
-    })) };
+    }) };
   });
 }
 export async function manageLearnedSkills(scope: Scope, raw: unknown) {
@@ -92,17 +105,18 @@ export async function manageLearnedSkills(scope: Scope, raw: unknown) {
 }
 // Called while holding the same business lock as creative approval. No model calls.
 export async function reflectLearnedSkills(tx: Prisma.TransactionClient, scope: Scope, brandVersion: number) {
+      const sources = await episodes(tx, scope, brandVersion);
       const stale = await tx.learningProposal.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId, status: { in: ["SKILL_ACTIVE", "SKILL_PROPOSED"] } }, take: 20 });
-      for (const row of stale) if (row.brandVersion !== brandVersion || !await validSkill(tx, scope, brandVersion, row.evidence, row.hypothesis)) {
+      for (const row of stale) if (row.brandVersion !== brandVersion || !matchesSkill(sources, row.evidence, row.hypothesis)) {
         if (row.memoryId) await tx.memory.deleteMany({ where: { id: row.memoryId, businessId: scope.businessId, organizationId: scope.organizationId, kind: "APPROVED_SKILL" } });
         await tx.learningProposal.update({ where: { id: row.id }, data: { status: "SKILL_EXPIRED", memoryId: null } });
       }
       let created = 0;
-      for (const evidence of await episodes(tx, scope, brandVersion)) {
+      for (const evidence of sources) {
         const hypothesis = ruleText(evidence.rule.id, evidence.rule.channel);
         const prior = await tx.learningProposal.findFirst({ where: { businessId: scope.businessId, organizationId: scope.organizationId, brandVersion, hypothesis, status: { startsWith: "SKILL_" } }, orderBy: { createdAt: "desc" } });
         // Same-scenario consolidation. Retirement is sticky until the user creates new evidence.
-        if (prior && (await validSkill(tx, scope, brandVersion, prior.evidence, prior.hypothesis) || hash(prior.evidence) === hash(evidence))) continue;
+        if (prior && (matchesSkill(sources, prior.evidence, prior.hypothesis) || hash(prior.evidence) === hash(evidence))) continue;
         if (await tx.learningProposal.count({ where: { businessId: scope.businessId, status: { in: ["SKILL_PROPOSED", "SKILL_ACTIVE"] } } }) >= 20) break;
         await tx.learningProposal.create({ data: { businessId: scope.businessId, organizationId: scope.organizationId, brandVersion, hypothesis, evidence, status: "SKILL_PROPOSED" } }); created++;
       }

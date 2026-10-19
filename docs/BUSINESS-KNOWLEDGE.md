@@ -14,6 +14,8 @@ Connections: confirmed business → versioned facts; business → explicit prefe
 
 The projection is bounded: 100 candidate memories, at most 30 applicable preferences/lessons and 6,000 guidance characters, up to ten selected assets, fixed typed edges. Excess applicable context fails closed with consolidation guidance rather than silently dropping requirements. Raw website/document text, secrets, unrelated clients and unapproved feedback never become graph instructions. Existing media permissions, factual checks, credit reservations and approval gates retain authority.
 
+Deterministic copy-rule validation shares one fresh, bounded correction-evidence read within each recall, reflection or skill-list operation. The list also batches retained-memory checks. This is local reuse inside the operation, never a cross-request/business cache: subsequent generation fences still read current evidence and reject changed or deleted sources. It reduces repeated database work without an additional service or model call; it does not establish a measured monthly infrastructure ceiling or change prompt limits.
+
 Authenticated read-only endpoint: `/api/businesses/:id/knowledge-graph?task=copy&channel=LinkedIn`. Tasks: `copy`, `image`, `video`, `planning`. Only configured channels and accessible businesses are allowed; responses are not cached. This is an inspection API, not an endpoint for arbitrary graph writes or model training.
 
 ## Boundaries

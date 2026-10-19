@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { Prisma } from "@prisma/client";
 import { db } from "../src/lib/db";
-import { manageLearnedSkills, readLearnedSkills } from "../src/lib/harness/learning";
+import { manageLearnedSkills, readLearnedSkills, reflectLearnedSkills, validSkillMemories } from "../src/lib/harness/learning";
 import { productionMemories } from "../src/lib/social/learning-evidence";
 import { actOnProduction, type Scope } from "../src/lib/production/service";
 import { runOneJob } from "../src/lib/production/worker";
@@ -55,6 +56,54 @@ suite("feedback to versioned business copy skills", () => {
    organizationId: scope.organizationId, kind: "EXPLICIT_PREFERENCE", text: `Retain customer preference ${i}` })) });
   return db.memory.findMany({ where: { businessId: scope.businessId }, orderBy: { id: "asc" } });
  }
+ async function threeSkills() {
+  const a = await setup();
+  await db.creativeRevision.updateMany({ where: { organizationId: a.scope.organizationId, version: 1 }, data: {
+   feedback: "No hashtags. No emoji. Shorter captions.", content: { ...copy, caption: `${Array(90).fill("Architecture").join(" ")} #Design 😀` },
+  } });
+  await manageLearnedSkills(a.scope, { action: "reflect-skills" });
+  const proposals = (await readLearnedSkills(a.scope)).skills;
+  expect(proposals).toHaveLength(3);
+  for (const p of proposals) await manageLearnedSkills(a.scope, { action: "activate-skill", proposalId: p.id });
+  return a;
+ }
+ async function countEvidenceReads<T>(operation: (tx: Prisma.TransactionClient) => Promise<T>) {
+  return db.$transaction(async tx => {
+   const findMany = vi.fn(tx.productionItem.findMany.bind(tx.productionItem));
+   const delegate = { ...tx.productionItem, findMany };
+   const instrumented = new Proxy(tx, { get: (target, key) => key === "productionItem" ? delegate : Reflect.get(target, key) });
+   const result = await operation(instrumented);
+   return { result, calls: findMany.mock.calls };
+  });
+ }
+ it("reuses one bounded scoped evidence read for multi-rule recall and reflection", async () => {
+  const a = await threeSkills(), stored = await db.memory.findMany({ where: { businessId: a.scope.businessId } });
+  const recall = await countEvidenceReads(tx => validSkillMemories(tx, a.scope, 1, stored));
+  expect(recall.result.size).toBe(3); expect(recall.calls).toHaveLength(1);
+  expect(recall.calls[0][0]).toMatchObject({ where: { organizationId: a.scope.organizationId, plan: { businessId: a.scope.businessId, brandVersion: 1 } }, take: 100 });
+  const reflection = await countEvidenceReads(tx => reflectLearnedSkills(tx, a.scope, 1));
+  expect(reflection.result).toMatchObject({ created: 0 }); expect(reflection.calls).toHaveLength(1);
+  expect((await readLearnedSkills(a.scope)).skills.every(s => s.valid && s.status === "SKILL_ACTIVE")).toBe(true);
+ });
+ it("does not reuse evidence across requests or businesses and keeps changed-source invalidation", async () => {
+  const a = await threeSkills(), b = await setup(0), stored = await db.memory.findMany({ where: { businessId: a.scope.businessId } });
+  expect((await countEvidenceReads(tx => validSkillMemories(tx, a.scope, 1, stored))).result.size).toBe(3);
+  const foreign = await countEvidenceReads(tx => validSkillMemories(tx, b.scope, 1, stored));
+  expect(foreign.result.size).toBe(0); expect(foreign.calls).toHaveLength(0);
+  await db.creativeRevision.update({ where: { id: a.revisions[0] }, data: { status: "REJECTED" } });
+  const changed = await countEvidenceReads(tx => validSkillMemories(tx, a.scope, 1, stored));
+  expect(changed.result.size).toBe(0); expect(changed.calls).toHaveLength(1);
+  expect((await readLearnedSkills(a.scope)).skills.every(s => !s.valid)).toBe(true);
+ });
+ it("batch display still rejects removed and changed memory without invalidating unrelated rules", async () => {
+  const a = await threeSkills(), stored = await db.memory.findMany({ where: { businessId: a.scope.businessId }, orderBy: { id: "asc" } });
+  await db.memory.delete({ where: { id: stored[0].id } });
+  await db.memory.update({ where: { id: stored[1].id }, data: { text: "Changed instruction is not approved evidence." } });
+  const shown = await readLearnedSkills(a.scope);
+  expect(shown.skills.filter(s => s.valid)).toHaveLength(1);
+  expect(shown.skills.find(s => s.valid)?.instruction).toBe(stored[2].text);
+  expect((await memories(a.scope)).map(m => m.id)).toEqual([stored[2].id]);
+ });
  it("replaces an existing skill at full capacity without evicting preferences or spending credits", async () => {
   const a = await setup(), { previous, proposed } = await replacement(a.scope), before = await fillMemory(a.scope);
   await manageLearnedSkills(a.scope, { action: "activate-skill", proposalId: proposed.id });
