@@ -70,7 +70,7 @@ export function ImageProduction({ businessId, items, initialItemId, onChange }: 
         <div className="tag-row"><button className="button" disabled={busy || !canEdit || !reviewed || !preview} onClick={() => act({ action: "approve", generationId: current.id, fidelityReviewed: true })}>Approve artwork for composition</button><button className="button" disabled={busy || !canEdit} onClick={() => act({ action: "reject", generationId: current.id })}>Reject artwork · no regeneration</button></div>
         <label htmlFor="artwork-feedback">Specific revision request</label>
         <textarea id="artwork-feedback" value={feedback} maxLength={1000} onChange={e => setFeedback(e.target.value)} aria-describedby="artwork-revision-help" />
-        <p id="artwork-revision-help">Describe what should change and what must stay. A revision creates a new quote, not an automatic charge. Earlier approved artwork is revoked only when the new quote is authorized.</p>
+        <p id="artwork-revision-help">Describe what should change and what must stay. A revision creates a new quote, not an automatic charge. Authorizing a replacement uses one of this creative’s three shared AI revision requests, even without selecting a parent image. Earlier approved artwork is revoked only when the new quote is authorized. See Review inbox for the remaining allowance.</p>
         <button className="button" disabled={busy || !canEdit || feedback.trim().length < 5} onClick={() => act({ action: "quote", itemId, parentId: current.id, feedback })}>Quote this revision</button>
         {current.status === "APPROVED" && <p>Next: use approved brand assets below to create a new layout containing this artwork, then review the complete composition.</p>}
       </>}

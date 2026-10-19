@@ -4,6 +4,7 @@ import { processOnePayment } from "../src/lib/billing/payments";
 import { db } from "../src/lib/db";
 import { createDuePlan, runOneWeeklyDraft } from "../src/lib/workflows/planning";
 import { runOneWeeklyImage } from "../src/lib/workflows/weekly-images";
+import { runOneWeeklyVideo } from "../src/lib/workflows/weekly-videos";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { heartbeat, HEARTBEAT_TTL_MS } from "../src/lib/production/readiness";
@@ -35,6 +36,7 @@ const groups: WorkerGroup[] = [{ name: "production", steps: [
   { name: "shot-recovery", run: recoverShotGenerations },
   { name: "weekly-draft", enabled: paid => paid, run: runOneWeeklyDraft },
   { name: "weekly-image", enabled: paid => paid, run: runOneWeeklyImage },
+  { name: "weekly-video", enabled: paid => paid, run: runOneWeeklyVideo },
   { name: "brand", enabled: paid => paid, run: runOneBrandAnalysis },
   { name: "image", enabled: paid => paid, run: runOneImage },
   { name: "shot", run: runOneShotGeneration },

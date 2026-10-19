@@ -1,16 +1,17 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ProductionCard, type ProductionItemView } from "./production-card";
+import { type ProductionItemView } from "./production-card";
+import { CreativeReviewCanvas } from "./creative-review-canvas";
 import { HistoricalCreative } from "./plan-history";
 import { ReviewMediaCard } from "./review-media";
 import type { ReviewMedia } from "@/lib/production/review";
 import type { AssetTarget } from "./asset-studio";
 
-export function ReviewInbox({ business, planId, items, readOnly, busy, post, onOpen }: {
+export function ReviewInbox({ business, planId, items, readOnly, busy, post, onOpen, onConnections }: {
   business: { id: string; name: string; color: string; designPreset: string; channels: string[] };
   planId?: string; items: ProductionItemView[]; readOnly: boolean; busy: boolean;
-  post: (data: Record<string, unknown>) => Promise<unknown>; onOpen: (target: AssetTarget) => void;
+  post: (data: Record<string, unknown>) => Promise<unknown>; onOpen: (target: AssetTarget) => void; onConnections?: () => void;
 }) {
   const router = useRouter();
   const [channel, setChannel] = useState("all"), [media, setMedia] = useState<ReviewMedia | null>(null);
@@ -53,9 +54,9 @@ export function ReviewInbox({ business, planId, items, readOnly, busy, post, onO
       const copyChanged = !!row && row.copyRevisionId !== (item.revisions[0]?.id ?? null);
       return <article key={item.id} className="platform-review-card" aria-label={`${item.channel}: ${item.title}`}>
         <div className="platform-review-label"><span className="eyebrow">{item.channel}</span><span>{item.format === "static" ? "Image / post" : "Video / motion"}</span></div>
-        {readOnly || copyChanged ? <HistoricalCreative item={item} /> : item.revisions.length ? <ProductionCard key={`${item.id}:${item.revisions[0]?.version}`} item={item} brand={business} busy={busy} post={post} review /> : <section className="panel"><h2>{item.title}</h2><p>No separate copy revision. Review the storyboard and on-screen captions below.</p></section>}
+        {readOnly || copyChanged ? <HistoricalCreative item={item} /> : <CreativeReviewCanvas key={`${item.id}:${item.revisions[0]?.version}`} item={item} business={business} row={row} canEdit={!!media?.canEdit} busy={busy} post={post} onOpen={onOpen} onConnections={onConnections} onChange={message => { setNotice(message); setRefresh(v => v + 1); }} />}
         {copyChanged && <section className="panel"><p role="status">Saved copy changed since this plan was loaded. Reload it before comparing or approving media.</p><button className="button" onClick={() => router.refresh()}>Reload current plan</button></section>}
-        {row && !copyChanged && <ReviewMediaCard key={JSON.stringify(row)} businessId={business.id} row={row} canEdit={!readOnly && !!media?.canEdit} copyApproved={item.revisions[0]?.status === "APPROVED"} onOpen={onOpen} onChange={message => { setNotice(message); setRefresh(v => v + 1); }} />}
+        {readOnly && row && !copyChanged && <ReviewMediaCard key={JSON.stringify(row)} businessId={business.id} row={row} canEdit={false} copyApproved={item.revisions[0]?.status === "APPROVED"} onOpen={onOpen} onChange={message => { setNotice(message); setRefresh(v => v + 1); }} />}
       </article>;
     })}
   </div>;

@@ -68,6 +68,38 @@ test("inspect and stop a weekly run without touching authorized work or credits"
   } finally { if (organizationId) await db.organization.delete({ where: { id: organizationId } }); await db.user.deleteMany({ where: { email } }); }
 });
 
+test("mixed-media quantities and video rights consent save explicitly, reset in plan mode and remain keyboard accessible", async ({ page }) => {
+  const email = `weekly-video-${crypto.randomUUID()}@example.test`, headers = { Origin: "http://127.0.0.1:3000" };
+  let organizationId: string | undefined;
+  try {
+    expect((await page.request.post("/api/auth/register", { headers, data: { name: "Video Fixture", email, password: "Test-only-password-2026!" } })).ok()).toBe(true);
+    const created = await page.request.post("/api/businesses", { headers, data: { name: "Video Studio", offering: "Design consultations", audience: "Homeowners", goal: "Book consultations", channels: ["Instagram"] } });
+    expect(created.ok()).toBe(true); const { id } = await created.json();
+    organizationId = (await db.business.update({ where: { id }, data: { confirmedAt: new Date() } })).organizationId;
+    await page.goto("/studio"); await page.getByRole("button", { name: "Workflows", exact: true }).click();
+    const consent = page.getByRole("checkbox", { name: "Authorize video production after my scene approvals" });
+    await expect(consent).toBeDisabled(); await expect(consent).not.toBeChecked();
+    await page.getByRole("combobox", { name: "Weekly mode", exact: true }).selectOption("DRAFTS");
+    await expect(consent).toBeDisabled(); await page.getByLabel("Maximum planned items", { exact: true }).fill("4");
+    await page.getByLabel("Video items within this total", { exact: true }).fill("1");
+    await expect(consent).toBeEnabled(); await consent.focus(); await page.keyboard.press("Space");
+    await page.getByLabel("Weekly credit ceiling", { exact: true }).fill("100");
+    await page.getByRole("button", { name: "Save recurring authorization" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Workflow settings saved" })).toBeVisible();
+    expect(await db.weeklyPolicy.findUniqueOrThrow({ where: { businessId: id } })).toMatchObject({ enabled: false, videoItems: 1, videosAfterApproval: true, maxItems: 4, creditsPerWeek: 100 });
+    await page.reload(); await page.getByRole("button", { name: "Workflows", exact: true }).click();
+    await expect(consent).toBeChecked(); await expect(page.getByText("3 static creatives · 1 video concepts per week.", { exact: false })).toBeVisible();
+    expect((await new AxeBuilder({ page }).include("main").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+    await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: "../outputs/marketingbus-weekly-mixed-media.png", fullPage: true });
+    await page.getByRole("combobox", { name: "Weekly mode", exact: true }).selectOption("PLAN"); await expect(consent).not.toBeChecked(); await expect(consent).toBeDisabled();
+    await page.getByRole("button", { name: "Save recurring authorization" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Workflow settings saved" })).toBeVisible();
+    expect(await db.weeklyPolicy.findUniqueOrThrow({ where: { businessId: id } })).toMatchObject({ mode: "PLAN", videosAfterApproval: false });
+    expect(await db.videoGeneration.count({ where: { businessId: id } })).toBe(0);
+  } finally { if (organizationId) await db.organization.delete({ where: { id: organizationId } }); await db.user.deleteMany({ where: { email } }); }
+});
+
 test("weekly image opt-in saves explicitly and pending media remains stoppable after copy authorization", async ({ page }) => {
   const email = `weekly-image-${crypto.randomUUID()}@example.test`, headers = { Origin: "http://127.0.0.1:3000" };
   let organizationId: string | undefined;

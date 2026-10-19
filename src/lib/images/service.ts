@@ -54,6 +54,7 @@ export async function manageImage(scope: Scope, raw: unknown, storage: () => Ass
     if (input.action === "quote") {
       assertExecutionEnabled(); await assertWorkerReady(tx); storage();
       const item = await currentItem(tx, scope, input.itemId), revision = item.revisions[0];
+      if (await isMediaRevision(tx, scope, item.id, "image", input.parentId)) await checkCreativeRevision(tx, scope, item.id);
       if (internal) {
         const { task } = await weeklyImageContext(tx, scope, item.id, internal);
         if (task.imageStatus !== "WAITING" || task.imageGenerationId || input.parentId || input.feedback || await tx.imageGeneration.count({ where: { itemId: item.id } }))
@@ -107,6 +108,7 @@ export async function manageImage(scope: Scope, raw: unknown, storage: () => Ass
       const quota = await tx.brandAsset.aggregate({ where: { businessId: scope.businessId, status: { not: "DELETED" } }, _sum: { bytes: true }, _count: true });
       if (quota._count >= 100 || (quota._sum.bytes || 0) + MAX_IMAGE_BYTES > BUSINESS_ASSET_BYTES) throw new AppError(409, "Allow 5 MB of free private image storage before generation.");
       if (internal) await reserveWeeklyImage(tx, scope, row, internal);
+      if (await isMediaRevision(tx, scope, row.itemId, "image", row.parentId)) await checkCreativeRevision(tx, scope, row.itemId, true);
       await authorizeSupplier(tx, row.id, row.supplierCeilingMicros);
       const hold = await reserveCreditsInTransaction(tx, scope.organizationId, row.id, row.credits, !!row.parentId);
       await tx.brandAsset.create({ data: { organizationId: scope.organizationId, businessId: scope.businessId, generationId: row.id, purpose: "generated", label: `Artwork v${row.version}`, objectKey: `${scope.organizationId}/${scope.businessId}/${randomUUID()}.webp`, sha256: "", bytes: MAX_IMAGE_BYTES, width: 1, height: 1, uploadedBy: scope.actorId, rightsConfirmedAt: new Date() } });
@@ -143,3 +145,4 @@ export async function previewImage(scope: Scope, generationId: string, store: As
   if (createHash("sha256").update(bytes).digest("hex") !== asset.sha256) throw new AppError(409, "Image integrity check failed.");
   await read(); return bytes;
 }
+import { checkCreativeRevision, isMediaRevision } from "../production/revision-limit";

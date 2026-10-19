@@ -15,6 +15,7 @@ import { creativeSchema, creativeJsonSchema, validateCreative } from "./content"
 import { approvedFactText, evaluateCreative } from "./quality";
 import { productionMemories, preferenceFingerprint } from "../social/learning-evidence";
 import { calendarExpectation, checkCalendarChange } from "./calendar";
+import { checkCreativeRevision } from "./revision-limit";
 
 export type Scope = { businessId: string; organizationId: string; actorId: string };
 export const productionAction = z.discriminatedUnion("action", [
@@ -62,9 +63,10 @@ export async function actOnProduction(scope: Scope, raw: unknown, internal?: { w
       const business = await lockBusiness(tx, scope);
       const item = await currentItem(tx, scope, input.itemId);
       if (!business.confirmedAt || item.plan.brandVersion !== business.version || item.plan.status !== "PROPOSED") throw new AppError(409, "Confirm the current brand and create a current planning outline first.");
-      if (item.format !== "static") throw new AppError(409, "Video production is not enabled yet. No credits were spent.");
+      if (!["static", "motion"].includes(item.format)) throw new AppError(409, "This content format is not supported. No credits were spent.");
       await assertIdle(tx, item.id, scope.organizationId);
       const previous = item.revisions[0];
+      if (previous) await checkCreativeRevision(tx, scope, item.id);
       if (input.mode === "initial" ? !!previous : previous?.status !== "CHANGES_REQUESTED") throw new AppError(409, "For an existing creative, request changes before quoting a revision.");
       const memories = await productionMemories(tx, scope, business.version);
       return { business, item, previous, memories };
@@ -72,14 +74,14 @@ export async function actOnProduction(scope: Scope, raw: unknown, internal?: { w
     const { business, item, previous, memories } = context;
     const brand = brandInput.parse(Object.fromEntries(Object.keys(brandInput.shape).map(k => [k, business[k as keyof typeof business]])));
     const harness = await compileHarness({ organizationId: scope.organizationId, businessId: business.id, planItemId: item.id,
-      brandVersion: business.version, discipline: item.channel === "LinkedIn" ? "linkedin" : "static", objective: brand.goal,
+      brandVersion: business.version, discipline: item.format === "motion" ? "video" : item.channel === "LinkedIn" ? "linkedin" : "static", objective: brand.goal,
       audienceTension: `Address this audience: ${brand.audience}`.slice(0, 1000), proposition: (brand.difference || brand.offering).slice(0, 1000),
       evidence: brand.proof ? [{ id: "approved-brand-proof", claim: brand.proof.slice(0, 1000) }] : [],
       concept: item.title, direction: input.direction, brand, brandConfirmed: true, creditCeiling: 8000, preferences: memories.map(m => m.text),
     }, scope);
     const prior = previous ? creativeSchema.parse(previous.content) : null;
     const system = `${harness.system}\nReturn JSON ONLY matching this schema: ${JSON.stringify(creativeJsonSchema)}. evidenceUsed must contain only verbatim excerpts of approved brand proof, or be empty. No invented testimonials, numerical results or guarantees. Caption limits including any CTA/hashtags: X 280, Instagram 2200, LinkedIn 3000, Facebook 3000 characters. The caption is the complete publishable text. Headline/cta are for the visual. This deliverable is copy plus visual direction, NOT a generated image. ${input.mode === "copy" ? "Revise headline, caption and CTA only; retain the previous visual direction, rationale and evidence." : "Develop a specific audience insight and one ownable creative idea; apply the reference editorial checks before final output."}`;
-    const prompt = JSON.stringify({ brief: JSON.parse(harness.input), mode: input.mode, previous: prior, feedback: previous?.feedback || "" });
+    const prompt = JSON.stringify({ brief: JSON.parse(harness.input), format: item.format, deliverable: item.format === "motion" ? "Video concept and publishable caption. Keep headline within 120 characters for the opening scene; visualDirection describes a finite shot sequence, not completed footage. Storyboard, footage and final render require separate human review." : "Static social creative", mode: input.mode, previous: prior, feedback: previous?.feedback || "" });
     if (system.length + prompt.length > 150000) throw new AppError(409, "Brand context exceeds the safe production limit. Shorten the saved preferences.");
     const hash = configurationHash();
     const route = selectRoute(input.mode, Buffer.byteLength(system + prompt + JSON.stringify(creativeJsonSchema), "utf8"));
@@ -113,6 +115,7 @@ export async function actOnProduction(scope: Scope, raw: unknown, internal?: { w
       if (requestSchema.parse(quote.request).preferenceFingerprint !== preferenceFingerprint(await productionMemories(tx, scope, business.version))) throw new AppError(409, "Brand preferences or experiment evidence changed. Request a fresh quote.");
       if (quote.baseVersion && item.revisions[0]?.status !== "CHANGES_REQUESTED") throw new AppError(409, "This revision is no longer awaiting changes.");
       await assertIdle(tx, item.id, scope.organizationId);
+      if (quote.baseVersion > 0) await checkCreativeRevision(tx, scope, item.id, true);
       await authorizeSupplier(tx, quote.id, quote.supplierCeilingMicros);
       if (internal) await reserveWeeklyAuthorization(tx, scope, internal.weeklyTaskId, quote, internal.weeklyLeaseUntil);
       const reservation = await reserveCreditsInTransaction(tx, scope.organizationId, quote.id, quote.credits, quote.mode !== "initial");
@@ -166,6 +169,7 @@ export async function actOnProduction(scope: Scope, raw: unknown, internal?: { w
     }
     if (!["READY", "APPROVED"].includes(revision.status)) throw new AppError(409, "This version is not awaiting review.");
     if (input.action === "revise" && input.feedback.length < 3) throw new AppError(400, "Describe the specific change you want.");
+    if (input.action === "revise") await checkCreativeRevision(tx, scope, item.id);
     const status = input.action === "approve" ? "APPROVED" : input.action === "reject" ? "REJECTED" : "CHANGES_REQUESTED";
     if (input.action !== "approve") await invalidatePublications(tx, scope.businessId, item.id);
     await tx.creativeRevision.update({ where: { id: revision.id }, data: { status, feedback: input.feedback, approvedBy: input.action === "approve" ? scope.actorId : null, approvedAt: input.action === "approve" ? new Date() : null } });

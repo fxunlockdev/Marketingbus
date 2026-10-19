@@ -18,6 +18,8 @@ import type { ShotContextClient } from "./generation-context";
 import { videoLayout } from "./layout";
 import { layoutText } from "../typography";
 import { requireAudioProcessing } from "./audio-normalizer";
+import { creativeSchema } from "../production/content";
+import { weeklyVideoContext, type WeeklyVideoAuthorization } from "../workflows/weekly-video-policy";
 const inputSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("create"), itemId: z.string().min(1) }).strict(),
   z.object({ action: z.literal("save"), storyboardId: z.string().min(1), document: storyboardDocument }).strict(),
@@ -67,28 +69,37 @@ export async function listVideo(scope: Scope) {
     renders: await db.motionRender.findMany({ where, orderBy: { createdAt: "desc" }, take: 50, select: { id: true, storyboardId: true, rendererVersion: true, status: true, durationMs: true, bytes: true, createdAt: true, purgeAfter: true, errorCode: true } }),
   };
 }
-export async function manageVideo(scope: Scope, raw: unknown, storage: () => AssetStore = videoStore) {
+export async function manageVideo(scope: Scope, raw: unknown, storage: () => AssetStore = videoStore, internal?: WeeklyVideoAuthorization) {
   const input = inputSchema.parse(raw);
   return db.$transaction(async tx => {
     const business = await lockBusiness(tx, scope); await assertBrandEditor(tx, scope);
+    const weekly = internal ? await weeklyVideoContext(tx, scope, internal) : null;
+    if (weekly && (input.action === "create" ? input.itemId !== weekly.task.itemId || weekly.task.storyboardId !== null :
+      !["save", "render"].includes(input.action) || !("storyboardId" in input) || input.storyboardId !== weekly.task.storyboardId))
+      throw new AppError(409, "The recurring storyboard changed. Automatic approval is not allowed.");
     const audit = (action: string, detail: string) => tx.auditEvent.create({ data: { ...scope, action, detail } });
     if (input.action === "create") {
       const item = await currentItem(tx, scope, input.itemId), copy = item.revisions[0];
       if (!business.confirmedAt || item.plan.brandVersion !== business.version || item.plan.status !== "PROPOSED" || copy && copy.status !== "APPROVED") throw new AppError(409, "Confirm the current brand and approve any existing copy before storyboarding.");
       const previous = await tx.videoStoryboard.findFirst({ where: { itemId: item.id }, orderBy: { version: "desc" } });
+      if (previous && weekly) throw new AppError(409, "Manual storyboard work is preserved; continue it in Asset studio.");
       if (previous && previous.brandVersion === business.version && previous.copyRevisionId === (copy?.id || null) && previous.status !== "SUPERSEDED") return { ok: true, storyboardId: previous.id };
       if ((previous?.version || 0) >= 100) throw new AppError(409, "Storyboard version allowance reached.");
       const originals = await tx.brandAsset.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId, status: "READY", approvedForGeneration: true, generationId: null }, orderBy: [{ createdAt: "desc" }, { id: "asc" }], take: 100 });
       const logo = originals.find(a => a.purpose === "logo"), hero = originals.find(a => a.purpose === "product") ?? originals.find(a => a.purpose === "reference");
       const ref = (a: typeof logo) => a ? { id: a.id, sha256: a.sha256 } : null;
       const caption = business.offering.length <= 120 ? business.offering : business.name;
+      const creative = creativeSchema.safeParse(copy?.content);
+      const headline = creative.success && creative.data.headline.length <= 120 ? creative.data.headline : business.name;
+      const cta = creative.success && creative.data.cta ? creative.data.cta : "Learn more";
       const document = storyboardDocument.parse({ title: item.title, background: business.color, format: "portrait", logo: ref(logo), shots: [
-        { id: randomUUID(), label: "Introduction", caption: business.name, durationMs: 5000, motion: "fade", asset: ref(hero) },
+        { id: randomUUID(), label: "Introduction", caption: headline, durationMs: 5000, motion: "fade", asset: ref(hero) },
         { id: randomUUID(), label: "Offering", caption, durationMs: 5000, motion: "hold", asset: ref(hero) },
-        { id: randomUUID(), label: "Invitation", caption: "Learn more", durationMs: 3000, motion: "fade", asset: ref(hero) },
+        { id: randomUUID(), label: "Invitation", caption: cta, durationMs: Math.max(3000, Math.ceil(cta.length / 6) * 250), motion: "fade", asset: ref(hero) },
       ] });
       if (previous) await tx.videoStoryboard.update({ where: { id: previous.id }, data: { status: "SUPERSEDED" } });
       const row = await tx.videoStoryboard.create({ data: { businessId: scope.businessId, organizationId: scope.organizationId, itemId: item.id, copyRevisionId: copy?.id, brandVersion: business.version, version: (previous?.version || 0) + 1, document, shotApprovals: [], authorId: scope.actorId } });
+      if (weekly) await tx.weeklyTask.update({ where: { id: weekly.task.id }, data: { storyboardId: row.id, videoStatus: "STORYBOARD" } });
       await audit("STORYBOARD_CREATED", "Finite motion-card draft from confirmed profile fields and original assets. No model call; each shot needs review.");
       return { ok: true, storyboardId: row.id };
     }
@@ -123,6 +134,7 @@ export async function manageVideo(scope: Scope, raw: unknown, storage: () => Ass
       await tx.videoStoryboard.update({ where: { id: row.id }, data: { status: "SUPERSEDED" } });
       const next = await tx.videoStoryboard.create({ data: { businessId: scope.businessId, organizationId: scope.organizationId, itemId: row.itemId, copyRevisionId: row.copyRevisionId, brandVersion: row.brandVersion, version: row.version + 1, document: input.document, shotApprovals: approvals, authorId: scope.actorId } });
       await storyboardContext(scope, next.id, tx);
+      if (weekly) await tx.weeklyTask.update({ where: { id: weekly.task.id }, data: { storyboardId: next.id, videoStatus: "REVIEW" } });
       await tx.motionRender.updateMany({ where: { storyboardId: row.id, status: "QUEUED" }, data: { status: "CANCELLED", bytes: 0, leaseUntil: null } });
       await audit("STORYBOARD_VERSIONED", "Changed shots require fresh review. Unchanged shot approvals retained; assembled output invalidated."); return { ok: true, storyboardId: next.id };
     }
@@ -146,7 +158,10 @@ export async function manageVideo(scope: Scope, raw: unknown, storage: () => Ass
     }
     if (row.status !== "APPROVED") throw new AppError(409, "Approve this storyboard before rendering.");
     const existing = await tx.motionRender.findUnique({ where: { storyboardId_rendererVersion: { storyboardId: row.id, rendererVersion: MOTION_RENDERER_VERSION } } });
-    if (existing) return { ok: true, renderId: existing.id };
+    if (existing) {
+      if (weekly) await tx.weeklyTask.update({ where: { id: weekly.task.id }, data: { renderId: existing.id, videoStatus: "RENDERED" } });
+      return { ok: true, renderId: existing.id };
+    }
     if (ctx.document.soundtrack) requireAudioProcessing();
     const dailyLimit = motionDailyLimit(); storage();
     if (!await tx.workerHeartbeat.findFirst({ where: { runtimeVersion: WORKER_RUNTIME, configurationHash: workerConfigurationHash(), motionReady: true, lastSeenAt: { gt: new Date(Date.now() - HEARTBEAT_TTL_MS) } } })) throw new AppError(503, "A matching motion-render worker is not ready. No render was queued.");
@@ -159,6 +174,7 @@ export async function manageVideo(scope: Scope, raw: unknown, storage: () => Ass
     const id = randomUUID(); await tx.motionAuthorization.create({ data: { key: id } });
     const render = await tx.motionRender.create({ data: { id, businessId: scope.businessId, organizationId: scope.organizationId, storyboardId: row.id, rendererVersion: MOTION_RENDERER_VERSION, documentHash: motionHash(ctx.document), objectKey: `${scope.organizationId}/${scope.businessId}/motion/${id}.mp4`, bytes: MAX_VIDEO_BYTES, durationMs: totalDuration(ctx.document), createdBy: scope.actorId, purgeAfter: new Date(Date.now() + 30 * 86400000) } });
     const layout = videoLayout(ctx.document);
+    if (weekly) await tx.weeklyTask.update({ where: { id: weekly.task.id }, data: { renderId: render.id, videoStatus: "RENDERED" } });
     await audit("MOTION_QUEUED", `Bounded ${ctx.document.soundtrack ? "instrumental" : "silent"} ${layout.width}×${layout.height} render authorized. No AI credits charged; server CPU/storage limits apply.`); return { ok: true, renderId: render.id };
   });
 }

@@ -20,7 +20,7 @@ export async function readReviewMedia(scope: Scope, raw: unknown) {
     const plan = await tx.productionPlan.findFirst({ where: { ...where, id: planId }, select: {
       id: true, status: true, brandVersion: true,
       items: { orderBy: { id: "asc" }, take: 100, select: {
-        id: true, revisions: { orderBy: { version: "desc" }, take: 1, select: { id: true, status: true } },
+        id: true, revisionRequests: true, revisions: { orderBy: { version: "desc" }, take: 1, select: { id: true, status: true } },
         images: { where, orderBy: { version: "desc" }, take: 1, select: { id: true, revisionId: true, brandVersion: true, version: true, status: true, output: { select: { status: true } } } },
         storyboards: { where, orderBy: { version: "desc" }, take: 1, select: {
           id: true, copyRevisionId: true, brandVersion: true, version: true, status: true, document: true,
@@ -43,6 +43,7 @@ export async function readReviewMedia(scope: Scope, raw: unknown) {
         const parsed = board ? storyboardDocument.safeParse(board.document) : null, render = board?.renders[0];
         return {
           itemId: item.id,
+          revisionAllowance: { used: item.revisionRequests, limit: 3, remaining: Math.max(0, 3 - item.revisionRequests) },
           copyRevisionId: copy?.id ?? null,
           image: image ? { id: image.id, version: image.version, status: image.status, current: imageCurrent, previewable: imageCurrent && ["READY", "APPROVED", "REJECTED"].includes(image.status) && image.output?.status === "READY" } : null,
           composition: layout ? { id: layout.id, version: layout.version, status: layout.status, current: layoutCurrent, approved: layoutCurrent && layout.status === "APPROVED" && layout.approvedRendererVersion === STATIC_RENDERER_VERSION, previewable: layoutCurrent } : null,

@@ -9,9 +9,13 @@ describe("deployment readiness", () => {
     query.mockResolvedValue([]);
     const result = await GET();
     expect(result.status).toBe(200);
-    expect(query).toHaveBeenCalledTimes(44);
+    expect(query).toHaveBeenCalledTimes(46);
     const sql = query.mock.calls.map(call => String(call[0])).join("\n");
     expect(sql).toContain("requireMfa");
+    expect(sql).toContain("revisionRequests");
+    expect(sql).toContain("WeeklyVideoShot");
+    expect(sql).toContain("videosAfterApproval");
+    expect(sql).toContain("videoLeaseUntil");
     for (const column of ["imagesAfterApproval", "mediaStatus", "mediaLeaseUntil", "nextMediaAt", "imageStatus", "imageGenerationId"]) expect(sql).toContain(column);
     expect(sql).toContain("metricsInvalidatedAt");
     expect(sql).toContain("metricsRequestedAt");

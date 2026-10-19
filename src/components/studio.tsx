@@ -785,7 +785,7 @@ export function Studio({
                     title="Work worth putting your name on."
                     description="Review the exact creative, request a focused change, or approve it for your calendar."
                   />
-                  {business ? <ReviewInbox key={`${business.id}:${activePlan?.id}`} business={business} planId={activePlan?.id} items={items} readOnly={planReadOnly} busy={busy} post={production} onOpen={target => { go("Asset studio"); setAssetTarget(target); }} /> : <Empty title="Choose a business first." text="Review is scoped to your business and selected plan." />}
+                  {business ? <ReviewInbox key={`${business.id}:${activePlan?.id}`} business={business} planId={activePlan?.id} items={items} readOnly={planReadOnly} busy={busy} post={production} onConnections={() => go("Connections")} onOpen={target => { go("Asset studio"); setAssetTarget(target); }} /> : <Empty title="Choose a business first." text="Review is scoped to your business and selected plan." />}
                   <div className="review-explainer">
                     {[
                       ["Approve", "Approval belongs to one exact revision."],

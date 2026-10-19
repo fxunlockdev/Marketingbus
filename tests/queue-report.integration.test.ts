@@ -72,6 +72,19 @@ suite("read-only operator queue inventory", () => {
     await db.weeklyCycle.update({ where: { id: cycle.id }, data: { mediaStatus: "COMPLETE" } });
     expect((await report(scope)).items).toEqual([]);
   });
+  it("reports video hand-off failures independently of completed copy and normal review waits", async () => {
+    const scope = await setup();
+    const cycle = await db.weeklyCycle.create({ data: { ...scope, periodKey: "2026-10-12", planId: "fixture-plan", brandVersion: 1, policyVersion: 1, status: "COMPLETE", videoStatus: "OPEN", createdAt: old, nextVideoAt: future } });
+    expect((await report(scope)).items).toEqual([]);
+    await db.weeklyCycle.update({ where: { id: cycle.id }, data: { nextVideoAt: old } });
+    expect((await report(scope)).items).toEqual([expect.objectContaining({ queue: "weekly-video", id: cycle.id, reason: "OVERDUE" })]);
+    await db.weeklyCycle.update({ where: { id: cycle.id }, data: { videoLeaseUntil: old } });
+    expect((await report(scope)).items[0].reason).toBe("EXPIRED_LEASE");
+    await db.weeklyCycle.update({ where: { id: cycle.id }, data: { videoStatus: "BLOCKED", videoLeaseUntil: null } });
+    expect((await report(scope)).items[0].reason).toBe("FAILED");
+    await db.weeklyCycle.update({ where: { id: cycle.id }, data: { videoStatus: "CANCELLED" } });
+    expect((await report(scope)).items).toEqual([]);
+  });
   it("paginates equal timestamps without duplicates, freezes cutoff and rejects cross-scope cursors", async () => {
     const scope = await setup(); for (let i = 0; i < 5; i++) await job(scope, "FAILED");
     const first = await report(scope, { limit: 2 });

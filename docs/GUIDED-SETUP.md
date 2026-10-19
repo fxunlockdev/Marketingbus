@@ -34,7 +34,7 @@ Keep the existing compact specialist excerpts and stable system instructions. [O
 
 - Fully automatic website-to-visual-identity extraction, logo/photo harvesting and live Firecrawl deployment/egress acceptance. Current importer extracts bounded text, not a whole licensed media library.
 - AI-recommended strategy/campaign themes grounded in reviewed evidence; current options are customer selections, not fabricated recommendations.
-- Configurable mixed-media quantities/cadence with actual quote-backed credit estimates and generated first-week content.
+- Onboarding-integrated mixed-media quantities, pre-confirmation quote-backed estimates and generated first-week content. The separate Workflows screen now supports a saved static/video split and [approval-gated weekly media production](WEEKLY-MIXED-MEDIA.md); it does not silently activate generation during setup.
 - Custom font catalog, photo-transformation controls, carousels, Stories and additional publishing destinations. Do not expose nonfunctional options as supported.
 - End-to-end live provider/account acceptance, advanced media/learning work and the remaining capacity/operational gates in BUILD-STATUS.md.
 

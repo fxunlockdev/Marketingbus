@@ -285,6 +285,7 @@ model ProductionItem {
   channel        String
   brief          Json
   status         String             @default("PLANNED")
+  revisionRequests Int              @default(0)
   scheduledFor   DateTime?
   plan           ProductionPlan     @relation(fields: [planId, organizationId], references: [id, organizationId], onDelete: Cascade)
   revisions      CreativeRevision[]
@@ -853,6 +854,8 @@ model WeeklyPolicy {
   enabled Boolean @default(false)
   mode String @default("PLAN")
   imagesAfterApproval Boolean @default(false)
+  videosAfterApproval Boolean @default(false)
+  videoItems Int?
   maxItems Int @default(4)
   creditsPerWeek Int @default(0)
   weekday Int @default(1)
@@ -881,12 +884,16 @@ model WeeklyCycle {
   mediaStatus String @default("NONE")
   mediaLeaseUntil DateTime?
   nextMediaAt DateTime?
+  videoStatus String @default("NONE")
+  videoLeaseUntil DateTime?
+  nextVideoAt DateTime?
   createdAt DateTime @default(now())
   business Business @relation(fields: [businessId, organizationId], references: [id, organizationId], onDelete: Cascade)
   tasks WeeklyTask[]
   @@unique([businessId, periodKey])
   @@index([status, leaseUntil])
   @@index([mediaStatus, nextMediaAt])
+  @@index([videoStatus, nextVideoAt])
 }
 
 model WeeklyTask {
@@ -898,8 +905,21 @@ model WeeklyTask {
   errorCode String?
   imageStatus String @default("SKIPPED")
   imageGenerationId String? @unique
+  videoStatus String @default("SKIPPED")
+  storyboardId String?
+  renderId String?
+  shots WeeklyVideoShot[]
   cycle WeeklyCycle @relation(fields: [cycleId], references: [id], onDelete: Cascade)
   @@unique([cycleId, itemId])
+}
+
+model WeeklyVideoShot {
+  id String @id @default(cuid())
+  taskId String
+  shotId String
+  generationId String @unique
+  task WeeklyTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  @@unique([taskId, shotId])
 }
 
 model BillingCheckout {

@@ -132,6 +132,13 @@ async function main() {
       receipt: { submission: { journal: "synthetic-private-journal" }, estimatedCostMicros: 60000, expenseBasis: "ACCOUNT_QUOTE_V1" },
     } });
     phase = "instrumental audio fixture";
+    await source.weeklyPolicy.update({ where: { businessId: business.id }, data: { maxItems: 2, videoItems: 1, videosAfterApproval: true } });
+    await source.productionItem.update({ where: { id: facebookItem.id }, data: { revisionRequests: 3 } });
+    await source.weeklyCycle.create({ data: { id: "synthetic-weekly-video", businessId: business.id, organizationId: a.id,
+      periodKey: "2026-10-19", policyVersion: 1, brandVersion: 3, planId: publicationPlan.id, status: "COMPLETE", videoStatus: "OPEN",
+      videoLeaseUntil: new Date("2026-10-19T12:00:00Z"), nextVideoAt: new Date("2026-10-19T12:03:00Z"), creditsAuthorized: 47,
+      tasks: { create: { id: "synthetic-weekly-video-task", itemId: "synthetic-item", status: "AUTHORIZED", videoStatus: "PRODUCING", storyboardId: "synthetic-board",
+        shots: { create: { shotId: "synthetic-shot", generationId: "synthetic-provisional-video" } } } } } });
     await source.videoGeneration.create({ data: {
       id: "synthetic-new-take", businessId: business.id, organizationId: a.id, actorId: user.id,
       storyboardId: "synthetic-board", itemId: "synthetic-item", brandVersion: 3, shotId: "synthetic-shot", shotLabel: "Direction history fixture",
@@ -159,6 +166,14 @@ async function main() {
     const weekly = await target.weeklyCycle.findUniqueOrThrow({ where: { id: "synthetic-weekly-images" }, include: { tasks: true } });
     check(weekly.status === "COMPLETE" && weekly.mediaStatus === "OPEN" && weekly.creditsAuthorized === 40 && weekly.mediaLeaseUntil?.toISOString() === "2026-10-18T12:00:00.000Z" && weekly.nextMediaAt?.toISOString() === "2026-10-18T12:03:00.000Z" && weekly.tasks[0].imageStatus === "WAITING", "Weekly image authorization, budget or lease not preserved.");
     check((await target.weeklyPolicy.findUniqueOrThrow({ where: { businessId: business.id } })).imagesAfterApproval, "Weekly image consent lost.");
+    const weeklyVideo = await target.weeklyCycle.findUniqueOrThrow({ where: { id: "synthetic-weekly-video" }, include: { tasks: { include: { shots: true } } } });
+    check(weeklyVideo.videoStatus === "OPEN" && weeklyVideo.creditsAuthorized === 47 && weeklyVideo.videoLeaseUntil?.toISOString() === "2026-10-19T12:00:00.000Z" && weeklyVideo.nextVideoAt?.toISOString() === "2026-10-19T12:03:00.000Z" && weeklyVideo.tasks[0].shots[0].generationId === "synthetic-provisional-video", "Weekly video budget, lease or scene linkage lost.");
+    const videoPolicy = await target.weeklyPolicy.findUniqueOrThrow({ where: { businessId: business.id } });
+    check(videoPolicy.videoItems === 1 && videoPolicy.videosAfterApproval, "Weekly video consent lost.");
+    check((await target.productionItem.findUniqueOrThrow({ where: { id: facebookItem.id } })).revisionRequests === 3, "Creative revision limit lost.");
+    await mustReject(() => target.productionItem.update({ where: { id: facebookItem.id }, data: { revisionRequests: -1 } }));
+    await mustReject(() => target.weeklyTask.update({ where: { id: "synthetic-weekly-video-task" }, data: { videoStatus: "RENDERED" } }));
+    await mustReject(() => target.weeklyPolicy.update({ where: { businessId: business.id }, data: { videoItems: 3 } }));
     await mustReject(() => target.weeklyPolicy.update({ where: { businessId: business.id }, data: { mode: "PLAN" } }));
     await mustReject(() => target.weeklyTask.update({ where: { id: "synthetic-weekly-image-task" }, data: { imageStatus: "AUTHORIZED" } }));
     const audio = await target.videoClip.findUniqueOrThrow({ where: { id: "synthetic-audio" } });

@@ -70,6 +70,40 @@ suite("production authorization, review and worker integration", () => {
     if (!("quote" in result) || !result.quote) throw Error("Quote missing");
     return result.quote;
   }
+  it("enforces three shared revision authorizations; requoting and manual edits cannot reset them", async () => {
+    const { scope, itemId } = await setup();
+    const initial = await quote(scope, itemId); await actOnProduction(scope, { action: "accept", quoteId: initial.id }); await runOneJob(fixtureReasoner);
+    for (let used = 0; used < 3; used++) {
+      const current = await db.creativeRevision.findFirstOrThrow({ where: { itemId }, orderBy: { version: "desc" } });
+      await actOnProduction(scope, { action: "revise", itemId, version: current.version, feedback: "Make the caption more direct and concise." });
+      const q = await quote(scope, itemId, "copy");
+      expect((await db.productionItem.findUniqueOrThrow({ where: { id: itemId } })).revisionRequests).toBe(used);
+      await Promise.all([actOnProduction(scope, { action: "accept", quoteId: q.id }), actOnProduction(scope, { action: "accept", quoteId: q.id })]);
+      expect((await db.productionItem.findUniqueOrThrow({ where: { id: itemId } })).revisionRequests).toBe(used + 1);
+      await runOneJob(fixtureReasoner);
+    }
+    const current = await db.creativeRevision.findFirstOrThrow({ where: { itemId }, orderBy: { version: "desc" } });
+    await expect(actOnProduction(scope, { action: "revise", itemId, version: current.version, feedback: "Another direction please" })).rejects.toThrow("three AI revision");
+    await actOnProduction(scope, { action: "edit", itemId, version: current.version, headline: creative.headline, caption: creative.caption, cta: creative.cta });
+    expect((await db.productionItem.findUniqueOrThrow({ where: { id: itemId } })).revisionRequests).toBe(3);
+    await expect(quote(scope, itemId, "copy")).rejects.toThrow("three AI revision");
+    await actOnProduction(scope, { action: "approve", itemId, version: current.version + 1 });
+    // An old process's incomplete counter cannot bypass the durable history.
+    await db.productionItem.update({ where: { id: itemId }, data: { revisionRequests: 0 } });
+    await expect(actOnProduction(scope, { action: "revise", itemId, version: current.version + 1, feedback: "Try bypassing the limit" })).rejects.toThrow("three AI revision");
+  });
+  it("rechecks the allowance at acceptance and rolls back the counter when funds are unavailable", async () => {
+    const { scope, itemId } = await setup();
+    await db.creativeRevision.create({ data: { itemId, organizationId: scope.organizationId, version: 1, status: "CHANGES_REQUESTED", feedback: "Shorter copy please", content: creative } });
+    const q = await quote(scope, itemId, "copy");
+    await db.wallet.update({ where: { organizationId: scope.organizationId }, data: { available: 0 } });
+    await expect(actOnProduction(scope, { action: "accept", quoteId: q.id })).rejects.toThrow();
+    expect((await db.productionItem.findUniqueOrThrow({ where: { id: itemId } })).revisionRequests).toBe(0);
+    await db.wallet.update({ where: { organizationId: scope.organizationId }, data: { available: 100 } });
+    await db.productionItem.update({ where: { id: itemId }, data: { revisionRequests: 3 } });
+    await expect(actOnProduction(scope, { action: "accept", quoteId: q.id })).rejects.toThrow("three AI revision");
+    expect(await db.reservation.count({ where: { organizationId: scope.organizationId } })).toBe(0);
+  });
   it("prevents simultaneous tenants from exceeding the total authorization", async () => {
     const a = await setup(), b = await setup(); const qa = await quote(a.scope, a.itemId), qb = await quote(b.scope, b.itemId);
     const spent = await db.supplierAuthorization.aggregate({ _sum: { ceilingMicros: true } });

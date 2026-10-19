@@ -45,6 +45,17 @@ suite("image production lifecycle", () => {
   }
   async function row(id: string) { return db.imageGeneration.findUniqueOrThrow({ where: { id }, include: { output: true } }); }
   async function wallet(f: Awaited<ReturnType<typeof setup>>) { return db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } }); }
+  it("shares the creative limit across media, counts once and blocks parent-free replacement bypass", async () => {
+    const f = await setup(), original = await accept(f); await runOneImage(f.generate, () => store);
+    await db.productionItem.update({ where: { id: f.item.id }, data: { revisionRequests: 2 } });
+    const replacement = await quote(f);
+    await Promise.all([accept(f, replacement), accept(f, replacement)]);
+    expect((await db.productionItem.findUniqueOrThrow({ where: { id: f.item.id } })).revisionRequests).toBe(3);
+    await manageImage(f.scope, { action: "cancel", generationId: replacement }, () => store);
+    await expect(quote(f)).rejects.toThrow("three AI revision");
+    await expect(quote(f, { parentId: original, feedback: "A warmer background please" })).rejects.toThrow("three AI revision");
+    const other = await setup(); expect(await quote(other)).toBeTruthy();
+  });
   it("quotes without expense, accepts once and produces a private unapproved image once", async () => {
     const f = await setup(), id = await quote(f); expect((await wallet(f)).held).toBe(0);
     await Promise.all([1, 2].map(() => accept(f, id))); expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(1);

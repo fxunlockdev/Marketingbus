@@ -66,6 +66,20 @@ suite("generated-shot authorization, asynchronous receipts and delivery", () => 
     await accept(f, id); await runOneShotGeneration(f.adapters, () => store); await due(id); await runOneShotGeneration(f.adapters, () => store); await runOneClip(async () => processed, () => store); return row(id);
   }
   const takeQuote = (f: Fixture, parentId: string, feedback = "Use softer side lighting and a slower camera move.") => manageShotGeneration(f.scope, { action: "quote", storyboardId: f.boardId, shotId: f.shotId, revisionOfId: parentId, feedback }, f.adapters, () => store);
+  it("counts new takes in the same creative allowance and rejects direct API bypass", async () => {
+    const f = await setup(), original = await readyTake(f);
+    await db.productionItem.update({ where: { id: original.itemId }, data: { revisionRequests: 2 } });
+    const next = (await takeQuote(f, original.id)).generationId!;
+    await Promise.all([accept(f, next), accept(f, next)]);
+    expect((await db.productionItem.findUniqueOrThrow({ where: { id: original.itemId } })).revisionRequests).toBe(3);
+    await manageShotGeneration(f.scope, { action: "cancel", generationId: next }, f.adapters, () => store);
+    await expect(takeQuote(f, original.id)).rejects.toThrow("three AI revision");
+    await expect(quote(f)).rejects.toThrow("three AI revision");
+    const document = storyboardDocument.parse((await db.videoStoryboard.findUniqueOrThrow({ where: { id: f.boardId } })).document);
+    document.shots[0].id = "renamed-scene";
+    const changed = (await manageVideo(f.scope, { action: "save", storyboardId: f.boardId, document }, () => store)).storyboardId!;
+    await expect(manageShotGeneration(f.scope, { action: "quote", storyboardId: changed, shotId: "renamed-scene" }, f.adapters, () => store)).rejects.toThrow("three AI revision");
+  });
   it("carries saved art direction through feedback-driven takes without replacing or reapproving prior media", async () => {
     const f = await setup(), original = await readyTake(f, { direction: "Restrained warm side lighting; slow architectural dolly." });
     await reviewClip(f.scope, original.output!.id, { action: "approve", watched: true });
@@ -122,13 +136,13 @@ suite("generated-shot authorization, asynchronous receipts and delivery", () => 
   });
   it("retains a bounded chronological feedback chain and rejects altered source history", async () => {
     const f = await setup(); let parent = await readyTake(f, { direction: "Side-lit architectural detail." });
-    for (let i = 1; i <= 4; i++) parent = await readyTake(f, { revisionOfId: parent.id, feedback: `Make the camera movement slower for take ${i}.` });
-    expect((parent.creativeBrief as { revisions: unknown[] }).revisions).toHaveLength(4);
-    await expect(takeQuote(f, parent.id)).rejects.toThrow("Four feedback-driven takes");
-    const first = await db.videoGeneration.findFirstOrThrow({ where: { businessId: f.scope.businessId, revisionOfId: null } });
-    const offered = (await takeQuote(f, first.id)).generationId!;
+    for (let i = 1; i <= 3; i++) parent = await readyTake(f, { revisionOfId: parent.id, feedback: `Make the camera movement slower for take ${i}.` });
+    expect((parent.creativeBrief as { revisions: unknown[] }).revisions).toHaveLength(3);
+    await expect(takeQuote(f, parent.id)).rejects.toThrow("three AI revision");
+    const fresh = await setup(), first = await readyTake(fresh);
+    const offered = (await takeQuote(fresh, first.id)).generationId!;
     await db.videoGeneration.update({ where: { id: first.id }, data: { creativeBrief: { version: 1, direction: "Changed behind quote", revisions: [] } } });
-    await expect(accept(f, offered)).rejects.toThrow("direction history changed"); expect((await wallet(f)).held).toBe(0);
+    await expect(accept(fresh, offered)).rejects.toThrow("direction history changed"); expect((await wallet(fresh)).held).toBe(0);
   });
   it("rejects malformed direction, missing feedback and forged lineage at the service and database boundaries", async () => {
     const f = await setup(), parent = await readyTake(f);

@@ -18,6 +18,7 @@ export async function GET() {
     await db.$queryRaw`SELECT "paymentId", "providerRefundId", "status" FROM "BillingRefundOperation" LIMIT 0`;
     await db.$queryRaw`SELECT "eventId", "operatorId" FROM "BillingReconciliation" LIMIT 0`;
     await db.$queryRaw`SELECT "configurationHash" FROM "GenerationQuote" LIMIT 0`;
+    await db.$queryRaw`SELECT "revisionRequests" FROM "ProductionItem" LIMIT 0`;
     await db.$queryRaw`SELECT "revisionId", "version" FROM "CalendarEntry" LIMIT 0`;
     await db.$queryRaw`SELECT "submittedAt" FROM "Job" LIMIT 0`;
     await db.$queryRaw`SELECT "lastSeenAt", "motionReady" FROM "WorkerHeartbeat" LIMIT 0`;
@@ -46,9 +47,10 @@ export async function GET() {
     await db.$queryRaw`SELECT "independentApproval", "contentPreferences", "setupKey", "setupStep", "setupRevision" FROM "Business" LIMIT 0`;
     await db.$queryRaw`SELECT "authorId", "approvedBy" FROM "CreativeRevision" LIMIT 0`;
     await db.$queryRaw`SELECT "blocking" FROM "ReviewComment" LIMIT 0`;
-    await db.$queryRaw`SELECT "creditsPerWeek", "imagesAfterApproval" FROM "WeeklyPolicy" LIMIT 0`;
-    await db.$queryRaw`SELECT "creditsAuthorized", "mediaStatus", "mediaLeaseUntil", "nextMediaAt" FROM "WeeklyCycle" LIMIT 0`;
-    await db.$queryRaw`SELECT "quoteId", "imageStatus", "imageGenerationId" FROM "WeeklyTask" LIMIT 0`;
+    await db.$queryRaw`SELECT "creditsPerWeek", "imagesAfterApproval", "videosAfterApproval", "videoItems" FROM "WeeklyPolicy" LIMIT 0`;
+    await db.$queryRaw`SELECT "creditsAuthorized", "mediaStatus", "mediaLeaseUntil", "nextMediaAt", "videoStatus", "videoLeaseUntil", "nextVideoAt" FROM "WeeklyCycle" LIMIT 0`;
+    await db.$queryRaw`SELECT "quoteId", "imageStatus", "imageGenerationId", "videoStatus", "storyboardId", "renderId" FROM "WeeklyTask" LIMIT 0`;
+    await db.$queryRaw`SELECT "taskId", "shotId", "generationId" FROM "WeeklyVideoShot" LIMIT 0`;
     return Response.json({status:"ok"},{headers:{"Cache-Control":"no-store"}});
   }
   catch { return Response.json({status:"unavailable"},{status:503,headers:{"Cache-Control":"no-store"}}); }

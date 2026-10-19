@@ -13,6 +13,7 @@ const definitions = [
   { name: "social", table: "SocialPublication", scope: "business", lease: true, due: "scheduledFor", waiting: ["SCHEDULED"], active: ["SUBMITTING"] },
   { name: "weekly", table: "WeeklyCycle", scope: "business", lease: true, waiting: ["OPEN"], active: ["RUNNING"] },
   { name: "weekly-images", table: "WeeklyCycle", scope: "business", lease: true, statusColumn: "mediaStatus", leaseColumn: "mediaLeaseUntil", due: "nextMediaAt", waiting: ["OPEN"], active: ["OPEN"] },
+  { name: "weekly-video", table: "WeeklyCycle", scope: "business", lease: true, statusColumn: "videoStatus", leaseColumn: "videoLeaseUntil", due: "nextVideoAt", waiting: ["OPEN"], active: ["OPEN"] },
   { name: "checkout", table: "BillingCheckout", scope: "organization", waiting: [], active: [] },
   { name: "refunds", table: "BillingRefundOperation", scope: "organization", due: "updatedAt", waiting: ["PENDING"], active: ["SUBMITTING"] },
   // These records have no authoritative tenant column. Never infer ownership from payloads or user memberships.

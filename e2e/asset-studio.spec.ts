@@ -39,6 +39,12 @@ test("one asset studio preserves format drafts and reviews exact media by destin
     await card.getByRole("button", { name: "Preview saved layout", exact: true }).click();
     const actual = card.getByAltText("Saved composition rendered as a square for visual review");
     await expect(actual).toBeVisible(); await expect.poll(() => actual.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1080);
+    await expect(card.getByText("3 of 3 AI revisions remaining", { exact: true })).toBeVisible();
+    await expect(card.getByRole("region", { name: "Improve Instagram consultation", exact: true })).toBeVisible();
+    await card.getByLabel("What should change?", { exact: true }).selectOption("image");
+    await expect(card.getByText("A current completed artwork", { exact: false })).toBeVisible();
+    await card.getByLabel("What should change?", { exact: true }).selectOption("copy");
+    await page.screenshot({ path: "../outputs/marketingbus-review-canvas.png", fullPage: true });
     await expect(card.getByRole("button", { name: "Approve saved layout", exact: true })).toBeDisabled();
     await card.getByLabel("I inspected this saved image", { exact: false }).check();
     await card.getByRole("button", { name: "Approve saved layout", exact: true }).click();
@@ -62,6 +68,13 @@ test("one asset studio preserves format drafts and reviews exact media by destin
     await filter.getByRole("button", { name: "LinkedIn", exact: true }).click();
     await expect(page.getByRole("article")).toHaveCount(1);
     await expect(page.getByRole("heading", { name: "LinkedIn consultation", exact: true })).toBeVisible();
+    await db.productionItem.update({ where: { id: items[1].id }, data: { revisionRequests: 3 } });
+    await page.getByRole("button", { name: "Refresh saved media", exact: true }).click();
+    await expect(page.getByText("0 of 3 AI revisions remaining", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Request changes · no charge", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Edit copy yourself · no credits", exact: true })).toBeEnabled();
+    const revisionDenied = await page.request.post(`/api/businesses/${id}/production`, { headers, data: { action: "revise", itemId: items[1].id, version: 1, feedback: "Another revision please" } });
+    expect(revisionDenied.status()).toBe(409); expect((await revisionDenied.json()).error).toContain("three AI revision");
     expect((await new AxeBuilder({ page }).include("main").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
     await page.screenshot({ path: "../outputs/marketingbus-platform-review.png", fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
