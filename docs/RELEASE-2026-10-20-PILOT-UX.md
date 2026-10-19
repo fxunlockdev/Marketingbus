@@ -18,3 +18,9 @@
 ## Still gated
 
 Live social approvals/accounts, missing provider credentials and delivery settings still require acceptance. The new reflection reasoning call has contract/mock tests, not live-provider creative-quality acceptance. Written visual-direction learning does not inspect rendered pixels or video. No claim of 100% product completion, automated agency quality or verified production backup recovery.
+
+## Hosted acceptance
+
+Code a4b80a6 was pushed to main. Railway worker 91e5390c-f007-403c-98a7-e945886e5b4e and web 5c37f303-e2bc-4834-88bc-2920d70fd639 both reached SUCCESS. Worker logs confirmed migration 59 and startup.
+
+Hosted health, pilot login and studio returned 200. Hosted stylesheet contained the new compact onboarding and destination catalogue rules. Authenticated billing returned the intended 100 pilot credits; unauthenticated billing returned 401. No paid AI calls or publishing occurred. Hosted provider generation, social posting and backup recovery were not tested by these checks. GitHub CI was still queued at handoff; local checks above are the completed evidence.
