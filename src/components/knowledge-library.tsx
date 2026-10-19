@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useId, useState } from "react";
 import { BrandIntelligence } from "./brand-intelligence";
-type Source = { id: string; title: string; kind: string; body: string; sourceUrl: string; status: string; retrievedAt: string | null };
+type Source = { id: string; title: string; kind: string; body: string; sourceUrl: string; status: string; retrievedAt: string | null; failureMessage?: string | null };
 export function KnowledgeLibrary({ businessId, initialUrl = "" }: { businessId: string; initialUrl?: string }) {
   const uid = useId(), endpoint = `/api/businesses/${businessId}/sources`;
   const [sources, setSources] = useState<Source[]>([]), [error, setError] = useState(""), [notice, setNotice] = useState("");
@@ -63,7 +63,7 @@ export function KnowledgeLibrary({ businessId, initialUrl = "" }: { businessId: 
     {sources.map(source => <article key={source.id} className="panel">
       <h3>{source.title}</h3><p>{source.kind === "WEBSITE" ? "Website" : "Text document"} · {source.status.toLowerCase()}</p>
       {source.sourceUrl && <p className="small">Source: {source.sourceUrl}</p>}
-      {source.status === "FAILED" && <p>Import failed. No automatic retry was made. Remove this entry to explicitly request another import.</p>}
+      {source.status === "FAILED" && <div role="status"><p>{source.failureMessage || "Import failed. No automatic retry was made."}</p><p className="small">Resolve the issue before submitting the page again. Each new request counts toward your daily import allowance; your saved business details are unchanged.</p></div>}
       {source.body && <><details><summary>Read source text</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 320, overflow: "auto" }}>{source.body}</pre></details>
         <label htmlFor={`${uid}-${source.id}`}>Exact excerpt to use as evidence</label><textarea id={`${uid}-${source.id}`} maxLength={1800} value={quotes[source.id] || ""} onChange={e => setQuotes(old => ({ ...old, [source.id]: e.target.value }))} />
         <button type="button" className="button secondary" disabled={busy || (quotes[source.id]?.length || 0) < 10} onClick={() => submit({ action: "evidence", sourceId: source.id, quote: quotes[source.id] })}>Check excerpt · {source.title}</button>

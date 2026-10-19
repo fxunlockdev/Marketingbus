@@ -43,6 +43,12 @@ test("document import, exact evidence, tenant isolation and explicit deletion", 
     await region.getByRole("button", { name: "Confirm source deletion" }).click();
     await expect(region.getByRole("heading", { name: "studio-proof.md" })).toHaveCount(0);
     expect(await db.knowledgeSource.count({ where: { businessId: id } })).toBe(0);
+    const failed = await db.knowledgeSource.create({ data: { businessId: id, organizationId: source.organizationId, createdBy: source.createdBy, kind: "WEBSITE", title: "Website import fixture", sourceUrl: "https://example.com/about", status: "FAILED" } });
+    await db.job.create({ data: { businessId: id, organizationId: source.organizationId, kind: "WEBSITE_READ", key: `source:${failed.id}`, payload: { sourceId: failed.id, url: failed.sourceUrl }, status: "FAILED", errorCode: "SCRAPER_AUTH_REQUIRED", attempts: 1, maxAttempts: 1 } });
+    await page.reload(); await page.getByRole("button", { name: "Brand", exact: true }).click();
+    await expect(region.getByRole("status")).toContainText("administrator to check the scraper connection");
+    await expect(region.getByRole("status")).toContainText("saved business details are unchanged");
+    expect((await outsider.get(`/api/businesses/${id}/sources`)).status()).toBe(404);
   } finally {
     await db.organization.deleteMany({ where: { id: { in: organizations } } });
     await db.user.deleteMany({ where: { email: { in: [email, otherEmail] } } });

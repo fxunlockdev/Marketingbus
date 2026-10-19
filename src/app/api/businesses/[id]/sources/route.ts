@@ -1,12 +1,11 @@
 import { api, readBody } from "@/lib/http";
 import { requireBusiness, rateLimit } from "@/lib/auth";
-import { db } from "@/lib/db";
-import { manageSource, sourceFields } from "@/lib/knowledge/service";
+import { listSources, manageSource } from "@/lib/knowledge/service";
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
   return api(async () => {
     const { id } = await context.params; const { user, business } = await requireBusiness(id);
     await rateLimit("sources:read", user.id, 300);
-    return { sources: await db.knowledgeSource.findMany({ where: { businessId: id, organizationId: business.organizationId }, select: sourceFields, orderBy: { createdAt: "desc" }, take: 30 }) };
+    return { sources: await listSources({ businessId: id, organizationId: business.organizationId }) };
   });
 }
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {

@@ -21,6 +21,22 @@ Use `WEBSITE_EXTRACTION_ENABLED=false` until deployment and network tests pass. 
 
 No Firecrawl resources or paid scraping calls were created by this release. Queue contracts were verified using injected responses. Actual web extraction cannot be called live-accepted yet.
 
+## Authenticated imports and failure recovery
+
+The worker sends `FIRECRAWL_API_KEY` as a Bearer credential only to the configured private scraper endpoint when that variable is present. An absent key supports a deliberately private unauthenticated deployment; this does not secure that deployment by itself. Malformed configured keys fail before claiming a queued attempt. Transport redirects are disabled, so scraper credentials cannot be forwarded to a redirect destination. Web and worker must use the same private endpoint and the worker must receive its authentication key where required.
+
+Worker failures retain fixed, redacted reason codes for authentication, rate limiting, timeouts, unavailable services, restricted/redirected addresses, failed pages, oversized responses and unusable text. Business evidence displays corresponding actionable messages without provider response bodies or credentials. The API resolves failures only for the authenticated business/organization. Imports are never retried automatically; an explicit resubmission still uses the existing daily allowance and deduplication rules. Invalid UTF-8, null/replacement characters and oversized multibyte text are rejected instead of silently becoming brand evidence.
+
+The client contract is tested against a real local authenticated HTTP fixture as well as failure responses and database-backed queue tests. This is not a deployment of upstream Firecrawl or proof of its network isolation.
+
+## Cost target (20 October)
+
+The owner requested infrastructure as low as possible and no more than USD 10 per user. Working interpretation: USD 10 per active customer/business per month for shared infrastructure, separate from paid AI supplier calls. Count fixed idle costs as well as request-time usage; do not assume hundreds of customers to dilute the cost of the first pilot. This target is not evidence that the upstream multi-service stack fits it. Measure a pinned local stack and obtain current hosting rates before provisioning; no recurring service or paid proxy is enabled by this document.
+
+## Authenticated-import release checks
+
+85 backend suites / 1,766 tests passed (`/tmp/marketingbus-v56-regression.log`). The final client checks passed 34 tests, including empty-key compatibility (`/tmp/marketingbus-v56-client-final.log`). Production build/TypeScript and four focused browser journeys passed (`/tmp/marketingbus-v56-build-final.log`, `/tmp/marketingbus-v56-browser-final.log`). The accessibility skill guided persistent, announced failure messages rather than transient-only notifications. No live scraper, paid supplier call, public post or customer record was used for these checks.
+
 Source removal deletes active source text; facts copied into brand snapshots and backups require their own retention policy. Imported page/document text is untrusted data, never authority for tools, spending or profile approval.
 
 Primary references: [upstream source](https://github.com/firecrawl/firecrawl), [self-host instructions](https://docs.firecrawl.dev/contributing/self-host), [scrape API](https://docs.firecrawl.dev/api-reference/endpoint/scrape). Check release licensing and preserve required notices before distribution.

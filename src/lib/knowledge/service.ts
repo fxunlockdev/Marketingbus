@@ -5,6 +5,7 @@ import { AppError } from "../http";
 import { lockBusiness, type Scope } from "../production/service";
 import { publicUrl } from "../providers/url-policy";
 import { invalidateBrandAnalyses } from "./invalidation";
+import { sourceImportMessage } from "./import-errors";
 export const sourceInput = z.discriminatedUnion("action", [
   z.object({ action: z.literal("document"), title: z.string().trim().min(2).max(120), text: z.string().trim().min(20).max(24000).refine(s => Buffer.byteLength(s) <= 24000 && !/[\u0000\uFFFD]/.test(s), "Use valid UTF-8 text up to 24 KB."), rightsConfirmed: z.literal(true) }).strict(),
   z.object({ action: z.literal("website"), url: z.url().max(500), rightsConfirmed: z.literal(true) }).strict(),
@@ -12,6 +13,13 @@ export const sourceInput = z.discriminatedUnion("action", [
   z.object({ action: z.literal("evidence"), sourceId: z.string().min(1), quote: z.string().trim().min(10).max(1800) }).strict(),
 ]);
 export const sourceFields = { id: true, kind: true, title: true, sourceUrl: true, body: true, status: true, createdAt: true, retrievedAt: true } as const;
+export async function listSources(scope: Pick<Scope, "businessId" | "organizationId">) {
+  const sources = await db.knowledgeSource.findMany({ where: scope, select: sourceFields, orderBy: { createdAt: "desc" }, take: 30 });
+  const keys = sources.filter(s => s.status === "FAILED").map(s => `source:${s.id}`);
+  const jobs = keys.length ? await db.job.findMany({ where: { ...scope, kind: "WEBSITE_READ", key: { in: keys }, status: "FAILED" }, select: { key: true, errorCode: true } }) : [];
+  const failures = new Map(jobs.map(job => [job.key, sourceImportMessage(job.errorCode)]));
+  return sources.map(source => ({ ...source, failureMessage: source.status === "FAILED" ? failures.get(`source:${source.id}`) ?? sourceImportMessage(null) : null }));
+}
 export function selfHostedScraperBase() {
   const value = process.env.FIRECRAWL_SELF_HOSTED_URL;
   if (process.env.WEBSITE_EXTRACTION_ENABLED !== "true" || !value) throw new AppError(503, "Self-hosted website extraction is not configured yet. You can upload a text document instead.");

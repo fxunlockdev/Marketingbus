@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { db } from "../src/lib/db";
-import { manageSource, selfHostedScraperBase } from "../src/lib/knowledge/service";
+import { listSources, manageSource, selfHostedScraperBase } from "../src/lib/knowledge/service";
 import { runOneSourceJob } from "../src/lib/knowledge/worker";
 vi.mock("../src/lib/providers/url-policy", async importOriginal => ({ ...await importOriginal<object>(), validatePublicDns: async (url: string) => new URL(url) }));
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
@@ -47,5 +47,27 @@ suite("source ingestion boundaries", () => {
     expect(transport).toHaveBeenCalledTimes(1);
     expect(await manageSource(scope, request)).toMatchObject({ cached: true });
     expect((await db.knowledgeSource.findUniqueOrThrow({ where: { id: first.sourceId } })).status).toBe("PROPOSED");
+  });
+  it("preserves queued work when operator credentials are malformed", async () => {
+    enable(); const scope = await setup();
+    const created = await manageSource(scope, { action: "website", url: "https://example.com", rightsConfirmed: true });
+    vi.stubEnv("FIRECRAWL_API_KEY", "unsafe\ncredential");
+    const fetcher = vi.fn(); await expect(runOneSourceJob(fetcher)).rejects.toThrow("scraper connection");
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(await db.job.findUnique({ where: { key: `source:${created.sourceId}` } })).toMatchObject({ status: "QUEUED", attempts: 0 });
+    // Remove only this unsubmitted fixture job so the next test's global queue is independent.
+    await db.job.delete({ where: { key: `source:${created.sourceId}` } });
+  });
+  it("records actionable redacted failures without retrying or crossing tenant boundaries", async () => {
+    enable(); vi.stubEnv("FIRECRAWL_API_KEY", "private-test-key"); const scope = await setup(), other = await setup();
+    const created = await manageSource(scope, { action: "website", url: "https://example.com", rightsConfirmed: true });
+    const fetcher = vi.fn(async (_url, init) => { expect(new Headers(init?.headers).get("authorization")).toBe("Bearer private-test-key"); return new Response("private-test-key", { status: 401 }); });
+    await runOneSourceJob(fetcher); await runOneSourceJob(fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(await db.job.findUnique({ where: { key: `source:${created.sourceId}` } })).toMatchObject({ status: "FAILED", attempts: 1, errorCode: "SCRAPER_AUTH_REQUIRED" });
+    const sources = await listSources({ businessId: scope.businessId, organizationId: scope.organizationId });
+    expect(sources[0]).toMatchObject({ status: "FAILED", body: "", failureMessage: expect.stringContaining("administrator") });
+    expect(JSON.stringify(sources)).not.toContain("private-test-key");
+    expect(await listSources({ businessId: scope.businessId, organizationId: other.organizationId })).toEqual([]);
   });
 });
