@@ -85,6 +85,20 @@ suite("read-only operator queue inventory", () => {
     await db.weeklyCycle.update({ where: { id: cycle.id }, data: { videoStatus: "CANCELLED" } });
     expect((await report(scope)).items).toEqual([]);
   });
+  it("reports expired access and required renewal without exposing credentials or flagging non-expiring grants", async () => {
+    const scope = await setup();
+    const account = await db.socialConnection.create({ data: { ...scope, provider: "Facebook", externalAccountId: "private-account", label: "Private label", encryptedToken: "private-token", permissions: ["private-permission"], createdAt: old } });
+    expect((await report(scope)).items).toEqual([]);
+    await db.socialConnection.update({ where: { id: account.id }, data: { expiresAt: old } });
+    expect((await report(scope)).items).toEqual([expect.objectContaining({ queue: "social-access", id: account.id, reason: "OVERDUE" })]);
+    await db.socialConnection.update({ where: { id: account.id }, data: { status: "RECONNECT_REQUIRED", encryptedToken: "", permissions: [], expiresAt: null } });
+    const result = await report(scope);
+    expect(result.items).toEqual([expect.objectContaining({ queue: "social-access", status: "RECONNECT_REQUIRED", reason: "ACCESS_RENEWAL_REQUIRED" })]);
+    expect(JSON.stringify(result)).not.toMatch(/private-account|Private label|private-token|private-permission|encryptedToken/);
+    expect((await report(await setup())).items).toEqual([]);
+    await db.socialConnection.update({ where: { id: account.id }, data: { status: "DISCONNECTED" } });
+    expect((await report(scope)).items).toEqual([]);
+  });
   it("paginates equal timestamps without duplicates, freezes cutoff and rejects cross-scope cursors", async () => {
     const scope = await setup(); for (let i = 0; i < 5; i++) await job(scope, "FAILED");
     const first = await report(scope, { limit: 2 });

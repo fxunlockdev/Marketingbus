@@ -664,6 +664,7 @@ model SocialConnection {
   @@unique([id, businessId, organizationId])
   @@unique([businessId, provider, externalAccountId])
   @@index([dataFetchedAt])
+  @@index([status, expiresAt])
 }
 
 model SocialPublication {

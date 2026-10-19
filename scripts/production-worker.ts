@@ -23,6 +23,7 @@ import { expireIdentityArtifacts } from "../src/lib/identity/service";
 import { configuredSocialAdapters } from "../src/lib/social/contracts";
 import { expireSocialOAuth } from "../src/lib/social/oauth";
 import { expireSocialAccountData } from "../src/lib/social/account-data-service";
+import { expireOneSocialConnection } from "../src/lib/social/access-lifecycle";
 import { runOnePublication, runOneMetricSync, recoverSocialLeases, runOneReconciliation } from "../src/lib/social/worker";
 let stopping = false;
 let lastRetentionCheck = 0;
@@ -56,6 +57,7 @@ const groups: WorkerGroup[] = [{ name: "production", steps: [
 ] }, { name: "intake", steps: [
   { name: "website", enabled: () => process.env.WEBSITE_EXTRACTION_ENABLED === "true", run: runOneSourceJob },
 ] }, { name: "maintenance", steps: [
+  { name: "social-access-expiry", run: expireOneSocialConnection },
   { name: "retention", run: async () => {
     if (Date.now() - lastRetentionCheck <= 300000) return;
     lastRetentionCheck = Date.now();

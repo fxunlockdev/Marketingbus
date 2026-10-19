@@ -23,6 +23,7 @@ import { payloadHash } from "../src/lib/social/integrity";
 import { resumePublicationLookup } from "../src/lib/social/recovery";
 import { resumeMetricChecks } from "../src/lib/social/metric-recovery";
 import { disconnectSocialAccount } from "../src/lib/social/disconnect";
+import { expireOneSocialConnection } from "../src/lib/social/access-lifecycle";
 import { seedLearningEvidence } from "./fixtures/learning";
 import { productionMemories, validLearningEvidence } from "../src/lib/social/learning-evidence";
 import { publishingFixture } from "./helpers/linkedin-publishing";
@@ -50,7 +51,12 @@ const creative = {
 suite("social publishing and analytics isolation", () => {
   const orgs: string[] = [];
   const users: string[] = [];
-  afterEach(async () => { await db.socialPublication.deleteMany({ where: { organizationId: { in: orgs } } }); });
+  afterEach(async () => {
+    await db.socialPublication.deleteMany({ where: { organizationId: { in: orgs } } });
+    await db.organization.deleteMany({ where: { id: { in: orgs } } });
+    await db.user.deleteMany({ where: { id: { in: users } } });
+    orgs.length = 0; users.length = 0;
+  });
   beforeAll(() => {
     vi.stubEnv(
       "SECRET_ENCRYPTION_KEYS_JSON",
@@ -695,6 +701,128 @@ suite("social publishing and analytics isolation", () => {
       (await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } }))
         .status
     ).toBe("CANCELLED");
+  });
+  it.each(["Facebook", "Instagram", "LinkedIn"])("expires %s credentials once, isolates accounts and cancels queued work", async network => {
+    const ctx = await setup(), provider = adapter(), post = await queue(ctx, provider), other = await setup();
+    const lease = new Date(Date.now() + 120000);
+    await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { provider: network, expiresAt: new Date(1),
+      dataSnapshot: { private: "snapshot" }, dataFetchedAt: new Date(), dataLeaseId: "inflight", dataLeaseUntil: lease } });
+    const results = await Promise.all([expireOneSocialConnection(), expireOneSocialConnection()]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(await db.socialConnection.findUniqueOrThrow({ where: { id: ctx.connection.id } })).toMatchObject({
+      status: "RECONNECT_REQUIRED", authorizationVersion: 2, encryptedToken: "", permissions: [], expiresAt: null,
+      dataSnapshot: null, dataFetchedAt: null, dataLeaseId: null, dataLeaseUntil: null,
+    });
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "CANCELLED", errorCode: "ACCOUNT_EXPIRED", nextMetricsAt: null });
+    expect(await db.socialConnection.findUniqueOrThrow({ where: { id: other.connection.id } })).toMatchObject({ status: "CONNECTED", authorizationVersion: 1 });
+    expect(await db.auditEvent.count({ where: { businessId: ctx.scope.businessId, action: "SOCIAL_ACCESS_EXPIRED" } })).toBe(1);
+    expect(await expireOneSocialConnection()).toBe(false);
+    expect(await runOnePublication({ Facebook: provider })).toBe(false); expect(provider.publish).not.toHaveBeenCalled();
+  });
+  it("does not expire non-expiring grants or a grant renewed before cleanup", async () => {
+    const ctx = await setup();
+    expect(await expireOneSocialConnection()).toBe(false);
+    await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { expiresAt: new Date(1) } });
+    await saveVerifiedConnection(ctx.scope, { provider: "Facebook", externalAccountId: ctx.scope.businessId, label: "Fixture Page", token: "new-token", permissions: ["publish"], expiresAt: new Date(Date.now() + 3600000) });
+    expect(await expireOneSocialConnection()).toBe(false);
+    expect(await db.socialConnection.findUniqueOrThrow({ where: { id: ctx.connection.id } })).toMatchObject({ status: "CONNECTED", authorizationVersion: 2 });
+  });
+  it("rechecks the authorization version after selecting an expired candidate", async () => {
+    const ctx = await setup();
+    await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { expiresAt: new Date(1) } });
+    const original = db.socialConnection.findFirst.bind(db.socialConnection);
+    const select = vi.spyOn(db.socialConnection, "findFirst").mockImplementationOnce((async (args: Parameters<typeof original>[0]) => {
+      const candidate = await original(args);
+      await saveVerifiedConnection(ctx.scope, { provider: "Facebook", externalAccountId: ctx.scope.businessId, label: "Fixture Page", token: "fresh-grant", permissions: ["publish"], expiresAt: new Date(Date.now() + 3600000) });
+      return candidate;
+    }) as typeof db.socialConnection.findFirst);
+    try {
+      expect(await expireOneSocialConnection()).toBe(false);
+      expect(await db.socialConnection.findUniqueOrThrow({ where: { id: ctx.connection.id } })).toMatchObject({ status: "CONNECTED", authorizationVersion: 2 });
+      expect(await db.auditEvent.count({ where: { businessId: ctx.scope.businessId, action: "SOCIAL_ACCESS_EXPIRED" } })).toBe(0);
+    } finally { select.mockRestore(); }
+  });
+  it("provider-confirmed revocation removes all local access and holds other uncertain posts", async () => {
+    const ctx = await setup(), provider = adapter(), post = await queue(ctx, provider);
+    const f = await disconnectFixture(ctx);
+    const flow = await db.socialOAuthFlow.create({ data: { ...f.scope, id: crypto.randomUUID(), provider: "Facebook", stateHash: crypto.randomUUID(), configurationHash: "test", encryptedVerifier: "secret-verifier", expiresAt: new Date(Date.now() + 120000) } });
+    const rows = [];
+    for (const status of ["SCHEDULED", "NEEDS_RECONCILIATION"]) {
+      const item = await db.productionItem.create({ data: { organizationId: ctx.scope.organizationId, planId: ctx.item.planId, channel: "Facebook", format: "static", title: "Other post", brief: {}, revisions: { create: { version: 1, content: creative, status: "APPROVED" } } } });
+      await manageSocial(ctx.scope, { ...ctx.action, itemId: item.id }, { Facebook: provider });
+      const row = await db.socialPublication.findFirstOrThrow({ where: { revision: { itemId: item.id } } });
+      await db.socialPublication.update({ where: { id: row.id }, data: { status } }); rows.push(row);
+    }
+    vi.mocked(provider.publish).mockResolvedValue({ state: "failed", code: "TOKEN_REVOKED" });
+    await runOnePublication({ Facebook: provider });
+    expect(await db.socialConnection.findUniqueOrThrow({ where: { id: ctx.connection.id } })).toMatchObject({ status: "RECONNECT_REQUIRED", authorizationVersion: 2, encryptedToken: "", permissions: [], dataSnapshot: null });
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "FAILED", errorCode: "TOKEN_REVOKED" });
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: rows[0].id } })).toMatchObject({ status: "CANCELLED", errorCode: "ACCOUNT_REVOKED" });
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: rows[1].id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", errorCode: "ACCOUNT_REVOKED", nextReconciliationAt: null });
+    expect(await db.socialOAuthFlow.findUniqueOrThrow({ where: { id: flow.id } })).toMatchObject({ status: "CANCELLED", encryptedVerifier: null });
+    expect(await db.auditEvent.count({ where: { businessId: ctx.scope.businessId, action: "SOCIAL_ACCESS_REVOKED" } })).toBe(1);
+    await saveVerifiedConnection(ctx.scope, { provider: "Facebook", externalAccountId: ctx.scope.businessId, label: "Fixture Page", token: "renewed", permissions: ["publish"], expiresAt: null });
+    expect(await runOneReconciliation({ Facebook: provider })).toBe(false); expect(provider.reconcile).not.toHaveBeenCalled();
+  });
+  it.each(["SUBMITTING", "NEEDS_RECONCILIATION", "PUBLISHED"])("expiry retains %s receipts and preserves a fresh renewal flow", async status => {
+    const ctx = await setup(), provider = adapter(), post = await queue(ctx, provider), f = await disconnectFixture(ctx);
+    const lease = new Date(Date.now() + 120000);
+    await db.socialPublication.update({ where: { id: post.id }, data: { status, candidatePostId: "page_post", submissionAdapterVersion: "test-v1",
+      leaseUntil: status === "SUBMITTING" ? lease : null, nextReconciliationAt: new Date(), nextMetricsAt: new Date(), metricsLeaseUntil: lease,
+      ...(status === "PUBLISHED" ? { externalPostId: "page_post", publishedAt: new Date(), permalink: "https://facebook.com/fixture" } : {}) } });
+    const flow = await db.socialOAuthFlow.create({ data: { ...f.scope, id: crypto.randomUUID(), provider: "Facebook", stateHash: crypto.randomUUID(), configurationHash: "test", encryptedVerifier: "renewal-verifier", expiresAt: lease } });
+    await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { expiresAt: new Date(1) } });
+    expect(await expireOneSocialConnection()).toBe(true);
+    expect(await db.socialOAuthFlow.findUnique({ where: { id: flow.id } })).toMatchObject({ status: "PENDING", encryptedVerifier: "renewal-verifier" });
+    expect(await db.socialPublication.findUnique({ where: { id: post.id } })).toMatchObject({
+      status: status === "PUBLISHED" ? status : "NEEDS_RECONCILIATION", candidatePostId: "page_post", submissionAdapterVersion: "test-v1",
+      nextMetricsAt: null, metricsLeaseUntil: null, leaseUntil: status === "SUBMITTING" ? lease : null,
+      ...(status === "PUBLISHED" ? { externalPostId: "page_post" } : { errorCode: "ACCOUNT_EXPIRED", nextReconciliationAt: null }),
+    });
+    expect(await runOneReconciliation({ Facebook: provider })).toBe(false); expect(await runOneMetricSync({ Facebook: provider })).toBe(false);
+  });
+  it("expiry during a submission holds its outcome and reconnection does not trigger a resend or lookup", async () => {
+    const ctx = await setup(), provider = adapter(), post = await queue(ctx, provider);
+    const grant = { provider: "Facebook", externalAccountId: ctx.scope.businessId, label: "Fixture Page", token: "renewed-token", permissions: ["publish"], expiresAt: new Date(Date.now() + 3600000) };
+    vi.mocked(provider.publish).mockImplementation(async () => {
+      await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { expiresAt: new Date(1) } });
+      expect(await expireOneSocialConnection()).toBe(true);
+      await expect(saveVerifiedConnection(ctx.scope, grant)).rejects.toThrow(/active account request/);
+      return { state: "published", receipt: { externalPostId: "late-result", permalink: "https://facebook.com/fixture", publishedAt: new Date() } };
+    });
+    await runOnePublication({ Facebook: provider });
+    expect(await db.socialPublication.findUnique({ where: { id: post.id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", errorCode: "ACCOUNT_EXPIRED", externalPostId: null });
+    await db.socialPublication.update({ where: { id: post.id }, data: { leaseUntil: new Date(1) } });
+    await saveVerifiedConnection(ctx.scope, grant);
+    expect(await runOneReconciliation({ Facebook: provider })).toBe(false); expect(await runOnePublication({ Facebook: provider })).toBe(false);
+    await expect(manageSocial(ctx.scope, ctx.action, { Facebook: provider })).rejects.toThrow(/already been submitted/);
+    expect(await resumePublicationLookup({ publicationId: post.id, operatorId: "local-test", evidence: "Verified restored fixture access and pending receipt" })).toMatchObject({ resumed: true });
+    await reconcilePublication(post.id, { Facebook: provider });
+    expect(provider.publish).toHaveBeenCalledTimes(1); expect(provider.reconcile).toHaveBeenCalledTimes(1);
+  });
+  it("expiry during a lookup cannot persist a late receipt or override its hold", async () => {
+    const ctx = await setup(), provider = adapter(), post = await queue(ctx, provider);
+    await db.socialPublication.update({ where: { id: post.id }, data: { status: "NEEDS_RECONCILIATION" } });
+    vi.mocked(provider.reconcile).mockImplementation(async () => {
+      await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { expiresAt: new Date(1) } });
+      await expireOneSocialConnection();
+      return { externalPostId: "late-lookup", publishedAt: new Date(), permalink: "https://facebook.com/fixture" };
+    });
+    expect(await reconcilePublication(post.id, { Facebook: provider })).toBe(false);
+    expect(await db.socialPublication.findUnique({ where: { id: post.id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", errorCode: "ACCOUNT_EXPIRED", externalPostId: null, nextReconciliationAt: null });
+  });
+  it("expiry during metrics prevents late snapshots and polling resurrection", async () => {
+    const ctx = await setup(), provider = adapter(), post = await queue(ctx, provider);
+    await runOnePublication({ Facebook: provider });
+    await db.socialPublication.update({ where: { id: post.id }, data: { nextMetricsAt: new Date(1) } });
+    vi.mocked(provider.metrics).mockImplementation(async () => {
+      await db.socialConnection.update({ where: { id: ctx.connection.id }, data: { expiresAt: new Date(1) } });
+      await expireOneSocialConnection();
+      return { observedAt: new Date(), definitionVersion: "fixture-v1", impressions: 100, reach: null, engagements: 1, clicks: null, videoViews: null };
+    });
+    await runOneMetricSync({ Facebook: provider });
+    expect(await db.metricSnapshot.count({ where: { publicationId: post.id } })).toBe(0);
+    expect(await db.socialPublication.findUnique({ where: { id: post.id } })).toMatchObject({ status: "PUBLISHED", nextMetricsAt: null, metricsLeaseUntil: null, metricsFailures: 0 });
   });
   it.each(["VIEWER", "EDITOR", "missing session", "expired session", "auth version", "mfa", "foreign business", "stale grant"])("rejects disconnection with %s", async reason => {
     const ctx = await setup(), f = await disconnectFixture(ctx);

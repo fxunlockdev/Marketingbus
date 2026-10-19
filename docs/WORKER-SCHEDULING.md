@@ -2,6 +2,8 @@
 
 ## Current: bounded independent groups
 
+Runtime `studio-v48-social-access-lifecycle` adds a 25th lane, `social-access-expiry`, to maintenance. It removes one expired grant per tick without provider calls or execution flags, using the same business lock as connection/publication work. This does not introduce another process, replica or paid operation. See [access lifecycle and recovery](SOCIAL-ACCESS-LIFECYCLE.md).
+
 Runtime `studio-v47-weekly-mixed-media` adds the 24th lane, `weekly-video`, to the same sequential production group. It advances one approval-gated storyboard/shot/assembly/render transition, sharing the existing weekly credit ceiling and durable provider workers. It adds no process, replica or parallel paid generation. See [mixed-media behavior](WEEKLY-MIXED-MEDIA.md).
 
 Runtime `studio-v46-isolated-worker-groups` partitions the existing 23 workflows into six fixed asynchronous groups inside the existing worker. Production retains every AI generation/authorization, clip normalization, motion rendering and corresponding recovery lane in one sequential group. Publishing/reconciliation, metrics, delivery/payments/planning, website intake and maintenance have independent loops. A slow asynchronous media request no longer prevents publishing or metrics from getting their next turn. Each group still performs one bounded attempt per lane, followed by the existing five-second pause. No paid-generation parallelism, extra replica, execution flag, daily authorization ceiling or spending limit is introduced.

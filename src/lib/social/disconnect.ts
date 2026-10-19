@@ -2,7 +2,7 @@ import { z } from "zod";
 import { db } from "../db";
 import { AppError } from "../http";
 import { authorizeSocialScope, type OAuthScope } from "./oauth";
-import { eraseSocialData } from "./account-data-service";
+import { stopSocialAccess } from "./access-lifecycle";
 
 export const disconnectInput = z.object({
   action: z.literal("disconnect"), connectionId: z.string().min(1).max(100),
@@ -26,24 +26,9 @@ export async function disconnectSocialAccount(scope: OAuthScope, raw: unknown) {
         account.expiresAt === null && account.dataSnapshot === null && account.dataFetchedAt === null &&
         account.dataLeaseId === null && account.dataLeaseUntil === null)
       return { ok: true, alreadyDisconnected: true };
-    await tx.socialConnection.update({ where: { id: account.id }, data: {
-      ...eraseSocialData, status: "DISCONNECTED", encryptedToken: "", permissions: [], expiresAt: null,
-      authorizationVersion: { increment: 1 },
-    } });
-    const posts = { connectionId: account.id, businessId: scope.businessId, organizationId: scope.organizationId };
-    const cancelled = await tx.socialPublication.updateMany({ where: { ...posts, status: "SCHEDULED" },
-      data: { status: "CANCELLED", errorCode: "ACCOUNT_DISCONNECTED", leaseUntil: null } });
-    // Retain the active request's lease as a reconnect barrier; never discard candidate IDs or the write fence.
-    const uncertain = await tx.socialPublication.updateMany({ where: { ...posts, status: { in: ["SUBMITTING", "NEEDS_RECONCILIATION"] } },
-      data: { status: "NEEDS_RECONCILIATION", nextReconciliationAt: null, errorCode: "ACCOUNT_DISCONNECTED" } });
-    await tx.socialPublication.updateMany({ where: posts, data: { nextMetricsAt: null, metricsLeaseUntil: null } });
-    // Pending encrypted choices may contain this same grant. Cancel this provider's flows across sessions,
-    // but never other businesses/providers. A new explicit connection can be started after disconnection.
-    const flows = await tx.socialOAuthFlow.updateMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId,
-      provider: account.provider, status: { in: ["PENDING", "EXCHANGING", "CHOOSING"] } },
-      data: { status: "CANCELLED", encryptedVerifier: null, encryptedCandidates: null, errorCode: "ACCOUNT_DISCONNECTED" } });
+    const stopped = await stopSocialAccess(tx, account, "ACCOUNT_DISCONNECTED");
     await tx.auditEvent.create({ data: { businessId: scope.businessId, organizationId: scope.organizationId, actorId: scope.actorId,
-      action: "SOCIAL_DISCONNECTED", detail: `Account ${account.id}; queued posts cancelled: ${cancelled.count}; uncertain posts retained: ${uncertain.count}; pending ${account.provider} requests cancelled: ${flows.count}. Local credentials removed; remote grants/posts unchanged.` } });
+      action: "SOCIAL_DISCONNECTED", detail: `Account ${account.id}; queued posts cancelled: ${stopped.cancelled}; uncertain posts retained: ${stopped.uncertain}; pending ${account.provider} requests cancelled: ${stopped.flows}. Local credentials removed; remote grants/posts unchanged.` } });
     return { ok: true, alreadyDisconnected: false };
   });
 }

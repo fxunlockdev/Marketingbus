@@ -11,6 +11,7 @@ const definitions = [
   { name: "motion", table: "MotionRender", scope: "business", lease: true, waiting: ["QUEUED"], active: ["RUNNING", "STORING", "DELETING"] },
   { name: "exports", table: "CompositionExport", scope: "business", lease: true, waiting: [], active: ["STORING", "DELETING"] },
   { name: "social", table: "SocialPublication", scope: "business", lease: true, due: "scheduledFor", waiting: ["SCHEDULED"], active: ["SUBMITTING"] },
+  { name: "social-access", table: "SocialConnection", scope: "business", due: "expiresAt", waiting: ["CONNECTED"], active: [] },
   { name: "weekly", table: "WeeklyCycle", scope: "business", lease: true, waiting: ["OPEN"], active: ["RUNNING"] },
   { name: "weekly-images", table: "WeeklyCycle", scope: "business", lease: true, statusColumn: "mediaStatus", leaseColumn: "mediaLeaseUntil", due: "nextMediaAt", waiting: ["OPEN"], active: ["OPEN"] },
   { name: "weekly-video", table: "WeeklyCycle", scope: "business", lease: true, statusColumn: "videoStatus", leaseColumn: "videoLeaseUntil", due: "nextVideoAt", waiting: ["OPEN"], active: ["OPEN"] },
@@ -31,8 +32,9 @@ export type QueueReportOptions = z.input<typeof optionsSchema>;
 const cursorSchema = z.object({ version: z.literal(1), scope: scopeSchema, overdueMinutes: z.number().int(), asOf: z.iso.datetime(), createdAt: z.iso.datetime(), queue: z.string().max(30), id: identifier }).strict();
 const attentionStatuses = ["NEEDS_RECONCILIATION", "NEEDS_REVIEW", "REQUIRES_ACTION", "UNKNOWN", "RECONCILE"];
 const failureStatuses = ["FAILED", "DELETE_FAILED", "PURGE_FAILED", "BLOCKED"];
-const knownStatuses = new Set(["READY", ...attentionStatuses, ...failureStatuses, ...definitions.flatMap(d => [...d.waiting, ...d.active])]);
+const knownStatuses = new Set(["READY", "RECONNECT_REQUIRED", ...attentionStatuses, ...failureStatuses, ...definitions.flatMap(d => [...d.waiting, ...d.active])]);
 const guidance = {
+  ACCESS_RENEWAL_REQUIRED: "Ask a workspace owner/admin to reconnect the destination. Do not restore old credentials, restart cancelled posts or resume uncertain lookups automatically.",
   SUPPLIER_INVOICE_DUE: "Reconcile provisional video expense against independent supplier evidence. Preserve customer settlement and output; do not retry generation or reprice the customer.",
   UNCERTAIN_OUTCOME: "Verify provider/storage evidence using the module recovery procedure. Do not resubmit, publish, refund or release holds from this report.",
   FAILED: "Inspect the module's failure evidence and current permissions. A failed record is not authorization to retry or refund.",
@@ -63,12 +65,13 @@ export async function readQueueReport(client: PrismaClient, raw: QueueReportOpti
     const status = column(d.statusColumn ?? "status"), lease = d.lease ? column(d.leaseColumn ?? "leaseUntil") : Prisma.sql`NULL::timestamp`;
     const org = d.scope === "global" ? Prisma.sql`NULL::text` : column("organizationId");
     const business = d.scope === "business" ? column("businessId") : Prisma.sql`NULL::text`;
-    const due = d.name === "video" ? Prisma.sql`COALESCE("nextPollAt", "acceptedAt", "createdAt")`
+    const due = d.name === "social-access" ? column("expiresAt") : d.name === "video" ? Prisma.sql`COALESCE("nextPollAt", "acceptedAt", "createdAt")`
       : d.due ? Prisma.sql`COALESCE(${column(d.due)}, "createdAt")` : column("createdAt");
     const scope = options.scope.kind === "all" ? Prisma.sql`TRUE` : Prisma.sql`${org} = ${options.scope.organizationId} ${options.scope.businessId ? Prisma.sql`AND ${business} = ${options.scope.businessId}` : Prisma.empty}`;
     const provisional = d.name === "video" ? Prisma.sql`"expenseBasis" = 'ACCOUNT_QUOTE_V1' AND "supplierCostMicros" IS NULL AND "status" IN ('READY', 'FAILED')` : Prisma.sql`FALSE`;
     return Prisma.sql`SELECT ${d.name}::text AS queue, "id", ${org} AS "organizationId", ${business} AS "businessId", ${status} AS "status", "createdAt", ${lease} AS "leaseUntil",
-      CASE WHEN ${inValues(status, attentionStatuses)} THEN 'UNCERTAIN_OUTCOME'
+      CASE WHEN ${d.name === "social-access"} AND ${status} = 'RECONNECT_REQUIRED' THEN 'ACCESS_RENEWAL_REQUIRED'
+        WHEN ${inValues(status, attentionStatuses)} THEN 'UNCERTAIN_OUTCOME'
         WHEN ${provisional} THEN 'SUPPLIER_INVOICE_DUE'
         WHEN ${inValues(status, failureStatuses)} THEN 'FAILED'
         WHEN ${inValues(status, d.active)} AND ${lease} <= ${asOf} THEN 'EXPIRED_LEASE'

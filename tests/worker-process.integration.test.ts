@@ -21,6 +21,10 @@ suite("production worker process", () => {
     } finally { await db.workerHeartbeat.deleteMany({ where: { id } }); }
   });
   it("starts disabled, reports health, writes matching readiness and drains cleanly", async () => {
+    const organization = await db.organization.create({ data: { name: "Worker expiry fixture" } });
+    const business = await db.business.create({ data: { organizationId: organization.id, name: "Expired account fixture" } });
+    const expired = await db.socialConnection.create({ data: { organizationId: organization.id, businessId: business.id,
+      provider: "LinkedIn", externalAccountId: "urn:li:organization:123", label: "Expired fixture", encryptedToken: "synthetic-expired-token", permissions: ["publish"], expiresAt: new Date(1) } });
     const portProbe = createServer(); portProbe.listen(0, "127.0.0.1"); await once(portProbe, "listening");
     const address = portProbe.address(); if (!address || typeof address === "string") throw Error("Port unavailable");
     const port = address.port; await new Promise<void>((resolve, reject) => portProbe.close(error => error ? reject(error) : resolve()));
@@ -42,7 +46,11 @@ suite("production worker process", () => {
     try {
       let response: Response | undefined;
       while (Date.now() < deadline && !closed) {
-        try { response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1000) }); if (response.status === 200) break; } catch { /* Startup not ready yet. */ }
+        try {
+          response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1000) });
+          // Health reports a responsive process, not completion of every asynchronous lane.
+          if (response.status === 200 && (await db.socialConnection.findUnique({ where: { id: expired.id } }))?.status === "RECONNECT_REQUIRED") break;
+        } catch { /* Startup not ready yet. */ }
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       expect(response?.status, output).toBe(200);
@@ -50,6 +58,7 @@ suite("production worker process", () => {
       expect(await response?.json()).toEqual({ status: "ok" });
       expect((await fetch(`http://127.0.0.1:${port}/private`, { signal: AbortSignal.timeout(1000) })).status).toBe(404);
       expect(await db.workerHeartbeat.findUniqueOrThrow({ where: { id } })).toMatchObject({ runtimeVersion: WORKER_RUNTIME, executionEnabled: false, motionReady: false });
+      expect(await db.socialConnection.findUniqueOrThrow({ where: { id: expired.id } })).toMatchObject({ status: "RECONNECT_REQUIRED", encryptedToken: "", permissions: [], authorizationVersion: 2 });
       child.kill("SIGTERM");
       let timer: ReturnType<typeof setTimeout> | undefined;
       try { expect(await Promise.race([completion, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Error("Worker did not drain")), 10000); })])).toBe(0); }
@@ -61,6 +70,7 @@ suite("production worker process", () => {
       if (!closed) child.kill("SIGKILL");
       await completion.catch(() => {});
       await db.workerHeartbeat.deleteMany({ where: { id } });
+      await db.organization.delete({ where: { id: organization.id } });
     }
   }, 30000);
 });

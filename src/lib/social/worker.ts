@@ -17,6 +17,7 @@ import {
   type PublishOutcome,
 } from "./contracts";
 import type { SocialConnection } from "@prisma/client";
+import { SOCIAL_ACCESS_HOLDS, stopSocialAccess } from "./access-lifecycle";
 
 function account(connection: SocialConnection): Account {
   return {
@@ -244,11 +245,11 @@ export async function runOnePublication(adapters: SocialAdapters) {
               : "PROVIDER_ERROR",
           },
         });
-        if (outcome.state === "failed" && outcome.code === "TOKEN_REVOKED")
-          await tx.socialConnection.update({
-            where: { id: claimed.post.connectionId },
-            data: { status: "RECONNECT_REQUIRED", encryptedToken: "" },
-          });
+        if (outcome.state === "failed" && outcome.code === "TOKEN_REVOKED") {
+          const stopped = await stopSocialAccess(tx, fresh.connection, "ACCOUNT_REVOKED");
+          await tx.auditEvent.create({ data: { ...scope, action: "SOCIAL_ACCESS_REVOKED",
+            detail: `Account ${fresh.connection.id}; queued posts cancelled: ${stopped.cancelled}; uncertain posts retained: ${stopped.uncertain}; pending grants cancelled: ${stopped.flows}. Adapter rejected account authorization; local credentials removed. Remote posts unchanged.` } });
+        }
       }
       await tx.auditEvent.create({
         data: {
@@ -278,7 +279,7 @@ function reconciliationDue(now: Date) {
     status: "NEEDS_RECONCILIATION",
     reconciliationAttempts: { lt: MAX_RECONCILIATION_ATTEMPTS },
     AND: [
-      { OR: [{ errorCode: null }, { errorCode: { not: "ACCOUNT_DISCONNECTED" } }] },
+      { OR: [{ errorCode: null }, { errorCode: { notIn: SOCIAL_ACCESS_HOLDS } }] },
       { OR: [{ leaseUntil: null }, { leaseUntil: { lte: now } }] },
       { OR: [{ nextReconciliationAt: { lte: now } }, { nextReconciliationAt: null, reconciliationAttempts: 0 }] },
     ],
@@ -318,7 +319,7 @@ export async function reconcilePublication(publicationId: string, adapters: Soci
   if (!claimed) return false;
   const { post, provider, attempt } = claimed;
   const guard = { id: post.id, status: "NEEDS_RECONCILIATION", leaseUntil, reconciliationAttempts: attempt,
-    OR: [{ errorCode: null }, { errorCode: { not: "ACCOUNT_DISCONNECTED" } }] };
+    OR: [{ errorCode: null }, { errorCode: { notIn: SOCIAL_ACCESS_HOLDS } }] };
   async function unresolved(code: string, retry = true) {
     await db.socialPublication.updateMany({ where: guard, data: {
       leaseUntil: null, errorCode: code,

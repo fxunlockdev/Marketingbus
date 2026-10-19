@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
+import { expireOneSocialConnection } from "../src/lib/social/access-lifecycle";
 const local = process.env.TEST_DATABASE_URL;
 test.skip(!local, "Requires explicit localhost fixture database.");
 if (local && (process.env.DATABASE_URL !== local || !["localhost", "127.0.0.1"].includes(new URL(local).hostname))) throw Error("Refusing non-local fixture writes");
@@ -77,4 +78,51 @@ test("OAuth callback errors redact parameters and redirect only to a fixed local
   await page.goto("/social-connect?failed=1"); await expect(page.getByRole("heading", { name: "Connection not completed" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Return to your studio" })).toHaveAttribute("href", "/studio");
   expect((await new AxeBuilder({ page }).include("main").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+});
+test("expired access has an explicit scoped reconnection path, with safe disabled and viewer states", async ({ page }) => {
+  const email = `expiry-browser-${randomUUID()}@example.test`, headers = { Origin: "http://127.0.0.1:3000" };
+  let organizationId: string | undefined;
+  try {
+    expect((await page.request.post("/api/auth/register", { headers, data: { name: "Expiry fixture", email, password: "Test-only-password-2026!" } })).ok()).toBe(true);
+    const response = await page.request.post("/api/businesses", { headers, data: { name: "Expiry studio", offering: "Architecture consultations", audience: "Homeowners", goal: "Book consultations", channels: ["Facebook"] } });
+    const { id } = await response.json(); organizationId = (await db.business.findUniqueOrThrow({ where: { id } })).organizationId;
+    const expired = await db.socialConnection.create({ data: { businessId: id, organizationId, provider: "Facebook", externalAccountId: "expiry-fixture", label: "Expired company page", encryptedToken: "synthetic-expired-token", permissions: ["publish"], expiresAt: new Date(1) } });
+    await db.socialConnection.create({ data: { businessId: id, organizationId, provider: "LinkedIn", externalAccountId: "renewal-fixture", label: "Renewal company page", encryptedToken: "synthetic-renewal-token", permissions: ["publish"], expiresAt: new Date(Date.now() + 86400000) } });
+    await page.goto("/studio"); await page.getByRole("button", { name: "Connections", exact: true }).click();
+    const reconnect = page.getByRole("button", { name: "Reconnect Expired company page", exact: true });
+    await expect(reconnect).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Renew access for Renewal company page", exact: true })).toBeDisabled();
+    await expect(page.getByText("Facebook · Expired company page · Reconnect required", { exact: false })).toBeVisible();
+    await expect(page.getByText(/Reconnecting does not restart cancelled posts/)).toBeVisible();
+    // Exercise the actual database cleanup and refreshed UI, not a fabricated lifecycle state.
+    expect(await expireOneSocialConnection()).toBe(true);
+    await page.getByRole("button", { name: "Refresh connections", exact: true }).click();
+    await expect(reconnect).toBeDisabled();
+    expect(await db.socialConnection.findUniqueOrThrow({ where: { id: expired.id } })).toMatchObject({ status: "RECONNECT_REQUIRED", encryptedToken: "", authorizationVersion: 2 });
+    const endpoint = `/api/businesses/${id}/connections`;
+    // Enable presentation only to verify keyboard intent; the real server remains fail-closed.
+    await page.route(`**${endpoint}`, async route => {
+      if (route.request().method() !== "GET") return route.continue();
+      const result = await route.fetch(), body = await result.json();
+      await route.fulfill({ response: result, json: { ...body, enabledProviders: ["Facebook"] } });
+    });
+    await page.getByRole("button", { name: "Refresh connections", exact: true }).click();
+    await expect(reconnect).toBeEnabled(); await reconnect.focus();
+    const request = page.waitForRequest(req => req.url().endsWith(endpoint) && req.method() === "POST");
+    await page.keyboard.press("Enter");
+    expect((await request).postDataJSON()).toEqual({ action: "begin", provider: "Facebook" });
+    await expect(page.getByRole("main").getByRole("alert")).toContainText("not enabled yet");
+    expect(await db.socialOAuthFlow.count({ where: { businessId: id } })).toBe(0);
+    expect((await new AxeBuilder({ page }).include("main").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+    await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.getByRole("region", { name: "Publishing connections" }).screenshot({ path: "../outputs/marketingbus-access-renewal.png" });
+    await db.membership.updateMany({ where: { organizationId }, data: { role: "VIEWER" } });
+    await page.getByRole("button", { name: "Refresh connections", exact: true }).click();
+    await expect(reconnect).toHaveCount(0);
+    await expect(page.getByText("Ask a workspace owner or admin to reconnect this account.").first()).toBeVisible();
+    expect((await page.request.post(endpoint, { headers, data: { action: "begin", provider: "Facebook" } })).status()).toBe(403);
+  } finally {
+    if (organizationId) await db.organization.delete({ where: { id: organizationId } });
+    await db.user.deleteMany({ where: { email } });
+  }
 });

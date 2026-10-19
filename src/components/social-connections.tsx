@@ -50,14 +50,27 @@ export function SocialConnections({ businessId }: { businessId: string }) {
       </div>)}</div>
       <p className="muted">X and YouTube are planned destinations and are not available yet.</p>
       <p className="muted" id="disconnect-explanation">Disconnecting removes this business’s saved credentials, stops metric checks and cancels queued posts and pending connection requests for that platform. Requests already sent may still finish. Published posts, uncertain outcomes and audit history remain. This does not revoke the app in the network’s settings.</p>
-      {view.connections.length === 0 ? <p>No accounts connected for this business.</p> : <ul>{view.connections.map(account => <li key={account.id}>
-        {account.provider} · {account.label} · {account.status === "CONNECTED" && account.expiresAt && new Date(account.expiresAt) <= new Date() ? "Reconnect required" : account.status.toLowerCase()}
+      {view.connections.length === 0 ? <p>No accounts connected for this business.</p> : <ul>{view.connections.map(account => {
+        const expired = account.status === "CONNECTED" && !!account.expiresAt && Date.parse(account.expiresAt) <= Date.now();
+        const reconnect = expired || account.status === "RECONNECT_REQUIRED";
+        const expiring = account.status === "CONNECTED" && !!account.expiresAt && !expired && Date.parse(account.expiresAt) <= Date.now() + 7 * 86400000;
+        return <li key={account.id}>
+        {account.provider} · {account.label} · {reconnect ? "Reconnect required" : account.status.toLowerCase()}
+        {(reconnect || expiring) && <div>
+          <p id={`access-${account.id}`} className="muted">{reconnect
+            ? "Account access has ended. New publishing and data reads are blocked. Background cleanup removes saved credentials and cancels queued posts; requests already sent may still finish. Reconnecting does not restart cancelled posts or uncertain lookups."
+            : `Account access expires ${new Date(account.expiresAt!).toLocaleString()}. Renew before then to avoid interrupted publishing.`} Choose the same account during authorization. Previously published posts remain on the network.</p>
+          {view.canManage ? <button className="button secondary" aria-describedby={`access-${account.id}`} disabled={busy || !view.enabledProviders.includes(account.provider)}
+            onClick={() => act({ action: "begin", provider: account.provider })}>{reconnect ? "Reconnect" : "Renew access for"} {account.label}</button>
+            : <p className="muted">Ask a workspace owner or admin to reconnect this account.</p>}
+          {!view.enabledProviders.includes(account.provider) && <p className="muted">Reconnection is unavailable until platform setup is enabled.</p>}
+        </div>}
         {view.canManage && account.status !== "DISCONNECTED" && <button className="button secondary" disabled={busy} aria-describedby="disconnect-explanation" onClick={() => {
           if (window.confirm(`Disconnect ${account.label} from this business? Queued posts and pending ${account.provider} connection requests will be cancelled. Already-sent requests may still finish. Remote posts and authorization will not be removed.`))
             void act({ action: "disconnect", connectionId: account.id, authorizationVersion: account.authorizationVersion });
         }}>Disconnect {account.label}</button>}
         <SocialAccountData businessId={businessId} account={account} canManage={view.canManage} enabled={view.dataEnabledProviders?.includes(account.provider) ?? false} onChanged={reload} />
-      </li>)}</ul>}
+      </li>; })}</ul>}
       {view.flows.map(flow => <article key={flow.id} className="panel" aria-label={`${flow.provider} connection request`}>
         <h3>{flow.provider} connection request</h3>
         {flow.status === "CHOOSING" ? <>
