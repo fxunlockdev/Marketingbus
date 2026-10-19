@@ -7,6 +7,7 @@ import { sealSecret } from "../secrets";
 import { currentItem, lockBusiness, type Scope } from "../production/service";
 import { creativeSchema } from "../production/content";
 import { publicationExport } from "./image-transfer";
+import { publicationRender } from "./video-transfer";
 import { assertBrandEditor } from "../knowledge/analysis";
 import { approvedFactText, evaluateCreative } from "../production/quality";
 import {
@@ -25,6 +26,8 @@ export const socialAction = z.discriminatedUnion("action", [
       scheduledFor: z.iso.datetime(),
       timezone: z.string().min(1).max(80),
       mediaExportId: z.string().min(1).max(100).optional(),
+      videoRenderId: z.string().min(1).max(100).optional(),
+      shareToFeed: z.boolean().optional(),
     })
     .strict(),
   z
@@ -216,7 +219,10 @@ export async function manageSocial(
           throw new AppError(409, "Resolve factual checks before publishing.");
         if (input.mediaExportId && !adapters[provider]?.imagePublishingAvailable) throw new AppError(409, "Image publishing is not enabled for this destination.");
         // Each media type needs a verified export and a corresponding platform transport.
-        if (provider === "Instagram" && !input.mediaExportId || item.format !== "static")
+        if (input.videoRenderId && (!adapters[provider]?.videoPublishingAvailable || provider !== "Instagram" || !["static", "motion", "video"].includes(item.format) || input.mediaExportId))
+          throw new AppError(409, "Choose one approved final Reel for an enabled Instagram video destination.");
+        if (input.shareToFeed !== undefined && !input.videoRenderId) throw new AppError(400, "Feed placement applies only to Reels.");
+        if (!input.videoRenderId && (item.format !== "static" || provider === "Instagram" && !input.mediaExportId))
           throw new AppError(
             409,
             "This placement requires a verified media export. Copy-only publishing is available for Facebook and LinkedIn."
@@ -237,12 +243,17 @@ export async function manageSocial(
         }
         const image = input.mediaExportId ? await publicationExport(tx, scope, input.mediaExportId, revision.id) : null;
         if (image && image.row.purgeAfter <= scheduledFor) throw new AppError(409, "Schedule before this image export expires or save a new approved version.");
+        const video = input.videoRenderId ? await publicationRender(tx, scope, input.videoRenderId, revision.id) : null;
+        if (video && video.row.purgeAfter <= scheduledFor) throw new AppError(409, "Schedule before this final video expires or save a new approved version.");
         const payload = publicationPayload.parse({
           caption: creative.caption,
           channel: provider,
-          format: item.format,
-          mediaExportId: input.mediaExportId ?? null,
+          // The final approved export determines placement; a planned static creative can
+          // legitimately have both image and video work in the unified asset studio.
+          format: video ? "video" : item.format,
+          mediaExportId: input.videoRenderId ?? input.mediaExportId ?? null,
           ...(image ? { image: { sha256: image.row.sha256, bytes: image.row.bytes, width: image.dimensions[0], height: image.dimensions[1], altText: creative.headline } } : {}),
+          ...(video ? { video: { ...video.video, shareToFeed: input.shareToFeed ?? false } } : {}),
         });
         const hash = payloadHash(payload);
         const existing = await tx.socialPublication.findUnique({

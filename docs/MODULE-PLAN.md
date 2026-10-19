@@ -4,6 +4,8 @@ The target is a working multi-tenant marketing product, with only explicitly ide
 
 ## Completion rules
 
+Current Reels increment (`studio-v42-instagram-reels`): approved final portrait videos can be selected alongside images for an ordinary Instagram creative, scheduled with explicit feed placement, delivered privately, processed with bounded polling and published with a durable acknowledgement/readback journal. Exact-version approval, source rights, retention and hash checks remain required. The feature is gated pending live-account acceptance. This does not finish Facebook/LinkedIn video, Reel analytics, broader mixed-media autopilot, generated voice or production capacity/recovery. See [implementation boundary](INSTAGRAM-PUBLISHING.md#approved-reels) and [current verification evidence](BUILD-STATUS.md).
+
 Every module needs scoped persistence, role checks, usable screens, failure/recovery behavior, cost bounds where applicable, database tests, browser tests and deployment verification. Fixture transports must never be registered as production providers. Customer Connections contains publishing destinations only; AI providers are operator-managed.
 
 ## Unified creation and destination review — 19 October

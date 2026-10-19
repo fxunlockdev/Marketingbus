@@ -25,7 +25,7 @@ export async function resumeMetricChecks(scope: OAuthScope, raw: unknown, adapte
     if (!adapter || adapter.metricsAvailable === false) throw new AppError(503, "Verified post metrics are not enabled for this destination yet.");
     if (connection.status !== "CONNECTED" || connection.expiresAt && connection.expiresAt <= now) throw new AppError(409, "Reconnect this account before resuming metric checks.");
     try {
-      frozenCopy(post.payload, post.payloadHash, provider);
+      if (frozenCopy(post.payload, post.payloadHash, provider).video) throw Error("Reel metrics are not enabled.");
       openSecret(connection.encryptedToken, `social:${scope.organizationId}:${scope.businessId}:${connection.id}`);
     } catch { throw new AppError(409, "The publication snapshot or account credentials cannot be verified. Contact your operator."); }
     if (post.metricsRequestedAt && now.getTime() - post.metricsRequestedAt.getTime() < 3600000) throw new AppError(429, "Wait one hour before resuming this publication again.");

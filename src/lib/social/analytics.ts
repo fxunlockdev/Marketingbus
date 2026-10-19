@@ -148,7 +148,10 @@ export async function readSocialDashboard(scope: Scope) {
   ]);
   return {
     connections,
-    publications: publications.map(({ payload, mediaUploaded, ...post }) => ({ ...post, includesImage: !!(payload && typeof payload === "object" && !Array.isArray(payload) && typeof payload.mediaExportId === "string"), imageUploadAcknowledged: mediaUploaded })),
+    publications: publications.map(({ payload, mediaUploaded, ...post }) => {
+      const media = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+      return { ...post, includesImage: !!media.image, includesVideo: !!media.video, imageUploadAcknowledged: !!media.image && mediaUploaded, videoUploadAcknowledged: !!media.video && mediaUploaded };
+    }),
     proposals,
     summary: summarizePerformance(rows),
     window:

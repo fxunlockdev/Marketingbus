@@ -4,7 +4,7 @@ import { db } from "../db";
 import { openSecret } from "../secrets";
 import { lockBusiness } from "../production/service";
 import { creativeSchema } from "../production/content";
-import { assertPublicationImage } from "./image-transfer";
+import { assertPublicationMedia } from "./image-transfer";
 import { approvedFactText, evaluateCreative } from "../production/quality";
 import {
   metricReading,
@@ -121,11 +121,13 @@ export async function runOnePublication(adapters: SocialAdapters) {
     try {
       payload = frozenCopy(post.payload, post.payloadHash, post.connection.provider);
       const creative = creativeSchema.parse(post.revision.content);
-      if (payload.caption !== creative.caption || payload.channel !== post.revision.item.channel || payload.format !== post.revision.item.format) reason = "PAYLOAD_CHANGED";
+      const formatMatches = payload.video ? ["static", "motion", "video"].includes(post.revision.item.format) : payload.format === post.revision.item.format;
+      if (payload.caption !== creative.caption || payload.channel !== post.revision.item.channel || !formatMatches) reason = "PAYLOAD_CHANGED";
       if (!evaluateCreative(creative, { facts: approvedFactText(business) }).eligible) reason = "FACT_CHECK_FAILED";
       if (payload.mediaExportId) {
-        if (!adapters[socialProvider.parse(post.connection.provider)]?.imagePublishingAvailable) reason = "MEDIA_INTEGRATION_DISABLED";
-        await assertPublicationImage(tx, scope, post.revisionId, payload);
+        const adapter = adapters[socialProvider.parse(post.connection.provider)];
+        if (payload.video ? !adapter?.videoPublishingAvailable : !adapter?.imagePublishingAvailable) reason = "MEDIA_INTEGRATION_DISABLED";
+        await assertPublicationMedia(tx, scope, post.revisionId, payload);
       }
     } catch { reason = "PAYLOAD_INVALID"; }
     if (reason || !payload) {
@@ -192,10 +194,22 @@ export async function runOnePublication(adapters: SocialAdapters) {
             permalink: safePermalink(claimed.token.provider, receipt.permalink),
             status: "PUBLISHED",
             leaseUntil: null,
-            nextMetricsAt: adapter.metricsAvailable === false ? null : new Date(Date.now() + 3600000),
+            nextMetricsAt: claimed.payload.video || adapter.metricsAvailable === false ? null : new Date(Date.now() + 3600000),
             errorCode: null,
           },
         });
+      } else if (outcome.state === "processing") {
+        // Processing is safe to poll only after acknowledgement of a known Reel container,
+        // before any publish attempt. Never recreate the container or extend its capability.
+        const acknowledged = claimed.payload.video && claimed.token.provider === "Instagram" && fresh.mediaTransferVersion?.endsWith(":reel-v1") &&
+          fresh.mediaUploaded && /^[1-9][0-9]{0,39}$/.test(fresh.mediaExternalId ?? "") &&
+          !fresh.submissionAdapterVersion && !fresh.candidatePostId && fresh.mediaDeliveryExpiresAt;
+        const canPoll = acknowledged && fresh.attempts < 15 && fresh.mediaDeliveryExpiresAt!.getTime() > Date.now() + 60_000;
+        await tx.socialPublication.update({ where: { id: fresh.id }, data: {
+          status: canPoll ? "SCHEDULED" : "NEEDS_RECONCILIATION", leaseUntil: null,
+          ...(canPoll ? { scheduledFor: new Date(Date.now() + 60_000) } : {}),
+          errorCode: canPoll ? "MEDIA_PROCESSING" : "MEDIA_PROCESSING_REVIEW_REQUIRED",
+        } });
       } else if (outcome.state === "retryable" && fresh.attempts < 3) {
         const seconds = Math.max(
           60,
@@ -338,7 +352,7 @@ export async function reconcilePublication(publicationId: string, adapters: Soci
       }
       await tx.socialPublication.update({ where: { id: post.id }, data: {
         ...verified, permalink, status: "PUBLISHED", errorCode: null, leaseUntil: null, nextReconciliationAt: null,
-        nextMetricsAt: adapters[provider]!.metricsAvailable === false ? null : new Date(Date.now() + 3600000),
+        nextMetricsAt: payload.video || adapters[provider]!.metricsAvailable === false ? null : new Date(Date.now() + 3600000),
       } });
       await tx.auditEvent.create({ data: { ...scope, action: "SOCIAL_RECONCILED", detail: `Provider read-back confirmed publication ${post.id}. No new post submitted.` } });
       return true;
@@ -400,6 +414,7 @@ export async function runOneMetricSync(adapters: SocialAdapters) {
     )
       throw Error("Connection unavailable");
     const payload = frozenCopy(candidate.payload, candidate.payloadHash, connection.provider);
+    if (payload.video) throw Error("Verified Reel metrics are not enabled.");
     if (!candidate.publishedAt || candidate.publishedAt > new Date()) throw Error("Publication time unavailable");
     const observedConnection = connection;
     const reading = metricReading.parse(

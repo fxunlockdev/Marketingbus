@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 type Dashboard = {
   enabledProviders: string[];
   imageProviders?: string[];
+  videoProviders?: string[];
+  videoChoices?: { id: string; itemId: string; revisionVersion: number; durationMs: number; expiresAt: string; bytes: number }[];
   mediaChoices?: { id: string; itemId: string; revisionVersion: number; placement: string; expiresAt: string; bytes: number }[];
   enabledMetricProviders: string[];
   canManageMetrics: boolean;
@@ -24,6 +26,8 @@ type Dashboard = {
     errorCode: string | null;
     includesImage?: boolean;
     imageUploadAcknowledged?: boolean;
+    includesVideo?: boolean;
+    videoUploadAcknowledged?: boolean;
     reconciliationAttempts: number;
     nextReconciliationAt: string | null;
     metricsFailures: number;
@@ -58,6 +62,7 @@ export function SocialDashboard({
     id: string;
     title: string;
     channel: string;
+    format?: string;
     revisions: { version: number; status: string }[];
   }[];
 }) {
@@ -68,6 +73,9 @@ export function SocialDashboard({
     [message, setMessage] = useState("");
   const [itemId, setItem] = useState(""),
     [mediaExportId, setMediaExportId] = useState(""),
+    [videoRenderId, setVideoRenderId] = useState(""),
+    [useVideo, setUseVideo] = useState(false),
+    [shareToFeed, setShareToFeed] = useState(false),
     [connectionId, setConnection] = useState(""),
     [when, setWhen] = useState("");
   const resultRef = useRef<HTMLParagraphElement>(null);
@@ -177,6 +185,7 @@ export function SocialDashboard({
                     scheduledFor: new Date(when).toISOString(),
                     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
                     ...(mediaExportId ? { mediaExportId } : {}),
+                    ...(videoRenderId ? { videoRenderId, shareToFeed } : {}),
                   });
               }}
             >
@@ -189,6 +198,9 @@ export function SocialDashboard({
                   setItem(e.target.value);
                   setConnection("");
                   setMediaExportId("");
+                  setVideoRenderId("");
+                  setShareToFeed(false);
+                  setUseVideo(["video", "motion"].includes(approved.find(i => i.id === e.target.value)?.format ?? ""));
                 }}
               >
                 <option value="">Choose a creative</option>
@@ -198,7 +210,26 @@ export function SocialDashboard({
                   </option>
                 ))}
               </select>
-              {selected && <div>
+              {selected?.channel === "Instagram" && <div>
+                <label htmlFor="social-media-kind">Publishing media</label>
+                <select id="social-media-kind" value={useVideo ? "video" : "image"} aria-describedby="social-media-kind-help" onChange={e => { setUseVideo(e.target.value === "video"); setMediaExportId(""); setVideoRenderId(""); setShareToFeed(false); }}>
+                  <option value="image" disabled={!!selected.format && selected.format !== "static"}>Approved image</option>
+                  <option value="video">Approved Reel</option>
+                </select>
+                <p id="social-media-kind-help">Choose the reviewed output for this creative. One approved copy version can be published once per account; changing media after saving requires a new approved version.</p>
+              </div>}
+              {selected && useVideo && <div>
+                <label htmlFor="social-video">Approved final video</label>
+                <select id="social-video" required aria-describedby="social-video-help" value={videoRenderId} disabled={!data.videoProviders?.includes(selected.channel)} onChange={e => setVideoRenderId(e.target.value)}>
+                  <option value="">Choose an approved Reel</option>
+                  {(data.videoChoices ?? []).filter(video => video.itemId === selected.id && video.revisionVersion === selected.revisions[0].version).map(video => <option key={video.id} value={video.id}>{video.durationMs / 1000} seconds · {video.id.slice(-6)} · expires {new Date(video.expiresAt).toLocaleDateString()}</option>)}
+                </select>
+                <p id="social-video-help">{data.videoProviders?.includes(selected.channel) ? "Only reviewed final portrait videos for this exact copy version are listed: 3–30 seconds, up to 20 MB. Schedule before the export expires. Meta receives a temporary, download-limited link; your storage bucket stays private." : "Video publishing is not activated for this destination. No video will be sent."} Changing approved work cancels queued publication. Published copies must be managed on the network.</p>
+                <label htmlFor="social-share-feed"><input id="social-share-feed" type="checkbox" checked={shareToFeed} onChange={e => setShareToFeed(e.target.checked)} aria-describedby="social-feed-help" /> Also share this Reel to the Instagram feed</label>
+                <p id="social-feed-help">Unchecked means the Reels tab only. This choice is saved with your approved publication.</p>
+                {videoRenderId && <a href={`/api/businesses/${businessId}/video/${encodeURIComponent(videoRenderId)}?download=true`} target="_blank" rel="noopener noreferrer">Download selected approved video</a>}
+              </div>}
+              {selected && !useVideo && <div>
                 <label htmlFor="social-image">Approved image export</label>
                 <select id="social-image" aria-describedby="social-image-help" required={selected.channel === "Instagram"} value={mediaExportId} disabled={!data.imageProviders?.includes(selected.channel)} onChange={e => setMediaExportId(e.target.value)}>
                   <option value="">{selected.channel === "Instagram" ? "Choose an approved image (required)" : "Text only"}</option>
@@ -240,7 +271,7 @@ export function SocialDashboard({
               />
               <button
                 className="button dark"
-                disabled={busy || !connectionId || !selected}
+                disabled={busy || !connectionId || !selected || useVideo && (!videoRenderId || !data.videoProviders?.includes(selected.channel))}
               >
                 Schedule social publication
               </button>
@@ -262,6 +293,7 @@ export function SocialDashboard({
                 </p>
                 {p.errorCode && <p>{p.errorCode.replaceAll("_", " ")}</p>}
                 {p.includesImage && <p>Includes an approved image. {p.imageUploadAcknowledged ? "Image upload acknowledged by the destination; publication is confirmed only when a provider post ID is shown below." : "Image upload has not been acknowledged. No completed post is implied."}</p>}
+                {p.includesVideo && <p>Includes an approved Reel. {p.videoUploadAcknowledged ? "Video container acknowledged; processing is not proof of publication. Confirmation requires the verified provider post ID below." : "Video container has not been acknowledged. No completed post is implied."} Verified Reel metrics are not available yet.</p>}
                 {p.status === "NEEDS_RECONCILIATION" && <div>
                   <p>Publication is unconfirmed. This post will not be sent again automatically.</p>
                   <p>Lookup checks: {p.reconciliationAttempts}. {p.nextReconciliationAt
@@ -287,7 +319,7 @@ export function SocialDashboard({
                     {p.nextMetricsAt ? `Metrics refresh is delayed. Next eligible check: ${new Date(p.nextMetricsAt).toLocaleString()}.` : "Automatic metric checks have stopped. Review account access before resuming."} Previously observed data is retained.
                   </p>
                 )}
-                {p.status === "PUBLISHED" && !p.metricsInvalidatedAt && !p.nextMetricsAt && p.metricsFailures > 0 && <div>
+                {p.status === "PUBLISHED" && !p.includesVideo && !p.metricsInvalidatedAt && !p.nextMetricsAt && p.metricsFailures > 0 && <div>
                   <p>Recovery only reads existing post metrics; it does not repost content, spend creative credits or change approvals. Limited to posts from the last 30 days, once per post per hour and six requests per business per UTC day.</p>
                   {!data.canManageMetrics ? <p>A workspace owner or admin can resume checks.</p> : !data.enabledMetricProviders.includes(p.connection.provider) ? <p>Verified post metrics are not enabled for this destination yet.</p> : <button className="button" disabled={busy} onClick={() => {
                     if (window.confirm("Resume read-only metric checks for this existing post? No content will be posted and no credits will be spent.")) void act("social/metrics", { publicationId: p.id, expectedRequestedAt: p.metricsRequestedAt });

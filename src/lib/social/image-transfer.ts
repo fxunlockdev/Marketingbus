@@ -10,6 +10,8 @@ import type { Scope } from "../production/service";
 import { assertNoBlockingComments } from "../workflows/approvals";
 import { publicationImage, type PublicationPayload } from "./contracts";
 import { withSubmissionContext, type SubmissionContext } from "./submission-journal";
+import { assertPublicationVideo } from "./video-transfer";
+import { MAX_VIDEO_BYTES } from "../video/limits";
 
 export const linkedInImageId = z.string().regex(/^urn:li:image:[A-Za-z0-9_-]{1,200}$/);
 export const facebookImageId = z.string().regex(/^[1-9][0-9]{0,39}$/);
@@ -35,6 +37,9 @@ export async function assertPublicationImage(client: Prisma.TransactionClient | 
   if (z.object({ headline: z.literal(payload.image.altText) }).safeParse(revision.content).success === false) throw new AppError(409, "The approved image description changed.");
   publicationImage.parse(payload.image);
   return row;
+}
+export function assertPublicationMedia(client: Prisma.TransactionClient | typeof db, scope: Scope, revisionId: string, payload: PublicationPayload) {
+  return payload.video ? assertPublicationVideo(client, scope, revisionId, payload) : assertPublicationImage(client, scope, revisionId, payload);
 }
 export async function listPublicationImages(scope: Scope) {
   const candidates = await db.compositionExport.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId, status: "READY", purgeAfter: { gt: new Date() }, composition: { status: "APPROVED" } },
@@ -62,11 +67,12 @@ export interface SocialImageTransfer {
   uploaded(context: SubmissionContext, externalId: string): Promise<void>;
 }
 // Separate fences for media registration and publication. Unknown outcomes never repeat writes.
-export function createImageTransfer(store: () => AssetStore = assetStore): SocialImageTransfer {
+export function createImageTransfer(store: () => AssetStore = () => assetStore(MAX_VIDEO_BYTES)): SocialImageTransfer {
   const current = async (tx: Prisma.TransactionClient, post: Parameters<Parameters<typeof withSubmissionContext>[1]>[1], ctx: SubmissionContext) => {
     if (post.status !== "SUBMITTING" || !post.leaseUntil || post.leaseUntil <= new Date() || post.submissionAdapterVersion) throw new AppError(409, "Image transfer ownership changed.");
     if (post.mediaTransferVersion && post.mediaTransferVersion !== ctx.adapterVersion) throw new AppError(409, "Image transfer configuration changed.");
-    return assertPublicationImage(tx, { businessId: post.businessId, organizationId: post.organizationId, actorId: "social-media-worker" }, post.revisionId, ctx.payload);
+    if (ctx.payload.video && process.env.INSTAGRAM_REELS_ENABLED !== "true") throw new AppError(503, "Reels publishing is paused.");
+    return assertPublicationMedia(tx, { businessId: post.businessId, organizationId: post.organizationId, actorId: "social-media-worker" }, post.revisionId, ctx.payload);
   };
   return {
     inspect: ctx => withSubmissionContext(ctx, async (_tx, post) => {
@@ -77,7 +83,8 @@ export function createImageTransfer(store: () => AssetStore = assetStore): Socia
     read: async ctx => {
       const row = await withSubmissionContext(ctx, (tx, post) => current(tx, post, ctx));
       const bytes = await store().get(row.objectKey);
-      if (bytes.length !== ctx.payload.image?.bytes || createHash("sha256").update(bytes).digest("hex") !== ctx.payload.image.sha256) throw new AppError(409, "Stored publication image failed integrity checks.");
+      const media = ctx.payload.video ?? ctx.payload.image;
+      if (!media || bytes.length !== media.bytes || createHash("sha256").update(bytes).digest("hex") !== media.sha256) throw new AppError(409, "Stored publication media failed integrity checks.");
       await withSubmissionContext(ctx, (tx, post) => current(tx, post, ctx));
       return bytes;
     },

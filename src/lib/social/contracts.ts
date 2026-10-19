@@ -13,6 +13,11 @@ export const publicationImage = z.object({
   // Derived from the approved headline, not unreviewed new claims.
   altText: z.string().min(1).max(160),
 }).strict();
+export const publicationVideo = z.object({
+  sha256: z.string().regex(/^[a-f0-9]{64}$/), bytes: z.number().int().min(1).max(20 * 1024 * 1024),
+  width: z.literal(720), height: z.literal(1280), durationMs: z.number().int().min(3000).max(30000),
+  shareToFeed: z.boolean(),
+}).strict();
 export const publicationPayload = z
   .object({
     caption: z.string().min(1).max(3000),
@@ -21,10 +26,12 @@ export const publicationPayload = z
     // A private, immutable export ID, never a customer-supplied remote URL.
     mediaExportId: z.string().min(1).max(100).nullable(),
     image: publicationImage.optional(),
+    video: publicationVideo.optional(),
   })
-  .strict().refine(p => p.mediaExportId === null ? p.image === undefined : !!p.image && p.format === "static", "Unsupported media binding")
+  .strict().refine(p => p.mediaExportId === null ? p.image === undefined && p.video === undefined :
+    !!p.image && !p.video && p.format === "static" || !!p.video && !p.image && p.format === "video" && p.channel === "Instagram", "Unsupported media binding")
   .refine(p => p.channel !== "Facebook" || !p.image || p.image.bytes <= 4 * 1024 * 1024, "Facebook image exports must be 4 MB or smaller.")
-  .refine(p => p.channel !== "Instagram" || p.caption.length <= 2200 && p.image?.width === 1080 && [1080, 1350].includes(p.image.height), "Instagram requires a square or portrait approved image and a caption of 2,200 characters or fewer.");
+  .refine(p => p.channel !== "Instagram" || p.caption.length <= 2200 && (!!p.video || p.image?.width === 1080 && [1080, 1350].includes(p.image.height)), "Instagram requires an approved image or Reel and a caption of 2,200 characters or fewer.");
 export type PublicationPayload = z.infer<typeof publicationPayload>;
 export const publishedReceipt = z
   .object({
@@ -66,6 +73,7 @@ export type Account = {
 };
 export type PublishOutcome =
   | { state: "published"; receipt: PublishedReceipt }
+  | { state: "processing"; retryAfterSeconds: number }
   | {
       state: "retryable";
       code: "RATE_LIMIT" | "PROVIDER_UNAVAILABLE";
@@ -78,6 +86,7 @@ export type PublishOutcome =
   | { state: "uncertain" };
 export interface SocialAdapter {
   imagePublishingAvailable?: boolean;
+  videoPublishingAvailable?: boolean;
   // False means no certified mapping: do not schedule polling or fabricate empty observations.
   metricsAvailable?: boolean;
   // Must honor aborts and bound response size. Retryable means definitively NOT submitted.

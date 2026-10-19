@@ -96,6 +96,6 @@ describe("Instagram approved single-image publishing", () => {
     vi.stubEnv("INSTAGRAM_PUBLISHING_ENABLED", "false");
     const response = await GET(new Request("https://studio.marketingbus.com/"), { params: Promise.resolve({ publicationId: "missing", token: "a".repeat(64) }) });
     expect(response.status).toBe(404); expect(response.headers.get("cache-control")).toContain("no-store"); expect(await response.text()).toBe("");
-    expect(HEAD().status).toBe(404); expect(POST().status).toBe(405);
+    expect((await HEAD(new Request("https://studio.marketingbus.com/", { method: "HEAD" }), { params: Promise.resolve({ publicationId: "missing", token: "a".repeat(64) }) })).status).toBe(404); expect(POST().status).toBe(405);
   });
 });

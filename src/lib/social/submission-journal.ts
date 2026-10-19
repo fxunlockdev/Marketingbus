@@ -2,7 +2,7 @@ import { db } from "../db";
 import { openSecret } from "../secrets";
 import { lockBusiness } from "../production/service";
 import { frozenCopy, payloadHash, validCandidateId } from "./integrity";
-import { assertPublicationImage } from "./image-transfer";
+import { assertPublicationMedia } from "./image-transfer";
 import type { Account, PublicationPayload } from "./contracts";
 export type SubmissionContext = { requestId: string; account: Account; payload: PublicationPayload; adapterVersion: string };
 export interface SubmissionJournal {
@@ -31,7 +31,8 @@ export const submissionJournal: SubmissionJournal = {
     if (post.submissionAdapterVersion || post.status !== "SUBMITTING" || !post.leaseUntil || post.leaseUntil <= new Date()) return false;
     if (context.payload.mediaExportId) {
       if (post.mediaTransferVersion !== context.adapterVersion || !post.mediaExternalId || !post.mediaUploaded) return false;
-      await assertPublicationImage(tx, { businessId: post.businessId, organizationId: post.organizationId, actorId: "social-transport" }, post.revisionId, context.payload);
+      if (context.payload.video && process.env.INSTAGRAM_REELS_ENABLED !== "true") return false;
+      await assertPublicationMedia(tx, { businessId: post.businessId, organizationId: post.organizationId, actorId: "social-transport" }, post.revisionId, context.payload);
     }
     await tx.socialPublication.update({ where: { id: post.id }, data: { submissionAdapterVersion: context.adapterVersion } });
     return true;
