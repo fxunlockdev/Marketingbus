@@ -64,7 +64,7 @@ test("one asset studio preserves format drafts and reviews exact media by destin
     await page.screenshot({ path: "../outputs/marketingbus-unified-assets.png", fullPage: true });
     await page.getByRole("button", { name: "Review by platform", exact: true }).click();
     await filter.getByRole("button", { name: "Facebook", exact: true }).click();
-    await expect(page.getByText("No saved work for Facebook", { exact: false })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Nothing matches this view yet.", exact: true })).toBeVisible();
     await filter.getByRole("button", { name: "LinkedIn", exact: true }).click();
     await expect(page.getByRole("article")).toHaveCount(1);
     await expect(page.getByRole("heading", { name: "LinkedIn consultation", exact: true })).toBeVisible();

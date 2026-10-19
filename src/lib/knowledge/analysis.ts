@@ -38,7 +38,7 @@ export async function readBrandAnalyses(scope: Scope) {
   if (!member) throw new AppError(404, "Workspace not found.");
   const business = await db.business.findFirst({ where: { id: scope.businessId, organizationId: scope.organizationId } });
   if (!business) throw new AppError(404, "Business not found.");
-  const rows = await db.brandAnalysis.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId }, orderBy: { createdAt: "desc" }, take: 20 });
+  const rows = await db.brandAnalysis.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId, purpose: "BRAND" }, orderBy: { createdAt: "desc" }, take: 20 });
   const current = Object.fromEntries(suggestionField.options.map(key => [key, business[key]]));
   return { current, version: business.version, canEdit: ["OWNER", "ADMIN", "EDITOR"].includes(member.role), analyses: rows.map(row => ({
     id: row.id, status: row.status, credits: row.credits, expiresAt: row.expiresAt, brandVersion: row.brandVersion,
@@ -65,14 +65,14 @@ export async function manageBrandAnalysis(scope: Scope, raw: unknown) {
       const refs = sourceRefs.parse(evidence.map(({ id, sha256 }) => ({ id, sha256 })));
       const prompt = analysisPrompt(business, evidence);
       const route = selectRoute("initial", Buffer.byteLength(analysisSystem + prompt + JSON.stringify(suggestionsJsonSchema)));
-      await tx.brandAnalysis.updateMany({ where: { businessId: scope.businessId, status: "OFFERED" }, data: { status: "CANCELLED" } });
+      await tx.brandAnalysis.updateMany({ where: { businessId: scope.businessId, purpose: "BRAND", status: "OFFERED" }, data: { status: "CANCELLED" } });
       const row = await tx.brandAnalysis.create({ data: { ...scope, brandVersion: business.version, sources: refs, route,
         configurationHash: analysisConfigurationHash(), credits: route.credits, supplierCeilingMicros: route.supplierCeilingMicros,
         expiresAt: new Date(Date.now() + 600000) } });
       await audit("BRAND_ANALYSIS_QUOTED", "Evidence-bound analysis quoted. No provider call or credit reservation.");
       return { ok: true, analysisId: row.id };
     }
-    const row = await tx.brandAnalysis.findFirst({ where: { id: input.analysisId, businessId: scope.businessId, organizationId: scope.organizationId } });
+    const row = await tx.brandAnalysis.findFirst({ where: { id: input.analysisId, businessId: scope.businessId, organizationId: scope.organizationId, purpose: "BRAND" } });
     if (!row) throw new AppError(404, "Analysis not found.");
     if (input.action === "cancel") {
       if (["CANCELLED", "STALE"].includes(row.status)) return { ok: true };

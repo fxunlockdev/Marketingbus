@@ -1,4 +1,5 @@
 "use client";
+import { DestinationCatalogue } from "./destination-catalogue";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -880,7 +881,7 @@ export function Studio({
                     title="Publishing destinations"
                     description="Your business's social accounts for publishing approved content and tracking performance."
                   />
-                  {business ? <SocialConnections key={business.id} businessId={business.id} /> : <p>Create or select a business to manage its publishing destinations.</p>}
+                  {business ? <SocialConnections key={business.id} businessId={business.id} /> : <DestinationCatalogue onSetup={() => { setEditing("new"); setError(""); }} />}
                 </>
               )}
               {page === "Credits" && (

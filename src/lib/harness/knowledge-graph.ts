@@ -23,7 +23,7 @@ export async function businessKnowledge(client: GraphClient, scope: Scope, task:
   // These functions use only the GraphClient delegates; no unchecked external data is accepted.
   const { productionMemories } = await import("../social/learning-evidence");
   const memories = await productionMemories(client as Prisma.TransactionClient, scope, business.version);
-  const relevant = memories.filter(m => m.kind === "EXPLICIT_PREFERENCE" || task === "copy" && m.kind === "APPROVED_SKILL" && ruleId.options.some(id => m.text === ruleText(id, channel)) || task === "planning" && m.kind === "APPROVED_EXPERIMENT");
+  const relevant = memories.filter(m => m.kind === "EXPLICIT_PREFERENCE" || m.kind === "REVIEWED_PROCEDURE" && m.text.startsWith(`Reviewed creative procedure [${task} / ${channel}]\n`) || task === "copy" && m.kind === "APPROVED_SKILL" && ruleId.options.some(id => m.text === ruleText(id, channel)) || task === "planning" && m.kind === "APPROVED_EXPERIMENT");
   // Retain all applicable bounded preferences: silently dropping a customer's rule is unsafe.
   if (relevant.length > 30 || relevant.some(m => m.text.length > 1000) || relevant.reduce((n, m) => n + m.text.length, 0) > 6000) throw new AppError(409, "Consolidate saved business preferences before generating. Knowledge exceeds the safe context budget.");
   const root = `business:${business.id}:${business.version}`;
@@ -44,9 +44,9 @@ export async function businessKnowledge(client: GraphClient, scope: Scope, task:
     const id = `fact:${field}:${digest(value)}`;
     nodes.push({ id, kind: "fact", text: `Confirmed ${field}; see approved business brief.` }); edges.push({ from: root, to: id, relation: "HAS_FACT" });
   }
-  const proposals = await client.learningProposal.findMany({ where: { organizationId: scope.organizationId, businessId: scope.businessId, brandVersion: business.version, memoryId: { in: relevant.map(m => m.id) }, status: { in: ["SKILL_ACTIVE", "PROMOTED"] } }, orderBy: { id: "asc" }, take: 21 });
+  const proposals = await client.learningProposal.findMany({ where: { organizationId: scope.organizationId, businessId: scope.businessId, brandVersion: business.version, memoryId: { in: relevant.map(m => m.id) }, status: { in: ["SKILL_ACTIVE", "PROCEDURE_ACTIVE", "PROMOTED"] } }, orderBy: { id: "asc" }, take: 33 });
   for (const memory of relevant) {
-    const kind = memory.kind === "APPROVED_SKILL" ? "skill" : memory.kind === "APPROVED_EXPERIMENT" ? "experiment" : "preference";
+    const kind = ["APPROVED_SKILL", "REVIEWED_PROCEDURE"].includes(memory.kind) ? "skill" : memory.kind === "APPROVED_EXPERIMENT" ? "experiment" : "preference";
     const id = `memory:${memory.id}`;
     nodes.push({ id, kind, text: memory.text }); edges.push({ from: root, to: id, relation: kind === "skill" ? "USES_SKILL" : kind === "experiment" ? "TESTS" : "PREFERS" });
     const proposal = proposals.find(p => p.memoryId === memory.id);

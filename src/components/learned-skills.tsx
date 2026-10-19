@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { CreativeProcedures } from "./creative-procedures";
 type Skill = { id: string; instruction: string; status: string; valid: boolean; channel: string; examples: number };
 export function LearnedSkills({ businessId }: { businessId: string }) {
   const [data, setData] = useState<{ canEdit: boolean; skills: Skill[] } | null>(null);
@@ -20,7 +21,7 @@ export function LearnedSkills({ businessId }: { businessId: string }) {
     } catch (e) { setError(e instanceof Error ? e.message : "Skill update failed."); setTimeout(() => alert.current?.focus(), 0); }
     finally { setBusy(false); }
   }
-  return <section className="panel" aria-labelledby="learned-skills-heading" aria-busy={busy}>
+  return <><section className="panel" aria-labelledby="learned-skills-heading" aria-busy={busy}>
     <h2 id="learned-skills-heading">Skills learned from your corrections</h2>
     <p>Review → approved correction → reusable rule → your activation → checks on future copy. Rules stay with this business and destination. No extra AI charge.</p>
     <p>Currently detects repeated requests for no hashtags, no emoji and shorter captions (80 words maximum). Two corrected, approved creatives are required. This is a checked preference—not proof of better marketing performance. Other feedback can still be saved as an explicit preference above.</p>
@@ -40,5 +41,5 @@ export function LearnedSkills({ businessId }: { businessId: string }) {
         {!skill.valid && skill.status === "SKILL_PROPOSED" && <p>Activation is unavailable because supporting examples changed or expired.</p>}
       </article>)}
     </>}
-  </section>;
+  </section><CreativeProcedures key={businessId} businessId={businessId} /></>;
 }

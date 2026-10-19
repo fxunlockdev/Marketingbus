@@ -14,6 +14,7 @@ import { purgeCompositionExports } from "../src/lib/composition/exports";
 import { assetStore } from "../src/lib/assets/storage";
 import { runOneSourceJob } from "../src/lib/knowledge/worker";
 import { runOneBrandAnalysis, recoverBrandAnalysisLeases } from "../src/lib/knowledge/analysis-worker";
+import { runOneProcedureReflection } from "../src/lib/harness/procedure-worker";
 import { runOneImage, recoverImageLeases } from "../src/lib/images/worker";
 import { runOneMotion, recoverMotionLeases, purgeMotion } from "../src/lib/video/worker";
 import { videoStore } from "../src/lib/video/service";
@@ -39,6 +40,7 @@ const groups: WorkerGroup[] = [{ name: "production", steps: [
   { name: "weekly-image", enabled: paid => paid, run: runOneWeeklyImage },
   { name: "weekly-video", enabled: paid => paid, run: runOneWeeklyVideo },
   { name: "brand", enabled: paid => paid, run: runOneBrandAnalysis },
+  { name: "reflection", enabled: paid => paid, run: runOneProcedureReflection },
   { name: "image", enabled: paid => paid, run: runOneImage },
   { name: "shot", run: runOneShotGeneration },
   { name: "clip", enabled: () => process.env.MOTION_RENDERING_ENABLED === "true", run: runOneClip },

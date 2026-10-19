@@ -8,6 +8,7 @@ import { requirePilotInvitation } from "@/lib/pilot-access";
 import { passwordSchema, tokenSchema } from "@/lib/identity/service";
 import { verifyLoginFactor } from "@/lib/identity/mfa";
 import { registerInvitedUser } from "@/lib/identity/teams";
+import { applyPilotCredit } from "@/lib/billing/pilot-credit";
 const credentials = z.object({ email: z.email().max(254).transform(v=>v.toLowerCase()), password: z.string().min(12).max(64), name: z.string().trim().min(2).max(80).optional(), invitationCode: z.string().max(128).optional(), teamInvitationToken: tokenSchema.optional(), code: z.string().max(64).optional() }).strict();
 export async function POST(request: Request, context: { params: Promise<{ action: string }> }) {
   return api(async () => {
@@ -40,6 +41,9 @@ export async function POST(request: Request, context: { params: Promise<{ action
     const encoded = user?.passwordHash ?? "$2b$12$OMhSnhGn5b4/70.mTSv32ez0qTuasoghWtlEMhCPuDbO0xYNDfxZy";
     if (!await compare(input.password,encoded) || !user) throw new AppError(401,"Email or password is incorrect.");
     const version = await verifyLoginFactor(user.id, user.authVersion, input.code);
+    // Allocations are optional operator configuration, never public signup gifts.
+    // Misconfiguration must not lock an otherwise valid customer out of login.
+    try { await applyPilotCredit(user.id, version); } catch { console.error("Pilot allocation unavailable; account login remains available."); }
     await startSession(user.id, version); return { ok:true };
   });
 }

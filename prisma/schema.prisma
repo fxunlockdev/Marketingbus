@@ -183,6 +183,7 @@ model KnowledgeSource {
 // Source bodies are not copied here. Hashes bind proposals to the reviewed evidence.
 model BrandAnalysis {
   id String @id @default(cuid())
+  purpose String @default("BRAND")
   businessId String
   organizationId String
   actorId String

@@ -38,6 +38,8 @@ Existing observational performance experiments are separate and reversible. Thei
 
 ## Central system still required to meet the original request
 
+Update, 20 October: the v53 increment implements bounded reasoning-provider reflection, exact-source proposals, explicit activation/replacement/retirement and task/channel-specific recall for copy and written image/video direction. See CREATIVE-PROCEDURES.md. The following original gap list remains a scope reference, not a claim that these newly implemented pieces are still absent. Rendered-media interpretation, automatic semantic evaluation and measured creative improvement remain unverified or unimplemented.
+
 1. A generic, bounded reflection job over redacted review/production episodes; use the approved reasoning provider, existing spend reservation and no automatic retry after uncertain calls.
 2. Structured skill proposals with scenario/trigger, reusable instruction, exact evidence, limitations and expected checks—not unrestricted executable files or copied transcripts.
 3. Business-scoped, immutable skill revisions and explicit merge/supersession links; reconcile contradictory lessons. Never overwrite supplied source packs or share client learning globally by default.

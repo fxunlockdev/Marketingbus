@@ -9,7 +9,7 @@ import { analysisPrompt, analysisSystem, suggestionsJsonSchema, validateSuggesti
 
 export async function runOneBrandAnalysis(reasoner: typeof reason = reason) {
   const claimed = await db.$transaction(async tx => {
-    const rows = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "BrandAnalysis" WHERE status='QUEUED' ORDER BY "createdAt" FOR UPDATE SKIP LOCKED LIMIT 1`;
+    const rows = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "BrandAnalysis" WHERE status='QUEUED' AND purpose='BRAND' ORDER BY "createdAt" FOR UPDATE SKIP LOCKED LIMIT 1`;
     if (!rows[0]) return null;
     return tx.brandAnalysis.update({ where: { id: rows[0].id }, data: { status: "RUNNING", leaseUntil: new Date(Date.now() + 150000) } });
   });

@@ -23,7 +23,7 @@ Retain approved assets and revise only the changed component. A caption change m
 
 Use the exact schemas in `.env.example` and the relevant module operations documents; do not guess model prices, account IDs or provider versions. AI keys belong to the operator, not customer Connections. Claude and Gemini are not required for the latest OpenAI + Higgsfield pilot policy. AutoHarness itself does not provide an API key or free model access.
 
-The business knowledge graph uses the existing PostgreSQL database. There is **no Graphiti key, graph database or additional service to add**. It recalls approved knowledge into copy/image/video requests and retains task-specific evidence. General semantic skill learning remains separate engineering work; see BUSINESS-KNOWLEDGE.md.
+The business knowledge graph uses the existing PostgreSQL database. There is **no Graphiti key, graph database or additional service to add**. It recalls approved knowledge into copy/image/video requests and retains task-specific evidence. v53 adds opt-in, credit-quoted reflection over corrected and approved work, with source checks and explicit human activation. Written visual-direction lessons are not pixel/video evaluation, and live-provider reflection acceptance remains outstanding. See CREATIVE-PROCEDURES.md and BUSINESS-KNOWLEDGE.md.
 
 ## Non-API requirements
 

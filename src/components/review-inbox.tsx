@@ -15,6 +15,7 @@ export function ReviewInbox({ business, planId, items, readOnly, busy, post, onO
 }) {
   const router = useRouter();
   const [channel, setChannel] = useState("all"), [media, setMedia] = useState<ReviewMedia | null>(null);
+  const [format, setFormat] = useState("all");
   const [loading, setLoading] = useState(false), [error, setError] = useState(""), [refresh, setRefresh] = useState(0);
   const [notice, setNotice] = useState("");
   const outcome = useRef<HTMLParagraphElement>(null);
@@ -35,7 +36,7 @@ export function ReviewInbox({ business, planId, items, readOnly, busy, post, onO
   }, [business.id, planId, sourceVersion, refresh]);
   const channels = [...new Set([...business.channels, ...items.map(i => i.channel)])];
   const reviewable = items.filter(i => i.revisions.length || media?.items.some(m => m.itemId === i.id && (m.image || m.composition || m.video)));
-  const visible = reviewable.filter(i => channel === "all" || i.channel === channel);
+  const visible = reviewable.filter(i => (channel === "all" || i.channel === channel) && (format === "all" || i.format === format));
   return <div className="production-list">
     <section className="panel" aria-label="Review destinations">
       <h2>Review by publishing destination</h2>
@@ -43,12 +44,15 @@ export function ReviewInbox({ business, planId, items, readOnly, busy, post, onO
       <div className="tag-row review-platform-filter" role="group" aria-label="Filter review by platform">
         {["all", ...channels].map(value => <button type="button" key={value} className={`button ${channel === value ? "dark" : "secondary"}`} aria-pressed={channel === value} aria-label={value === "all" ? "All platforms" : value} onClick={() => setChannel(value)}>{value === "all" ? "All platforms" : value} <span aria-hidden="true">({value === "all" ? reviewable.length : reviewable.filter(i => i.channel === value).length})</span></button>)}
       </div>
+      <div className="tag-row review-platform-filter" role="group" aria-label="Filter review by format">
+        {[{ value: "all", label: "All formats" }, { value: "static", label: "Images & posts" }, { value: "motion", label: "Video & motion" }].map(f => <button type="button" key={f.value} className={`button ${format === f.value ? "dark" : "secondary"}`} aria-pressed={format === f.value} onClick={() => setFormat(f.value)}>{f.label}</button>)}
+      </div>
       <p role="status">{loading ? "Loading saved media…" : `${visible.length} creative${visible.length === 1 ? "" : "s"} shown${channel === "all" ? " across all platforms" : ` for ${channel}`}.`}</p>
       <p role="alert" className="error">{error}</p>
       <p ref={outcome} tabIndex={-1} role="status">{notice}</p>
       <button className="text-button" type="button" disabled={loading || !planId} onClick={() => setRefresh(v => v + 1)}>Refresh saved media</button>
     </section>
-    {!visible.length && !loading && <section className="panel"><h2>Nothing to review here yet.</h2><p>{channel === "all" ? "Produced copy, saved layouts and storyboards will appear here. A planning outline is not a finished creative." : `No saved work for ${channel} in the selected plan. Choose another platform or create assets for a planned creative.`}</p></section>}
+    {!visible.length && !loading && <section className="panel"><h2>Nothing matches this view yet.</h2><p>Choose another platform or format, or create assets for a planned creative. Produced copy, saved layouts and storyboards appear here; a planning outline is not a finished creative.</p>{(channel !== "all" || format !== "all") && <button className="button secondary" onClick={() => { setChannel("all"); setFormat("all"); }}>Show all creatives</button>}</section>}
     {visible.map(item => {
       const row = media?.items.find(m => m.itemId === item.id);
       const copyChanged = !!row && row.copyRevisionId !== (item.revisions[0]?.id ?? null);
