@@ -1,5 +1,11 @@
 # Acceptance ledger — 19 October 2026
 
+## 20 October — learned-skill replacement at memory capacity
+
+Implemented a transactional capacity correction: replacing an active deterministic copy rule can reuse that rule's scoped memory slot at the 100-record boundary. Existing explicit preferences are never evicted. Invalid evidence, missing/wrong-kind/foreign memory pointers and full capacity without a replacement remain fail-closed; retirement and audit roll back on failure. The existing business lock serializes concurrent activation. No migration, new dependency, provider request, paid infrastructure or larger generation context is introduced.
+
+The regression first reproduced two failures on the old implementation (full-capacity replacement and concurrent activation); the corrected focused run passed 35 tests across learned skills, semantic procedures and knowledge graph suites. With further new-rule capacity and evidence-invalidation checks, full local regression passes **1,914 tests across 89 suites with no skips**. Production build/type checking and production-dependency audit (zero reported vulnerabilities) pass. An initial build caught a test-fixture TypeScript narrowing error, corrected before the passing build. The extended browser journey passes against isolated real private storage: full-capacity activation, preserved preferences, unchanged context-budget denial, retirement, graph provenance, anonymous/viewer restrictions, mobile width and automated accessibility. Temporary storage/TLS resources were removed. No production fixture or external-service call was used. This increment is not yet deployed or live-verified and does not complete the remaining learning/production modules.
+
 ## 20 October — native Instagram observation learning
 
 Implemented a separate native-view policy connecting retained Instagram feed/Reel observations to human-reviewed, reversible planning experiments. Exact evidence is revalidated before promotion and recall; metrics are never relabelled as impressions. The wording guidance keeps the difference between feed displays and Reel plays explicit. No new model calls, infrastructure service, migration or provider activation is introduced. [Policy and remaining boundaries](NATIVE-VIEW-LEARNING.md).

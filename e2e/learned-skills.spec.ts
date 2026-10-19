@@ -26,6 +26,23 @@ test("feedback skills can be reviewed, activated and retired without a model cal
   await panel.getByRole("button", { name: "Activate this rule" }).click();
   await expect(panel.getByRole("heading", { name: "LinkedIn · Active", exact: true })).toBeVisible();
   expect(await db.memory.count({ where: { businessId: id, kind: "APPROVED_SKILL" } })).toBe(1);
+  // Persisted replacement at the memory boundary: browser activation must not
+  // demand that the customer delete an unrelated preference to make room.
+  const previous = await db.learningProposal.findFirstOrThrow({ where: { businessId: id, status: "SKILL_ACTIVE" } });
+  await db.learningProposal.create({ data: { businessId: id, organizationId, brandVersion: 1,
+   hypothesis: previous.hypothesis, evidence: previous.evidence!, status: "SKILL_PROPOSED" } });
+  await db.memory.createMany({ data: Array.from({ length: 99 }, (_, i) => ({ businessId: id, organizationId: business.organizationId,
+   kind: "EXPLICIT_PREFERENCE", text: `Preserve customer preference ${i}` })) });
+  await page.reload(); await page.getByRole("button", { name: "Memory", exact: true }).click();
+  await panel.getByRole("button", { name: "Activate this rule" }).click();
+  await expect(panel.getByRole("heading", { name: "LinkedIn · Active", exact: true })).toHaveCount(1);
+  await expect(panel.getByRole("heading", { name: "LinkedIn · Retired", exact: true })).toHaveCount(1);
+  expect(await db.memory.count({ where: { businessId: id } })).toBe(100);
+  expect(await db.memory.findUnique({ where: { id: previous.memoryId! } })).toBeNull();
+  expect(await db.memory.count({ where: { businessId: id, kind: "EXPLICIT_PREFERENCE" } })).toBe(99);
+  // Storage capacity is not a larger generation context allowance.
+  expect((await page.request.get(`/api/businesses/${id}/knowledge-graph?task=copy&channel=LinkedIn`)).status()).toBe(409);
+  await db.memory.deleteMany({ where: { businessId: id, kind: "EXPLICIT_PREFERENCE" } }); // This test's synthetic filler only.
   const graphResponse = await page.request.get(`/api/businesses/${id}/knowledge-graph?task=copy&channel=LinkedIn`);
   expect(graphResponse.ok()).toBe(true); expect(graphResponse.headers()["cache-control"]).toContain("no-store");
   const graph = await graphResponse.json(); expect(graph.businessId).toBe(id);
@@ -37,7 +54,7 @@ test("feedback skills can be reviewed, activated and retired without a model cal
   await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await panel.screenshot({ path: "../outputs/marketingbus-learned-skills.png" });
   await panel.getByRole("button", { name: "Retire this rule" }).click();
-  await expect(panel.getByRole("heading", { name: "LinkedIn · Retired", exact: true })).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "LinkedIn · Retired", exact: true })).toHaveCount(2);
   expect(await db.memory.count({ where: { businessId: id, kind: "APPROVED_SKILL" } })).toBe(0);
   const retiredGraph = await (await page.request.get(`/api/businesses/${id}/knowledge-graph?task=copy&channel=LinkedIn`)).json();
   expect(retiredGraph.fingerprint).not.toBe(graph.fingerprint);

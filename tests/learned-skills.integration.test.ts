@@ -42,6 +42,75 @@ suite("feedback to versioned business copy skills", () => {
   await manageLearnedSkills(scope, { action: "reflect-skills" }); const skill = (await readLearnedSkills(scope)).skills[0];
   await manageLearnedSkills(scope, { action: "activate-skill", proposalId: skill.id }); return skill;
  }
+ async function replacement(scope: Scope) {
+  const skill = await activate(scope);
+  const previous = await db.learningProposal.findUniqueOrThrow({ where: { id: skill.id } });
+  const proposed = await db.learningProposal.create({ data: { businessId: scope.businessId, organizationId: scope.organizationId,
+   brandVersion: previous.brandVersion, hypothesis: previous.hypothesis, evidence: previous.evidence!, status: "SKILL_PROPOSED" } });
+  return { previous, proposed };
+ }
+ async function fillMemory(scope: Scope) {
+  const count = await db.memory.count({ where: { businessId: scope.businessId } });
+  await db.memory.createMany({ data: Array.from({ length: 100 - count }, (_, i) => ({ businessId: scope.businessId,
+   organizationId: scope.organizationId, kind: "EXPLICIT_PREFERENCE", text: `Retain customer preference ${i}` })) });
+  return db.memory.findMany({ where: { businessId: scope.businessId }, orderBy: { id: "asc" } });
+ }
+ it("replaces an existing skill at full capacity without evicting preferences or spending credits", async () => {
+  const a = await setup(), { previous, proposed } = await replacement(a.scope), before = await fillMemory(a.scope);
+  await manageLearnedSkills(a.scope, { action: "activate-skill", proposalId: proposed.id });
+  const current = await db.learningProposal.findUniqueOrThrow({ where: { id: proposed.id } });
+  expect(current.status).toBe("SKILL_ACTIVE"); expect(current.memoryId).not.toBe(previous.memoryId);
+  expect(await db.learningProposal.findUniqueOrThrow({ where: { id: previous.id } })).toMatchObject({ status: "SKILL_RETIRED", memoryId: null });
+  expect(await db.memory.findUnique({ where: { id: previous.memoryId! } })).toBeNull();
+  const after = await db.memory.findMany({ where: { businessId: a.scope.businessId }, orderBy: { id: "asc" } });
+  expect(after).toHaveLength(100);
+  expect(after.filter(m => m.kind === "EXPLICIT_PREFERENCE")).toEqual(before.filter(m => m.kind === "EXPLICIT_PREFERENCE"));
+  expect((await memories(a.scope)).filter(m => m.kind === "APPROVED_SKILL")).toMatchObject([{ id: current.memoryId }]);
+  expect((await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } })).available).toBe(500);
+ });
+ it.each(["missing", "preference", "foreign"])("does not reclaim a %s memory reference and rolls back retirement at capacity", async kind => {
+  const a = await setup(), { previous, proposed } = await replacement(a.scope);
+  let protectedId = previous.memoryId!;
+  if (kind === "missing") await db.memory.delete({ where: { id: protectedId } });
+  if (kind === "preference") await db.memory.update({ where: { id: protectedId }, data: { kind: "EXPLICIT_PREFERENCE" } });
+  if (kind === "foreign") {
+   const b = await setup(0);
+   const foreign = await db.memory.create({ data: { businessId: b.scope.businessId, organizationId: b.scope.organizationId, kind: "APPROVED_SKILL", text: previous.hypothesis } });
+   protectedId = foreign.id;
+   await db.learningProposal.update({ where: { id: previous.id }, data: { memoryId: foreign.id } });
+  }
+  const before = await fillMemory(a.scope);
+  const auditCount = await db.auditEvent.count({ where: { businessId: a.scope.businessId } });
+  await expect(manageLearnedSkills(a.scope, { action: "activate-skill", proposalId: proposed.id })).rejects.toThrow("unused preference");
+  expect(await db.memory.findMany({ where: { businessId: a.scope.businessId }, orderBy: { id: "asc" } })).toEqual(before);
+  expect(await db.learningProposal.findUniqueOrThrow({ where: { id: previous.id } })).toMatchObject({ status: "SKILL_ACTIVE", memoryId: protectedId });
+  expect(await db.learningProposal.findUniqueOrThrow({ where: { id: proposed.id } })).toMatchObject({ status: "SKILL_PROPOSED", memoryId: null });
+  expect(await db.auditEvent.count({ where: { businessId: a.scope.businessId } })).toBe(auditCount);
+  if (kind !== "missing") expect(await db.memory.findUnique({ where: { id: protectedId } })).not.toBeNull();
+ });
+ it("serializes concurrent full-capacity replacement and refuses replay without duplicating memory", async () => {
+  const a = await setup(), { proposed } = await replacement(a.scope); await fillMemory(a.scope);
+  const results = await Promise.allSettled([1, 2].map(() => manageLearnedSkills(a.scope, { action: "activate-skill", proposalId: proposed.id })));
+  expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+  expect(await db.memory.count({ where: { businessId: a.scope.businessId } })).toBe(100);
+  expect(await db.learningProposal.count({ where: { businessId: a.scope.businessId, status: "SKILL_ACTIVE" } })).toBe(1);
+  expect(await db.auditEvent.count({ where: { businessId: a.scope.businessId, action: "SKILL_ACTIVATED" } })).toBe(2);
+ });
+ it("keeps the capacity limit for a new rule without a replaceable active skill", async () => {
+  const a = await setup(); await manageLearnedSkills(a.scope, { action: "reflect-skills" });
+  const skill = (await readLearnedSkills(a.scope)).skills[0], before = await fillMemory(a.scope);
+  await expect(manageLearnedSkills(a.scope, { action: "activate-skill", proposalId: skill.id })).rejects.toThrow("unused preference");
+  expect(await db.memory.findMany({ where: { businessId: a.scope.businessId }, orderBy: { id: "asc" } })).toEqual(before);
+  expect((await db.learningProposal.findUniqueOrThrow({ where: { id: skill.id } })).status).toBe("SKILL_PROPOSED");
+ });
+ it("preserves the existing skill when replacement evidence changes before activation", async () => {
+  const a = await setup(), { previous, proposed } = await replacement(a.scope), before = await fillMemory(a.scope);
+  await db.creativeRevision.update({ where: { id: a.revisions[0] }, data: { status: "REJECTED" } });
+  await expect(manageLearnedSkills(a.scope, { action: "activate-skill", proposalId: proposed.id })).rejects.toThrow("examples changed");
+  expect(await db.memory.findMany({ where: { businessId: a.scope.businessId }, orderBy: { id: "asc" } })).toEqual(before);
+  expect((await db.learningProposal.findUniqueOrThrow({ where: { id: previous.id } })).status).toBe("SKILL_ACTIVE");
+  expect((await memories(a.scope)).some(m => m.kind === "APPROVED_SKILL")).toBe(false);
+ });
  it("requires two separate corrected creatives, deduplicates reflection, and never activates automatically", async () => {
   const a = await setup(1); expect(await manageLearnedSkills(a.scope, { action: "reflect-skills" })).toMatchObject({ created: 0 });
   const b = await setup(); expect(await manageLearnedSkills(b.scope, { action: "reflect-skills" })).toMatchObject({ created: 1 });

@@ -73,10 +73,12 @@ export async function manageLearnedSkills(scope: Scope, raw: unknown) {
     if (!row) throw new AppError(404, "Skill not found.");
     if (input.action === "activate-skill") {
       if (row.status !== "SKILL_PROPOSED" || row.brandVersion !== business.version || !await validSkill(tx, scope, business.version, row.evidence, row.hypothesis)) throw new AppError(409, "The skill examples changed or expired. Review current corrections again.");
-      if (await tx.memory.count({ where: { businessId: scope.businessId } }) >= 100) throw new AppError(409, "Remove an unused preference first.");
       const previous = await tx.learningProposal.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId, hypothesis: row.hypothesis, status: "SKILL_ACTIVE" } });
       await tx.memory.deleteMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId, kind: "APPROVED_SKILL", id: { in: previous.flatMap(p => p.memoryId ? [p.memoryId] : []) } } });
       await tx.learningProposal.updateMany({ where: { id: { in: previous.map(p => p.id) } }, data: { status: "SKILL_RETIRED", memoryId: null } });
+      // Count after reclaiming only this rule's scoped skill memory. A failure
+      // rolls back retirement/deletion; explicit preferences are never evicted.
+      if (await tx.memory.count({ where: { businessId: scope.businessId } }) >= 100) throw new AppError(409, "Remove an unused preference first.");
       const memory = await tx.memory.create({ data: { businessId: scope.businessId, organizationId: scope.organizationId, kind: "APPROVED_SKILL", text: row.hypothesis } });
       await tx.learningProposal.update({ where: { id: row.id }, data: { status: "SKILL_ACTIVE", memoryId: memory.id } });
     } else {
