@@ -30,6 +30,8 @@ Local source changes are not production deployment. Third-party account approval
 
 ## Module 1 Billing and credits
 
+20 October operator integrity increment: an explicit-workspace read-only credit report checks net balance conservation, held reservations, exact reservation settlement/release journals, unsupported entries and orphan references. Integer-safe sums and a database-enforced read-only snapshot prevent inspection from becoming repair. It supplies monitoring exit codes and secret-free aggregates; it does not validate Stripe cash settlement, commercial policies or supplier invoices. See BILLING.md and the verification/delivery ledger.
+
 Implemented locally: server-owned offer catalog; owner/admin checkout and portal actions; frozen checkout terms and stable retry identifiers; bounded raw-body webhook intake behind a signature-verifying adapter; durable payment inbox; one grant per payment and subscription period; top-ups; cumulative refund accounting; protected revision balances; refund debt; shared workspace balances; payment and credit history screens; worker processing; migration-aware health checks.
 
 Verification covers concurrent duplicate events, changed replay payloads, unsafe redirects, cross-workspace access, renewal duplication, partial and out-of-order refunds, held-credit settlement and bounded webhook bodies. Browser checks cover actual empty balances, fail-closed payments, accessibility and mobile width.

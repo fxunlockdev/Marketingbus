@@ -6,6 +6,7 @@ import { reserveCredits, finishReservation } from "../src/lib/billing/wallet";
 import { billingOffers, type BillingOffer, type PaymentAdapter, type PaymentEvent } from "../src/lib/billing/contracts";
 import { billingTermsHash } from "../src/lib/billing/terms";
 import { reconcileBillingEvent } from "../src/lib/billing/reconcile";
+import { readCreditReport } from "../scripts/operations/credit-report";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (process.env.TEST_DATABASE_URL && (process.env.TEST_DATABASE_URL !== process.env.DATABASE_URL || !["localhost", "127.0.0.1"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Local fixture database required");
 suite("billing application boundary and credit accounting", () => {
@@ -96,6 +97,7 @@ suite("billing application boundary and credit accounting", () => {
     const refund: PaymentEvent = { kind: "REFUND", eventId: crypto.randomUUID(), paymentId: event.paymentId, cumulativeRefundedMinor: 40000, occurredAt: "2026-10-16T10:00:00Z" };
     await apply(refund); await apply({ ...refund, eventId: crypto.randomUUID() });
     expect(await wallet(a.organizationId)).toMatchObject({ available: 0, debt: 2800, revisionAvailable: 800, held: 6000 });
+    expect((await readCreditReport(db, a.organizationId)).needsAttention).toBe(false);
     await expect(reserveCredits(a.organizationId, "blocked", 1, true)).rejects.toThrow("refund adjustment");
     await finishReservation(a.organizationId, hold.id, 1000);
     expect(await wallet(a.organizationId)).toMatchObject({ available: 2200, debt: 0, held: 0 });
@@ -103,8 +105,10 @@ suite("billing application boundary and credit accounting", () => {
     expect((await wallet(a.organizationId)).available).toBe(2200);
     await apply({ ...refund, eventId: crypto.randomUUID(), cumulativeRefundedMinor: 80000 });
     expect(await wallet(a.organizationId)).toMatchObject({ available: 0, debt: 1000, revisionAvailable: 0 });
+    expect((await readCreditReport(db, a.organizationId)).needsAttention).toBe(false);
     await apply(await paid(a, { ...offer, kind: "TOPUP", amountMinor: 20000, generalCredits: 2000, revisionCredits: 0 }));
     expect(await wallet(a.organizationId)).toMatchObject({ available: 1000, debt: 0, revisionAvailable: 0 });
+    expect((await readCreditReport(db, a.organizationId)).needsAttention).toBe(false);
   });
   it("retains out-of-order refunds and applies them after their payment arrives", async () => {
     const a = await setup(), event = await paid(a);

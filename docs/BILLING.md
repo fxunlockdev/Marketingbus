@@ -62,6 +62,20 @@ npx tsx scripts/reconcile-billing.ts --id UUID --event evt_EVENT --operator OPER
 
 This records an immutable operator audit, checks event digest and uses the same application lock as the worker. Already-applied events do not grant again. It can restart dependency retries, but cannot override unsupported commercial terms, mismatched payment bindings or arbitrary review decisions. The per-event operator retry allowance is 20. The application does not accept hand-written payment amounts or manual grants through this procedure.
 
+## Read-only workspace credit integrity
+
+Run `npm run ops:credits -- --organization WORKSPACE_ID` with operator database access to inspect one shared workspace wallet. Add `--check` for exit status 0 when the supported invariants balance, 2 when attention is required, or 1 on invalid scope/database/schema errors. No business-only or global fallback is accepted: credits belong to the workspace, not an individual business. This command is not a customer endpoint and does not authorize repair.
+
+The report uses a PostgreSQL read-only repeatable-read transaction, three-second statement timeout and integer-safe lifetime sums. It checks:
+
+- Net wallet credits (available + revision available + held − both debts) against grants − consumption − refund reclamation. Reserve/release entries transfer existing credits and are not counted twice.
+- Held balance against active reservations, and each reservation's exact reserve, consume and unused-release entries, including zero consumption and mixed revision/general credits.
+- Unsupported ledger entries and orphan reservation entries, with no cross-workspace matching.
+
+Only fixed issue codes/counts and aggregate credit values are returned; entry keys, prompts, customer names and provider references are not printed. A timeout is an incomplete check, never a healthy result. The report scans the selected workspace's history without truncating totals; it is intended for bounded operator use, not per-request polling. It has no network client, accounting mutation, automatic hold release or retry behavior.
+
+The conservation check assumes the application's zero opening wallet with every grant recorded. Historical manual balances without entries need investigation, not an automatic compensating grant. A balanced result does not verify authentic payments, correct general/revision allocation, provider invoices, taxes, disputes, cash settlement or creative delivery. Those acceptance gates remain below.
+
 ## Remaining release gates
 
 Verify the UAE Stripe account, pinned webhook contract, actual test-mode checkout, renewal, cancellation, portal and refund lifecycle before enabling live offers. Define tax/discount, dispute handling and commercial margin policy; the current implementation rejects or holds unsupported terms rather than implementing those policies. A full operator dashboard, financial settlement reconciliation and alert routing remain. Credits carry forward with no expiration scheduler. No real payments or refunds were made by the automated tests or this release.
