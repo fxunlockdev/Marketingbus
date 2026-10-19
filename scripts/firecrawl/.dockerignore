@@ -4,3 +4,8 @@
 !package-lock.json
 !browser-service.mjs
 !public-egress-proxy.mjs
+!Core.Dockerfile
+!standalone-browser.patch
+!core-Cargo.lock
+!core-gateway.mjs
+!core-job.cjs
