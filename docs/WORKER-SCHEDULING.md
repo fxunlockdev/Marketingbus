@@ -1,5 +1,13 @@
 # Production worker scheduling
 
+## Hard-stop recovery checkpoint
+
+Runtime `studio-v61-crash-recovery` closes a copy-recovery visibility gap: after an expired `SUBMITTING` lease, the job and its scoped quote enter reconciliation and the still-queued creative now enters `NEEDS_RECONCILIATION` in the same transaction. Only the recovery winner updates the associated state. Exact organization/business/item scope is checked; newer creative states are preserved. Credits remain held and supplier submission is never automatically repeated.
+
+The process regression starts the actual worker against a newly created, migrated, synthetic local database with all external execution disabled and no inherited provider/storage credentials. It terminates that worker with `SIGKILL`, verifies retained jobs/heartbeat, expires only fixture leases, and overlaps two real replacement workers. Pre-submission work becomes queued; uncertain submission remains fenced. Another polling cycle leaves attempts, reservations, credit journals and both tenant wallets unchanged, with no generated revision. Both replacements then exit cleanly on `SIGTERM` and remove their own heartbeats. Separate database cases preserve newer creative state and reject cross-business quote references.
+
+This is a real process hard stop and concurrent restart, but the submission fences are synthetic: no supplier call is in flight, and lease expiry is advanced in the disposable database rather than waiting five minutes. It does not prove container/host failure recovery, remote-provider reconciliation, realistic load, alert delivery or capacity. See BUILD-STATUS.md for test and deployment evidence.
+
 ## Current: bounded independent groups
 
 Runtime `studio-v48-social-access-lifecycle` adds a 25th lane, `social-access-expiry`, to maintenance. It removes one expired grant per tick without provider calls or execution flags, using the same business lock as connection/publication work. This does not introduce another process, replica or paid operation. See [access lifecycle and recovery](SOCIAL-ACCESS-LIFECYCLE.md).

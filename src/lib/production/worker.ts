@@ -113,7 +113,20 @@ export async function recoverExpiredLeases() {
     for (const job of stale) {
       const status = job.status === "RUNNING" ? "QUEUED" : "NEEDS_RECONCILIATION";
       const changed = await tx.job.updateMany({ where: { id: job.id, status: job.status, leaseUntil: { lt: new Date() } }, data: { status, leaseUntil: null, errorCode: status === "QUEUED" ? null : "LEASE_EXPIRED_AFTER_SUBMISSION" } });
-      if (changed.count && status === "NEEDS_RECONCILIATION" && job.quoteId) await tx.generationQuote.update({ where: { id: job.quoteId }, data: { status: "RECONCILE" } });
+      if (changed.count && status === "NEEDS_RECONCILIATION" && job.quoteId) {
+        const quote = await tx.generationQuote.findFirst({ where: {
+          id: job.quoteId, organizationId: job.organizationId, businessId: job.businessId,
+        } });
+        if (quote) {
+          await tx.generationQuote.update({ where: { id: quote.id }, data: { status: "RECONCILE" } });
+          // A hard stop bypasses runOneJob's catch. Expose the same uncertainty
+          // to review without overwriting newer creative state or releasing holds.
+          await tx.productionItem.updateMany({ where: {
+            id: quote.itemId, organizationId: job.organizationId,
+            plan: { businessId: job.businessId }, status: "QUEUED",
+          }, data: { status: "NEEDS_RECONCILIATION" } });
+        }
+      }
       recovered += changed.count;
     }
     return recovered;

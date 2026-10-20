@@ -313,6 +313,31 @@ suite("production authorization, review and worker integration", () => {
     await db.job.updateMany({ where: { organizationId: scope.organizationId }, data: { status: "SUBMITTING", leaseUntil: new Date(0) } });
     await recoverExpiredLeases();
     expect((await db.job.findFirstOrThrow({ where: { organizationId: scope.organizationId } })).status).toBe("NEEDS_RECONCILIATION");
+    expect((await db.productionItem.findUniqueOrThrow({ where: { id: itemId } })).status).toBe("NEEDS_RECONCILIATION");
+    expect((await db.generationQuote.findUniqueOrThrow({ where: { id: q.id } })).status).toBe("RECONCILE");
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } });
+    expect(wallet.held).toBeGreaterThan(0);
+    await recoverExpiredLeases();
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } })).toEqual(wallet);
+  });
+  it("does not overwrite newer item state during expired submission recovery", async () => {
+    const { scope, itemId } = await setup(); const q = await quote(scope, itemId);
+    await actOnProduction(scope, { action: "accept", quoteId: q.id });
+    await db.job.updateMany({ where: { organizationId: scope.organizationId }, data: { status: "SUBMITTING", leaseUntil: new Date(0) } });
+    await db.productionItem.update({ where: { id: itemId }, data: { status: "SUPERSEDED" } });
+    await recoverExpiredLeases();
+    expect((await db.productionItem.findUniqueOrThrow({ where: { id: itemId } })).status).toBe("SUPERSEDED");
+    expect((await db.generationQuote.findUniqueOrThrow({ where: { id: q.id } })).status).toBe("RECONCILE");
+  });
+  it("does not mutate another business's quote when a stale job has an inconsistent reference", async () => {
+    const { scope, itemId } = await setup(); const q = await quote(scope, itemId);
+    await actOnProduction(scope, { action: "accept", quoteId: q.id });
+    const other = await db.business.create({ data: { organizationId: scope.organizationId, name: "Other business" } });
+    await db.job.updateMany({ where: { organizationId: scope.organizationId }, data: { businessId: other.id, status: "SUBMITTING", leaseUntil: new Date(0) } });
+    await recoverExpiredLeases();
+    expect((await db.job.findFirstOrThrow({ where: { organizationId: scope.organizationId } })).status).toBe("NEEDS_RECONCILIATION");
+    expect((await db.generationQuote.findUniqueOrThrow({ where: { id: q.id } })).status).toBe("ACCEPTED");
+    expect((await db.productionItem.findUniqueOrThrow({ where: { id: itemId } })).status).toBe("QUEUED");
   });
   it("counts a prior-day authorization executed today against today's ceiling", async () => {
     const ctx = await setup(); const q = await quote(ctx.scope, ctx.itemId);
