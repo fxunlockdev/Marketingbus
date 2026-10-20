@@ -23,9 +23,13 @@ test("create account, onboard a business, plan, remember and sign out",async({pa
  await page.getByRole("button",{name:"Memory",exact:true}).click();await page.getByLabel("What should this brand always remember?").fill("Use warm, practical language. Never invent project results.");await page.getByRole("button",{name:"Save brand preference"}).click();await expect(page.getByText("Use warm, practical language. Never invent project results.",{exact:true})).toBeVisible();
  await page.getByRole("button",{name:"Connections",exact:true}).click();
  await expect(page.getByRole("heading",{name:"Publishing destinations",exact:true})).toBeVisible();
- for(const channel of ["Instagram","Facebook","LinkedIn"]){await expect(page.getByRole("button",{name:`Connect ${channel}`,exact:true})).toBeDisabled();}
- await expect(page.getByText("No accounts connected for this business.",{exact:true})).toBeVisible();
- await expect(page.getByText("X and YouTube are planned destinations and are not available yet.",{exact:true})).toBeVisible();
+ for(const channel of ["Instagram","Facebook","LinkedIn"]){
+  const card=page.getByRole("region",{name:`${channel} connection`,exact:true});
+  await expect(card.getByText("Not available yet",{exact:true})).toBeVisible();
+  await expect(card.getByRole("button",{name:`Connect ${channel}`,exact:true})).toHaveCount(0);
+ }
+ await expect(page.getByText("Marketingbus needs to finish setting them up",{exact:false})).toBeVisible();
+ await expect(page.getByText("You can connect accounts now.",{exact:false})).toHaveCount(0);
  for(const provider of ["OpenAI","Claude","Gemini","Higgsfield","Firecrawl","Resend"]){await expect(page.getByRole("heading",{name:provider,exact:true})).toHaveCount(0);}
  await expect(page.getByText("Provider keys stay on the server.",{exact:false})).toHaveCount(0);
  await page.getByRole("button",{name:"Overview",exact:true}).click();await page.screenshot({path:"../outputs/marketingbus-desktop.png",fullPage:true});

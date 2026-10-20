@@ -1,5 +1,9 @@
 # Acceptance ledger — 19 October 2026
 
+## 20 October — complete browser journey release check
+
+Independent CI `39421886006` finished with 2,332 passing unit/integration tests and successful recovery/build checks, but **55/56 browser journeys passed**. The remaining onboarding-to-sign-out journey still expected the removed disabled social buttons and obsolete empty-state text. Its assertions now check the intended per-platform unavailable cards and plain setup explanation, while retaining the absence of usable connection buttons and server-provider headings. No production gate or customer control was weakened. A full isolated-storage browser rerun and replacement independent CI are pending; v72 app deployment remains withheld.
+
 ## 20 October — website reader recovery and simpler customer screens (v72, in verification)
 
 Production checkpoint correction: exact v71 source `edfe21e4fe8ad136ab20e0e5531f95f840daca92` passed independent CI `39410931228` and deployed successfully to web `f8747248-124c-43fb-b073-22743cc10a2a` and worker `4c396f7f-0e71-4130-af26-90dc536ed0e5`. Hosted health returned 200/no-store, signed-out studio redirected to login, login returned 200 without the old disclaimer, and anonymous source access returned 401. This supersedes older source-only/v64 delivery statements below; it did not activate website extraction or social publishing.
