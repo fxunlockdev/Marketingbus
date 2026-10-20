@@ -1,5 +1,18 @@
 # Acceptance ledger — 19 October 2026
 
+## 20 October — v72 verified application delivery
+
+Exact source `332e721854af34a14aec433080cd2bd979ded657` passed independent CI `39423702528`: **2,333 tests / 96 suites, 56 browser journeys, production build, recovery rehearsal, built web/worker quarantine checks and zero reported dependency vulnerabilities**. This replaces the preceding pending-CI verdict; the earlier local timing failures remain recorded rather than erased.
+
+The exact tracked commit archive, without local files or credentials, was deployed to the existing production services:
+
+- Web: `b7ae8204-a0e3-4e48-b2dd-24f0a7004d6e` — observed SUCCESS.
+- Worker: `20ab7f7e-d8b2-4a3b-8000-c02189e5e71c` — observed SUCCESS.
+
+Both services report 62 known migrations with none pending; web reports ready and the worker reports startup. The release carries runtime `studio-v72-website-intake`, compact Brand details and the simplified Connections availability cards. No service, credentials, execution gate, spending limit or paid call was added/changed by this app rollout. The separately deployed scraper remains private and unactivated pending hosted extraction acceptance. Automatic semantic brand autofill, social app activation and the remaining module acceptance criteria are not complete. Deployment and startup verification do not establish an authenticated live customer journey.
+
+Hosted read-only smoke checks pass after rollout: health 200 with `no-store`, login 200 without the removed pilot/provider disclaimer, signed-out studio 307 to login, anonymous source access 401, and Instagram/Facebook denied callbacks 303 to the fixed local recovery page with `no-store`. No production fixture, OAuth grant, customer record change, real post or model request was used for these checks.
+
 ## 20 October — complete browser journey release check
 
 Independent CI `39421886006` finished with 2,332 passing unit/integration tests and successful recovery/build checks, but **55/56 browser journeys passed**. The remaining onboarding-to-sign-out journey still expected the removed disabled social buttons and obsolete empty-state text. Its assertions now check the intended per-platform unavailable cards and plain setup explanation, while retaining the absence of usable connection buttons and server-provider headings. No production gate or customer control was weakened.
