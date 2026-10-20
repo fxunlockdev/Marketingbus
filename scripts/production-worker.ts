@@ -26,6 +26,10 @@ import { expireSocialOAuth } from "../src/lib/social/oauth";
 import { expireSocialAccountData } from "../src/lib/social/account-data-service";
 import { expireOneSocialConnection } from "../src/lib/social/access-lifecycle";
 import { runOnePublication, runOneMetricSync, recoverSocialLeases, runOneReconciliation } from "../src/lib/social/worker";
+import { recoveryQuarantined } from "../src/lib/recovery-quarantine";
+// Deployment environment changes require a process restart. Never begin a lane
+// (including maintenance/recovery/readiness writes) in a restored quarantine.
+const quarantined = recoveryQuarantined();
 let stopping = false;
 let lastRetentionCheck = 0;
 const instance = process.env.RAILWAY_REPLICA_ID || randomUUID();
@@ -90,7 +94,7 @@ function pause() {
 let readinessRemoval: Promise<unknown> | undefined;
 const server = createServer((req, res) => {
   if (req.url !== "/health") { res.writeHead(404).end(); return; }
-  const healthy = readiness.healthy();
+  const healthy = !quarantined && readiness.healthy();
   res.writeHead(healthy ? 200 : 503, { "Content-Type": "application/json", "Cache-Control": "no-store" });
   res.end(JSON.stringify({ status: healthy ? "ok" : "unavailable" }));
 });
@@ -100,7 +104,7 @@ function stop() {
   // Let the bounded provider request finish. A hard interruption is reconciled, never retried.
   for (const wake of sleepers) wake();
   // Serialize deletion after an in-flight readiness write; no late upsert can revive it.
-  readinessRemoval = readiness.drain().then(() => db.workerHeartbeat.deleteMany({ where: { id: instance } })).catch(() => {});
+  if (!quarantined) readinessRemoval = readiness.drain().then(() => db.workerHeartbeat.deleteMany({ where: { id: instance } })).catch(() => {});
   setTimeout(() => process.exit(1), 110_000).unref();
 }
 process.on("SIGTERM", stop);
@@ -109,6 +113,13 @@ async function main() {
   const port = Number(process.env.PORT || 8080);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error("Invalid worker port");
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(port, "0.0.0.0", resolve); });
+  if (quarantined) {
+    console.info("Production worker quarantined; all lanes and readiness writes are paused.");
+    while (!stopping) await pause();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await db.$disconnect();
+    return;
+  }
   console.info("Production worker started; paid execution requires explicit server configuration.");
   await runWorkerGroups(groups, {
     readiness, stopping: () => stopping, sleep: pause,

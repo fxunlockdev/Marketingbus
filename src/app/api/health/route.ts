@@ -1,7 +1,9 @@
 import { db } from "@/lib/db";
 import { typographyManifest } from "@/lib/typography";
+import { quarantineResponse, recoveryQuarantined } from "@/lib/recovery-quarantine";
 export const dynamic="force-dynamic";
 export async function GET() {
+  if (recoveryQuarantined()) return quarantineResponse();
   try {
     typographyManifest();
     // Connectivity alone cannot detect an unapplied initial migration.

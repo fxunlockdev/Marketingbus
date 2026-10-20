@@ -52,6 +52,8 @@ jobs:
           REHEARSAL_DOCKER_CONTAINER: ${{ job.services.postgres.id }}
         run: npm run test:restore
       - run: npm run build
+      - name: Verify recovery quarantine against built web and worker
+        run: npm run test:quarantine
       - name: Verify Chrome for browser acceptance
         timeout-minutes: 4
         run: |

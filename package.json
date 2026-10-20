@@ -15,6 +15,7 @@
     "test:e2e": "playwright test",
     "test:e2e:storage": "node scripts/private-storage-fixture.mjs",
     "test:restore": "tsx scripts/rehearse-database-restore.ts",
+    "test:quarantine": "node scripts/test-recovery-quarantine.mjs",
     "ops:queues": "tsx scripts/queue-report.ts",
     "ops:credits": "tsx scripts/credit-report.ts",
     "db:generate": "prisma generate",

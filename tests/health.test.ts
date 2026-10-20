@@ -1,10 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { query } = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock("@/lib/db", () => ({ db: { $queryRaw: query } }));
 import { GET } from "../src/app/api/health/route";
 
 describe("deployment readiness", () => {
-  beforeEach(() => { query.mockReset(); });
+  beforeEach(() => { query.mockReset(); vi.stubEnv("RECOVERY_QUARANTINE", undefined); });
+  afterEach(() => vi.unstubAllEnvs());
+  it("does not inspect the database while quarantined, even when called directly", async () => {
+    vi.stubEnv("RECOVERY_QUARANTINE", "true");
+    expect((await GET()).status).toBe(503);
+    expect(query).not.toHaveBeenCalled();
+  });
   it("checks application tables before declaring readiness", async () => {
     query.mockResolvedValue([]);
     const result = await GET();
