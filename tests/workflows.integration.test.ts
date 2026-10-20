@@ -73,6 +73,7 @@ suite("approval policy, comments and bounded recurring work", () => {
     await savePlanning(c.scope, policy); await due(c.scope.businessId);
     await db.business.update({ where: { id: c.scope.businessId }, data: { version: 2 } }); await createDuePlan();
     expect((await db.weeklyPolicy.findUniqueOrThrow({ where: { businessId: c.scope.businessId } })).enabled).toBe(false);
+    expect((await readPlanning(c.scope)).pauseNotice?.message).toContain("brand changed");
     expect(await db.weeklyCycle.count({ where: { businessId: c.scope.businessId } })).toBe(0);
   });
   it.each(["count", "length", "total", "brand"])("isolates invalid %s planning context without starving another tenant", async reason => {
@@ -88,6 +89,8 @@ suite("approval policy, comments and bounded recurring work", () => {
     const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: blocked.scope.organizationId } });
     await expect(createDuePlan()).resolves.toBe(true);
     expect((await readPlanning(blocked.scope)).policy?.enabled).toBe(false);
+    expect((await readPlanning(blocked.scope)).pauseNotice?.message).toContain("consolidate saved preferences");
+    expect((await db.weeklyPolicy.findUniqueOrThrow({ where: { businessId: blocked.scope.businessId } })).pauseReason).toBe("CONTEXT_INVALID");
     expect(await db.weeklyCycle.count({ where: { businessId: blocked.scope.businessId } })).toBe(0);
     expect(await db.productionPlan.count({ where: { businessId: blocked.scope.businessId } })).toBe(1);
     const audit = await db.auditEvent.findMany({ where: { businessId: blocked.scope.businessId, action: "WEEKLY_POLICY_PAUSED" } });
@@ -105,9 +108,46 @@ suite("approval policy, comments and bounded recurring work", () => {
     expect(await createDuePlan()).toBe(false);
     await expect(savePlanning(blocked.editor, { ...policy, version: 1 })).rejects.toThrow("administrators");
     await savePlanning(blocked.admin, { ...policy, version: 1 });
+    expect((await readPlanning(blocked.scope)).pauseNotice).toBeNull();
+    expect((await db.weeklyPolicy.findUniqueOrThrow({ where: { businessId: blocked.scope.businessId } })).pauseReason).toBeNull();
     await due(blocked.scope.businessId); await createDuePlan();
     expect(await db.weeklyCycle.count({ where: { businessId: blocked.scope.businessId } })).toBe(1);
     expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: blocked.scope.organizationId } })).toEqual(wallet);
+  });
+  it("projects safe pause guidance without exposing audit content or crossing tenant boundaries", async () => {
+    const c = await setup(), other = await setup();
+    expect((await readPlanning(c.scope)).pauseNotice).toBeNull();
+    await savePlanning(c.scope, policy); await due(c.scope.businessId);
+    await db.membership.update({ where: { organizationId_userId: { organizationId: c.scope.organizationId, userId: c.scope.actorId } }, data: { role: "EDITOR" } });
+    await createDuePlan();
+    await db.auditEvent.create({ data: { ...c.scope, action: "WEEKLY_POLICY_PAUSED", detail: "PRIVATE-RAW-CONTEXT-AND-ERROR" } });
+    const result = await readPlanning(c.editor);
+    expect(result.canManage).toBe(false);
+    expect(result.pauseNotice?.message).toContain("previous authorizer");
+    expect(result.policy).not.toHaveProperty("pauseReason");
+    expect(JSON.stringify(result)).not.toContain("PRIVATE-RAW");
+    await expect(readPlanning({ ...other.scope, businessId: c.scope.businessId })).rejects.toThrow("not found");
+    await expect(readPlanning({ ...c.scope, actorId: other.scope.actorId })).rejects.toThrow("not found");
+    await expect(savePlanning(c.editor, { ...policy, version: 1 })).rejects.toThrow("administrators");
+    await expect(savePlanning(c.admin, { ...policy, version: 0 })).rejects.toThrow("changed");
+    expect((await readPlanning(c.admin)).pauseNotice).toEqual(result.pauseNotice);
+    await savePlanning(c.admin, { ...policy, version: 1 });
+    expect((await readPlanning(c.admin)).pauseNotice).toBeNull();
+  });
+  it("keeps manual and legacy disabled policies truthful without inferring an old audit reason", async () => {
+    const c = await setup();
+    await savePlanning(c.scope, { ...policy, enabled: false });
+    await db.auditEvent.create({ data: { ...c.scope, action: "WEEKLY_POLICY_PAUSED", detail: "Brand or authorizing membership changed; administrator confirmation required." } });
+    expect((await readPlanning(c.scope)).pauseNotice?.message).toBe("Recurring work is disabled. Review your brand and settings before enabling it.");
+    await expect(savePlanning(c.scope, { ...policy, version: 1, pauseReason: "CONTEXT_INVALID" })).rejects.toThrow();
+    expect((await db.weeklyPolicy.findUniqueOrThrow({ where: { businessId: c.scope.businessId } })).pauseReason).toBeNull();
+    await savePlanning(c.scope, { ...policy, version: 1 });
+    expect((await readPlanning(c.scope)).pauseNotice).toBeNull();
+  });
+  it("restricts persisted pause reasons to code-owned values", async () => {
+    const c = await setup(); await savePlanning(c.scope, policy);
+    await expect(db.weeklyPolicy.update({ where: { businessId: c.scope.businessId }, data: { pauseReason: "PRIVATE-UNSAFE-ERROR" } })).rejects.toThrow();
+    expect((await db.weeklyPolicy.findUniqueOrThrow({ where: { businessId: c.scope.businessId } })).pauseReason).toBeNull();
   });
   it("reserves weekly ceilings atomically with job creation, then stops without auto-retry", async () => {
     const c = await setup(); await savePlanning(c.scope, { ...policy, mode: "DRAFTS", maxItems: 2, creditsPerWeek: 1 }); await due(c.scope.businessId); await createDuePlan();

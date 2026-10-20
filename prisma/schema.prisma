@@ -856,6 +856,7 @@ model WeeklyPolicy {
   businessId String @id
   organizationId String
   enabled Boolean @default(false)
+  pauseReason String?
   mode String @default("PLAN")
   imagesAfterApproval Boolean @default(false)
   videosAfterApproval Boolean @default(false)

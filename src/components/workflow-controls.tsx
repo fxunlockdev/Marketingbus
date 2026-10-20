@@ -9,13 +9,14 @@ const videoLabels: Record<string, string> = { NONE: "Not enabled", OPEN: "Waitin
 const initial: Policy = { enabled: false, mode: "PLAN", imagesAfterApproval: false, videosAfterApproval: false, videoItems: 0, maxItems: 4, creditsPerWeek: 0, weekday: 1, hourUTC: 9, version: 0 };
 const credits = (value: number) => `${value} credit${value === 1 ? "" : "s"}`;
 export function WorkflowControls({ businessId }: { businessId: string }) {
+  const [pauseNotice, setPauseNotice] = useState<{ title: string; message: string } | null>(null);
   const router = useRouter(), [policy, setPolicy] = useState<Policy>(initial), [independent, setIndependent] = useState(false), [cycles, setCycles] = useState<Cycle[]>([]), [canManage, setCanManage] = useState(false), [older, setOlder] = useState(false), [confirming, setConfirming] = useState<string | null>(null), [loaded, setLoaded] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(""), [message, setMessage] = useState("");
   async function load(signal?: AbortSignal) {
     const responses = await Promise.all([fetch(`/api/businesses/${businessId}/planning`, { signal }), fetch(`/api/businesses/${businessId}/approvals`, { signal })]);
     const data = await Promise.all(responses.map(r => r.json()));
     if (responses.some(r => !r.ok)) throw Error("Unable to load workflow settings.");
     if (signal?.aborted) return;
-    setPolicy(data[0].policy ?? initial); setCycles(data[0].cycles); setCanManage(data[0].canManage); setOlder(data[0].hasOlderCycles); setIndependent(data[1].independent); setLoaded(true);
+    setPolicy(data[0].policy ?? initial); setPauseNotice(data[0].pauseNotice ?? null); setCycles(data[0].cycles); setCanManage(data[0].canManage); setOlder(data[0].hasOlderCycles); setIndependent(data[1].independent); setLoaded(true);
   }
   useEffect(() => { const abort = new AbortController(); void load(abort.signal).catch(e => { if (!abort.signal.aborted) setError(e.message); }); return () => abort.abort(); }, [businessId]);
   async function save(path: string, body: unknown, success = "Workflow settings saved.") {
@@ -31,9 +32,16 @@ export function WorkflowControls({ businessId }: { businessId: string }) {
       <button className="button secondary" disabled={busy || !loaded || !canManage} onClick={() => save("approvals", { action: "policy", independent })}>Save approval policy</button>
     </section>
     <section className="panel"><h2>Weekly planning and draft autopilot</h2><p>Creates one bounded plan per UTC week. Draft mode can reserve credits and generate copy; it never approves or publishes. Changing the policy stops unaccepted work but cannot cancel jobs already authorized. Missing funds or invalid configuration stops the cycle without automatic retries.</p>
+      <div role="status" aria-live="polite" aria-atomic="true">
+        {pauseNotice && <div className="notice weekly-pause" id={`weekly-pause-${businessId}`}>
+          <h3>{pauseNotice.title}</h3><p>{pauseNotice.message}</p>
+          <p>{canManage ? "After reviewing, select “Enable recurring work for this business” and save recurring authorization to resume." : "Ask a workspace owner or administrator to review and save recurring authorization to resume."}</p>
+          <p>Existing authorized jobs and credit holds are unchanged. This does not approve or publish any content.</p>
+        </div>}
+      </div>
       <form onSubmit={e => { e.preventDefault(); const { enabled, mode, imagesAfterApproval, videosAfterApproval, videoItems, maxItems, creditsPerWeek, weekday, hourUTC, version } = policy; void save("planning", { enabled, mode, imagesAfterApproval, videosAfterApproval, videoItems: videoItems ?? 0, maxItems, creditsPerWeek, weekday, hourUTC, version }); }}>
         <fieldset disabled={busy || !loaded || !canManage} className="weekly-policy-fields"><legend>Recurring authorization</legend>
-        <label className="checkbox-label"><input type="checkbox" checked={policy.enabled} onChange={e => setPolicy(p => ({ ...p, enabled: e.target.checked }))} />Enable recurring work for this business</label>
+        <label className="checkbox-label"><input type="checkbox" aria-describedby={pauseNotice ? `weekly-pause-${businessId}` : undefined} checked={policy.enabled} onChange={e => setPolicy(p => ({ ...p, enabled: e.target.checked }))} />Enable recurring work for this business</label>
         <label>Weekly mode<select value={policy.mode} onChange={e => setPolicy(p => ({ ...p, mode: e.target.value, imagesAfterApproval: e.target.value === "DRAFTS" && p.imagesAfterApproval, videosAfterApproval: e.target.value === "DRAFTS" && p.videosAfterApproval }))}><option value="PLAN">Planning only · no model calls</option><option value="DRAFTS">Plan and generate copy drafts · spends credits</option></select></label>
         <label className="checkbox-label"><input type="checkbox" disabled={policy.mode !== "DRAFTS"} aria-describedby={`weekly-images-${businessId}`} checked={policy.imagesAfterApproval} onChange={e => setPolicy(p => ({ ...p, imagesAfterApproval: e.target.checked }))} />Generate one image after I approve each weekly copy draft</label>
         <p id={`weekly-images-${businessId}`} className="muted">Requires draft mode and configured image generation. Copy and images share the weekly credit ceiling. Existing manual imagery is preserved. Approval must happen within the same UTC week; artwork and final layouts still need human review. Nothing is published automatically.</p>

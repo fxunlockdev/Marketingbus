@@ -1,5 +1,13 @@
 # Production worker scheduling
 
+## Customer-visible pause guidance
+
+Runtime `studio-v66-weekly-pause-guidance` retains a nullable, database-constrained reason on the recurring policy: invalid context, changed brand or changed authorizing access. The worker records the reason atomically with disabling the policy; a successful administrator settings save clears it. Failed/stale/unauthorized saves cannot clear it. Migration `20261020103000_weekly_pause_reason` is additive and leaves legacy policies untouched; older disabled policies show neutral disabled guidance, not a guessed historical reason.
+
+The scoped planning read returns fixed customer guidance separately from editable settings. It does not expose stored brand/preferences, raw audit details, provider errors or the internal reason field. Workflows keeps a polite, persistent status beside recurring authorization, describes the resume checkbox with that guidance, and tells non-admin readers to contact their administrator. An unsaved checkbox cannot dismiss the persisted notice. Successful refresh/save updates it from server state. Existing jobs/holds, approval requirements and publication consent remain unchanged.
+
+This is in-product guidance on loading/refreshing Workflows, not email delivery, background push notification or automatic repair. See BUILD-STATUS.md for verification and deployment state.
+
 ## Weekly planning context isolation
 
 Runtime `studio-v65-weekly-context-isolation` pauses an individual recurring policy when its retained brand fails validation or its planning knowledge exceeds the existing context limits. Previously this transaction rolled back and left the same oldest policy due, repeatedly delaying other businesses. Preparation now completes bounded knowledge reads sequentially, records one fixed, content-free `WEEKLY_POLICY_PAUSED` audit event under the business lock, and disables that policy. The next tick can select another due business.

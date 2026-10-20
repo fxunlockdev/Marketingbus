@@ -26,19 +26,45 @@ test("invalid planning knowledge pauses recurring consent until an administrator
     await createDuePlan();
     await page.reload(); await page.getByRole("button", { name: "Workflows", exact: true }).click();
     await expect(enabled).not.toBeChecked();
+    const notice = page.getByRole("status").filter({ hasText: "Recurring work is paused" });
+    await expect(notice).toContainText("consolidate saved preferences in Memory");
+    await expect(enabled).toHaveAccessibleDescription(/Recurring work is paused/);
+    expect((await new AxeBuilder({ page }).include(`[id="weekly-pause-${id}"]`).analyze()).violations).toEqual([]);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await notice.scrollIntoViewIfNeeded();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    expect(await notice.locator(".weekly-pause").evaluate(el => {
+      const bounds = el.getBoundingClientRect(), children = [...el.children];
+      return children.every((child, i) => {
+        const rect = child.getBoundingClientRect();
+        return rect.left >= bounds.left && rect.right <= bounds.right
+          && (i === 0 || rect.top >= children[i - 1].getBoundingClientRect().bottom);
+      });
+    })).toBe(true);
+    await notice.screenshot({ path: test.info().outputPath("pause-guidance.png") });
+    await page.setViewportSize({ width: 1280, height: 900 });
     expect(await db.weeklyCycle.count({ where: { businessId: id } })).toBe(0);
     const response = await page.request.get(`/api/businesses/${id}/planning`);
     expect(await response.text()).not.toContain("PRIVATE-PAUSE-FIXTURE");
     await db.memory.deleteMany({ where: { businessId: id } }); await createDuePlan();
     expect((await db.weeklyPolicy.findUniqueOrThrow({ where: { businessId: id } })).enabled).toBe(false);
     await enabled.focus(); await page.keyboard.press("Space");
+    await expect(notice).toBeVisible(); // An unsaved checkbox is not renewed consent.
     await page.getByRole("button", { name: "Save recurring authorization" }).click();
     await expect(page.getByRole("status").filter({ hasText: "Workflow settings saved" })).toBeVisible();
+    await expect(notice).toHaveCount(0);
     await db.weeklyPolicy.update({ where: { businessId: id }, data: { nextRunAt: new Date(0) } });
     await createDuePlan(); await page.getByRole("button", { name: "Refresh weekly runs" }).click();
     expect(await db.weeklyCycle.count({ where: { businessId: id } })).toBe(1);
     expect(await db.wallet.findUniqueOrThrow({ where: { organizationId } })).toEqual(wallet);
     expect(await db.job.count({ where: { businessId: id } })).toBe(0);
+    const authorizer = (await db.weeklyPolicy.findUniqueOrThrow({ where: { businessId: id } })).actorId;
+    await db.membership.update({ where: { organizationId_userId: { organizationId, userId: authorizer } }, data: { role: "VIEWER" } });
+    await db.weeklyPolicy.update({ where: { businessId: id }, data: { nextRunAt: new Date(0) } });
+    await createDuePlan(); await page.getByRole("button", { name: "Refresh weekly runs" }).click();
+    await expect(notice).toContainText("previous authorizer");
+    await expect(notice).toContainText("Ask a workspace owner or administrator");
+    await expect(enabled).toBeDisabled();
   } finally { if (organizationId) await db.organization.delete({ where: { id: organizationId } }); await db.user.deleteMany({ where: { email } }); }
 });
 test("inspect and stop a weekly run without touching authorized work or credits", async ({ page }) => {

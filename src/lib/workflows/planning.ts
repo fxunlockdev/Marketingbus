@@ -22,12 +22,24 @@ const policySchema = z.object({ enabled: z.boolean(), mode: z.enum(["PLAN", "DRA
   .refine(p => !p.imagesAfterApproval || p.mode === "DRAFTS", "Automatic images require draft mode.")
   .refine(p => p.videoItems <= p.maxItems, "Video items cannot exceed the total planned items.")
   .refine(p => !p.videosAfterApproval || p.mode === "DRAFTS" && p.videoItems > 0, "Automatic video requires draft mode and at least one video item.");
+const pauseGuidance: Record<string, string> = {
+  CONTEXT_INVALID: "Review your Brand details and consolidate saved preferences in Memory. The business context is invalid or exceeds the planning limit.",
+  BRAND_CHANGED: "Review and confirm your current Brand details. The brand changed after recurring work was authorized.",
+  AUTHORIZER_CHANGED: "A workspace owner or administrator must review these settings. The previous authorizer no longer has the required access.",
+};
 export async function readPlanning(scope: Scope) {
   return db.$transaction(async tx => {
     const member = await tx.membership.findUnique({ where: { organizationId_userId: { organizationId: scope.organizationId, userId: scope.actorId } } });
     if (!member || !await tx.business.findFirst({ where: { id: scope.businessId, organizationId: scope.organizationId }, select: { id: true } })) throw new AppError(404, "Business not found.");
     const canManage = ["OWNER", "ADMIN"].includes(member.role);
-    const policy = await tx.weeklyPolicy.findFirst({ where: { businessId: scope.businessId, organizationId: scope.organizationId }, select: { enabled: true, mode: true, imagesAfterApproval: true, videosAfterApproval: true, videoItems: true, maxItems: true, creditsPerWeek: true, weekday: true, hourUTC: true, version: true } });
+    const retainedPolicy = await tx.weeklyPolicy.findFirst({ where: { businessId: scope.businessId, organizationId: scope.organizationId }, select: { pauseReason: true, enabled: true, mode: true, imagesAfterApproval: true, videosAfterApproval: true, videoItems: true, maxItems: true, creditsPerWeek: true, weekday: true, hourUTC: true, version: true } });
+    const pauseReason = retainedPolicy?.pauseReason;
+    const policy = retainedPolicy ? (({ pauseReason: _reason, ...settings }) => settings)(retainedPolicy) : null;
+    // Never project raw audit details, stored context or provider errors.
+    const pauseNotice = retainedPolicy && !retainedPolicy.enabled ? {
+      title: "Recurring work is paused",
+      message: pauseReason && Object.hasOwn(pauseGuidance, pauseReason) ? pauseGuidance[pauseReason] : "Recurring work is disabled. Review your brand and settings before enabling it.",
+    } : null;
     const cycles = await tx.weeklyCycle.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 21,
       select: { id: true, planId: true, periodKey: true, policyVersion: true, status: true, mediaStatus: true, videoStatus: true, creditsAuthorized: true, tasks: { take: 13, orderBy: { id: "asc" }, select: { id: true, itemId: true, quoteId: true, status: true, imageStatus: true, imageGenerationId: true, videoStatus: true, renderId: true, shots: { take: 6, select: { generationId: true } } } } } });
     const page = cycles.slice(0, 20), tasks = page.flatMap(c => c.tasks.slice(0, 12));
@@ -38,7 +50,7 @@ export async function readPlanning(scope: Scope) {
     const videos = await tx.videoGeneration.findMany({ where: { id: { in: tasks.flatMap(t => t.shots.map(s => s.generationId)) }, businessId: scope.businessId, organizationId: scope.organizationId }, select: { id: true, itemId: true, status: true, reservationId: true } });
     const videoHolds = await tx.reservation.findMany({ where: { id: { in: videos.flatMap(v => v.reservationId ? [v.reservationId] : []) }, organizationId: scope.organizationId, state: "HELD" }, select: { id: true, credits: true } });
     const renders = await tx.motionRender.findMany({ where: { id: { in: tasks.flatMap(t => t.renderId ? [t.renderId] : []) }, businessId: scope.businessId, organizationId: scope.organizationId }, select: { id: true, status: true, storyboard: { select: { itemId: true } } } });
-    return { policy, canManage, hasOlderCycles: cycles.length > 20, cycles: page.map(c => ({ id: c.id, periodKey: c.periodKey, policyVersion: c.policyVersion, status: c.status, mediaStatus: c.mediaStatus, videoStatus: c.videoStatus, creditsAuthorized: c.creditsAuthorized,
+    return { policy, pauseNotice, canManage, hasOlderCycles: cycles.length > 20, cycles: page.map(c => ({ id: c.id, periodKey: c.periodKey, policyVersion: c.policyVersion, status: c.status, mediaStatus: c.mediaStatus, videoStatus: c.videoStatus, creditsAuthorized: c.creditsAuthorized,
       canCancel: canManage && [c.status, c.mediaStatus, c.videoStatus].some(s => ["OPEN", "BLOCKED"].includes(s)), tasksTruncated: c.tasks.length > 12,
       tasks: c.tasks.slice(0, 12).map(t => {
         const item = items.find(i => i.id === t.itemId && i.planId === c.planId), quote = item ? quotes.find(q => q.id === t.quoteId && q.itemId === item.id) : undefined;
@@ -91,7 +103,7 @@ export async function savePlanning(scope: Scope, raw: unknown) {
     const open = await tx.weeklyCycle.findMany({ where: { businessId: scope.businessId, organizationId: scope.organizationId, OR: [{ status: { in: ["OPEN", "BLOCKED"] } }, { mediaStatus: { in: ["OPEN", "BLOCKED"] } }, { videoStatus: { in: ["OPEN", "BLOCKED"] } }] }, select: { id: true } });
     await stopUnacceptedTasks(tx, scope, open.map(c => c.id));
     await tx.weeklyCycle.updateMany({ where: { id: { in: open.map(c => c.id) } }, data: { status: "CANCELLED", errorCode: "POLICY_CHANGED", leaseUntil: null } });
-    const data = { ...input, version: input.version + 1, actorId: scope.actorId, brandVersion: business.version, nextRunAt: nextWeekly(input.weekday, input.hourUTC, new Date()) };
+    const data = { ...input, pauseReason: null, version: input.version + 1, actorId: scope.actorId, brandVersion: business.version, nextRunAt: nextWeekly(input.weekday, input.hourUTC, new Date()) };
     await tx.weeklyPolicy.upsert({ where: { businessId: scope.businessId }, create: { businessId: scope.businessId, organizationId: scope.organizationId, ...data }, update: data });
     await tx.auditEvent.create({ data: { ...scope, action: "WEEKLY_POLICY_UPDATED", detail: `${input.enabled ? input.mode : "PAUSED"}; at most ${input.maxItems} planned items (${input.videoItems} video) and ${input.creditsPerWeek} combined credits per UTC week. Image authorization: ${input.imagesAfterApproval}; video scene authorization and source-rights confirmation: ${input.videosAfterApproval}. Already-authorized jobs are not cancelled. Approval and social publication remain separate.` } });
     return { ok: true };
@@ -106,7 +118,7 @@ export async function createDuePlan(now = new Date()) {
     if (!policy.enabled || policy.nextRunAt > now) return false;
     const member = await tx.membership.findUnique({ where: { organizationId_userId: { organizationId: scope.organizationId, userId: policy.actorId } } });
     if (!business.confirmedAt || policy.brandVersion !== business.version || !member || !["OWNER", "ADMIN"].includes(member.role)) {
-      await tx.weeklyPolicy.update({ where: { businessId: business.id }, data: { enabled: false } });
+      await tx.weeklyPolicy.update({ where: { businessId: business.id }, data: { enabled: false, pauseReason: !member || !["OWNER", "ADMIN"].includes(member.role) ? "AUTHORIZER_CHANGED" : "BRAND_CHANGED" } });
       await tx.auditEvent.create({ data: { ...scope, action: "WEEKLY_POLICY_PAUSED", detail: "Brand or authorizing membership changed; administrator confirmation required." } });
       return true;
     }
@@ -127,7 +139,7 @@ export async function createDuePlan(now = new Date()) {
         // Invalid retained brand/knowledge must not monopolize the oldest due
         // slot. Infrastructure/programming failures still roll back and surface.
         if (!(error instanceof z.ZodError) && !(error instanceof AppError && error.status === 409)) throw error;
-        await tx.weeklyPolicy.update({ where: { businessId: business.id }, data: { enabled: false } });
+        await tx.weeklyPolicy.update({ where: { businessId: business.id }, data: { enabled: false, pauseReason: "CONTEXT_INVALID" } });
         await tx.auditEvent.create({ data: { ...scope, action: "WEEKLY_POLICY_PAUSED",
           detail: "Brand or business knowledge is invalid or exceeds the planning context limit. Review the brand and saved preferences, then explicitly save recurring authorization. Existing authorized work and credits are unchanged.",
         } });
