@@ -12,4 +12,7 @@ ENV CRAWL4AI_CHROMIUM_SANDBOX=true \
     REDIS_TASK_TTL=60
 USER appuser
 EXPOSE 11235
+# Railway checks /health. The inherited upstream check requires Redis, which
+# this fixed HTML reader deliberately does not start.
+HEALTHCHECK NONE
 CMD ["python", "-I", "/app/html_server.py"]

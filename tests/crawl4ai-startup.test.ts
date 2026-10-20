@@ -34,5 +34,6 @@ it("pins the isolated image and excludes application secrets from the build cont
   expect(dockerfile).toContain("USER appuser");
   expect(dockerfile).not.toMatch(/COPY\s+\.\s/);
   expect(dockerfile).toContain('CMD ["python", "-I", "/app/html_server.py"]');
+  expect(dockerfile).toContain("HEALTHCHECK NONE");
   expect(readFileSync("scripts/crawl4ai/.dockerignore", "utf8").trim().split("\n")).toEqual(["*", "!Dockerfile", "!config.yml", "!start.sh", "!html_worker.py", "!html_server.py"]);
 });
