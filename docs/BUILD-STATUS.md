@@ -2,7 +2,9 @@
 
 ## 20 October — complete browser journey release check
 
-Independent CI `39421886006` finished with 2,332 passing unit/integration tests and successful recovery/build checks, but **55/56 browser journeys passed**. The remaining onboarding-to-sign-out journey still expected the removed disabled social buttons and obsolete empty-state text. Its assertions now check the intended per-platform unavailable cards and plain setup explanation, while retaining the absence of usable connection buttons and server-provider headings. No production gate or customer control was weakened. A full isolated-storage browser rerun and replacement independent CI are pending; v72 app deployment remains withheld.
+Independent CI `39421886006` finished with 2,332 passing unit/integration tests and successful recovery/build checks, but **55/56 browser journeys passed**. The remaining onboarding-to-sign-out journey still expected the removed disabled social buttons and obsolete empty-state text. Its assertions now check the intended per-platform unavailable cards and plain setup explanation, while retaining the absence of usable connection buttons and server-provider headings. No production gate or customer control was weakened.
+
+The corrected full local browser run passes **56/56 journeys with no skips**, including onboarding through sign-out, exact-version media approval, tenant/role boundaries, paid gates, OAuth cancellation and recovery, scoped metrics/learning, MFA, keyboard/accessibility and mobile checks. It used a new disposable database and real local private storage; the database, storage container, objects and temporary TLS files were removed. Replacement independent CI `39423702528` is running for source `332e721854af34a14aec433080cd2bd979ded657`; v72 app deployment remains withheld pending its verdict. This fixes a test expectation for the intended simplified interface, not missing live social setup or automatic semantic autofill.
 
 ## 20 October — website reader recovery and simpler customer screens (v72, in verification)
 

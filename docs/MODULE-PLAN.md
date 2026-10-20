@@ -4,7 +4,7 @@ The target is a working multi-tenant marketing product, with only explicitly ide
 
 ## Completion rules
 
-Release check update: v72's first independent CI passed unit/integration, build and recovery but failed one stale browser expectation for the intentionally removed disabled connection buttons (55/56 journeys passed). The full onboarding journey now asserts the new unavailable cards instead; replacement full browser/CI verification is required before app rollout. This is not a live OAuth activation.
+Release check update: v72's first independent CI passed unit/integration, build and recovery but failed one stale browser expectation for the intentionally removed disabled connection buttons (55/56 journeys passed). The full onboarding journey now asserts the new unavailable cards instead; all **56 local browser journeys now pass** with isolated real storage and a disposable database. Replacement independent CI `39423702528` is required before app rollout. This is not a live OAuth activation.
 
 Current 20 October checkpoint: v71 source `edfe21e4fe8ad136ab20e0e5531f95f840daca92` passed CI `39410931228` and is deployed to web and worker. The next `studio-v72-website-intake` increment simplifies Brand/Connections and replaces the failed Railway browser attempt with a constrained HTML-only Crawl4AI reader. Local actual gateway reads pass, including Lodha, but hosted extraction activation and v72 delivery are still pending. No browser sandbox bypass, automatic semantic autofill or social activation is inferred. BUILD-STATUS.md records exact evidence and remaining boundaries; older “production remains v64” notes below are historical.
 
