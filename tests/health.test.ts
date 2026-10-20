@@ -18,6 +18,7 @@ describe("deployment readiness", () => {
     expect(query).toHaveBeenCalledTimes(47);
     const sql = query.mock.calls.map(call => String(call[0])).join("\n");
     expect(sql).toContain("requireMfa");
+    expect(sql).toContain("setupDetails");
     expect(sql).toContain("knowledgeContext");
     expect(sql).toContain("revisionRequests");
     expect(sql).toContain("WeeklyVideoShot");
@@ -43,5 +44,34 @@ describe("deployment readiness", () => {
   it("fails closed when only part of the schema exists", async () => {
     query.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error("RateLimit table missing"));
     expect((await GET()).status).toBe(503);
+  });
+  it("refuses readiness when the weekly pause migration is missing", async () => {
+    query.mockImplementation(async (sql: TemplateStringsArray) => {
+      if (String(sql).includes('"pauseReason"')) throw new Error("column missing: private database detail");
+      return [];
+    });
+    const result = await GET();
+    expect(result.status).toBe(503);
+    expect(await result.json()).toEqual({ status: "unavailable" });
+    expect(result.headers.get("Cache-Control")).toBe("no-store");
+  });
+  it("stops at every failed schema probe without reading records or exposing diagnostics", async () => {
+    query.mockResolvedValue([]);
+    await GET();
+    const probes = query.mock.calls.map(call => String(call[0]));
+    for (const sql of probes) expect(sql).toMatch(/^SELECT .+ FROM "[A-Za-z]+" LIMIT 0$/);
+    for (let index = 0; index < probes.length; index++) {
+      query.mockReset();
+      let calls = 0;
+      query.mockImplementation(async () => {
+        if (calls++ === index) throw new Error("private database detail");
+        return [];
+      });
+      const result = await GET();
+      expect(result.status).toBe(503);
+      expect(await result.json()).toEqual({ status: "unavailable" });
+      expect(result.headers.get("Cache-Control")).toBe("no-store");
+      expect(query).toHaveBeenCalledTimes(index + 1);
+    }
   });
 });

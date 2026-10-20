@@ -96,3 +96,26 @@ Source removal deletes active source text; facts copied into brand snapshots and
 Primary references: [upstream source](https://github.com/firecrawl/firecrawl), [self-host instructions](https://docs.firecrawl.dev/contributing/self-host), [scrape API](https://docs.firecrawl.dev/api-reference/endpoint/scrape). Check release licensing and preserve required notices before distribution.
 
 Document parser references: [Mozilla PDF.js](https://github.com/mozilla/pdf.js), [Mammoth text extraction and security notes](https://github.com/mwilliamson/mammoth.js). Only raw text is used, never generated HTML. Mammoth's CLI-only argparse dependency is overridden to version 2.0.1 to remove its vulnerable sprintf-js dependency; extraction tests cover the supported library path. Do not enable external file access or run the converter CLI on customer documents.
+# 20 October — simple onboarding and optional Crawl4AI backend
+
+Customer setup now has three screens: website, optional social profiles/brand book, and editable brand confirmation. Bare and `www.` domains become HTTPS before existing public-address validation. The website permission checkbox authorizes the existing bounded import queue; a social handle is only a public-page source, not OAuth or publishing consent. Inaccessible pages do not erase progress or prevent manual completion. Source text can supply a literal suggested description, never a semantic inference or automatic approval. The old analysis quote/source-selection controls are no longer part of onboarding.
+
+Brand-book choices are upload, make a starter guide, or later. Accepted uploads: selectable-text PDF, DOCX, PPTX, UTF-8 TXT/Markdown. Office/PDF parsing remains isolated, timed and memory-bounded; binaries stay under 5 MB, extracted text under 24 KB, PDFs/slides under 40 pages/slides. PowerPoint part names, relationships and XML sizes are bounded; external parts/DOCTYPE/entities are rejected. Uploaded logos, photos and original layouts are not imported, and image-only files need a text export. The downloadable starter book is escaped, printable HTML made from the customer's current brand kit; it is not generated imagery, a logo, or a recovered copy of uploaded artwork.
+
+`Business.setupDetails` (migration `20261020190000_simple_onboarding`) stores only the optional profile links and brand-book choice. Existing setup records and connection-first drafts retain their profiles and version checks. Explicit review is still required before brand confirmation; completion creates a zero-cost planning outline, not paid generation or publishing.
+
+## Crawl4AI selection (not yet live-verified)
+
+At the owner's request, the existing queue can select the self-hosted Crawl4AI **v0.9.5** `/crawl` protocol instead of Firecrawl. Configuration:
+
+- `WEBSITE_SCRAPER=crawl4ai`
+- `CRAWL4AI_SELF_HOSTED_URL`: private service root, e.g. `http://crawl4ai.railway.internal:11235`
+- `CRAWL4AI_API_TOKEN`: dedicated bearer token shared with the private Crawl4AI server, not any model key.
+- `CRAWL4AI_EGRESS_RESTRICTED=true` **only after actual network isolation acceptance**.
+- `WEBSITE_EXTRACTION_ENABLED=true` only after the above deployment gates pass on both web and worker.
+
+Default selection remains Firecrawl for existing deployments. Unknown selections fail closed. There is no automatic provider fallback, extra attempt, hosted-cloud call, LLM extraction, injected hook or deep crawl. Each request has one URL, text/light browser mode, robots checks, no screenshots/downloads/iframes/full scrolling, zero anti-bot retries and a 30-second page timeout. The app's seven-day business-scoped cache, one global active website job, three-new-page daily allowance, 500 KB response ceiling and 80 KB retained text ceiling still apply. A website plus all three social profiles can therefore exceed the current daily allowance; the UI preserves the links and explains unread pages instead of claiming all were imported.
+
+The returned result must contain exactly one successful page with matching requested URL, explicit final URL, successful target status and valid bounded UTF-8 text. The existing public DNS/final-origin policy, tenant/author/lease revalidation, safe failure messages and no-retry rules apply equally to both backends. Final URL checks do **not** replace browser/subresource/redirect network isolation.
+
+Protocol reviewed against upstream [v0.9.5 API](https://github.com/unclecode/crawl4ai/blob/v0.9.5/deploy/docker/api.py), [schemas](https://github.com/unclecode/crawl4ai/blob/v0.9.5/deploy/docker/schemas.py), [browser strategy](https://github.com/unclecode/crawl4ai/blob/v0.9.5/crawl4ai/async_crawler_strategy.py), and [server](https://github.com/unclecode/crawl4ai/blob/v0.9.5/deploy/docker/server.py). Before hosting: pin an audited image digest, require server authentication, keep hooks/execute-js/internal egress disabled, verify TLS and sandbox enforcement, separate from databases and app secrets, limit resources/concurrency, and measure representative pages. No Crawl4AI server, paid infrastructure or cloud subscription was created here. No actual Crawl4AI browser extraction, public-social access, production isolation or monthly cost target is claimed by transport tests.

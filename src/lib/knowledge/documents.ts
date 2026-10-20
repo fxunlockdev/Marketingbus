@@ -4,7 +4,7 @@ import { z } from "zod";
 import { AppError } from "../http";
 export const DOCUMENT_BYTE_LIMIT = 5 * 1024 * 1024;
 let active = 0;
-export async function extractDocument(bytes: Uint8Array, kind: "pdf" | "docx") {
+export async function extractDocument(bytes: Uint8Array, kind: "pdf" | "docx" | "pptx") {
   if (!bytes.length || bytes.length > DOCUMENT_BYTE_LIMIT) throw new AppError(413, "Use a document up to 5 MB.");
   if (Number(process.versions.node.split(".")[0]) < 26) throw new AppError(503, "Document extraction requires the isolated Node 26 runtime.");
   if (active >= 2) throw new AppError(503, "Document extraction is busy. Please retry shortly.");
@@ -18,7 +18,7 @@ export async function extractDocument(bytes: Uint8Array, kind: "pdf" | "docx") {
       const chunks: Buffer[] = []; let count = 0, stopped = false;
       const fail = () => {
         if (stopped) return; stopped = true; child.kill("SIGKILL");
-        reject(new AppError(422, "Cannot extract this document. Use an unlocked PDF with selectable text (up to 40 pages) or a DOCX file, containing 20 characters to 24 KB of text. Scans, damaged files and complex files may require a text export."));
+        reject(new AppError(422, "Cannot extract this document. Use an unlocked PDF, Word document or PowerPoint (up to 40 pages or slides) with selectable text. Scans, damaged files and complex files may require a PDF or text export."));
       };
       const timer = setTimeout(fail, 15000);
       child.on("error", fail);

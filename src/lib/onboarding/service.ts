@@ -8,9 +8,10 @@ import { lockBusiness, type Scope } from "../production/service";
 import { assertBrandEditor } from "../knowledge/analysis";
 import { replaceBrandProfile } from "../knowledge/profile";
 import { publicUrl } from "../providers/url-policy";
+import { setupDetails, socialAddress, websiteAddress } from "./simple";
 
 const requiredWebsite = z.string().trim().min(1, "Enter your business website.").max(500).transform((value, ctx) => {
-  try { return publicUrl(value).href; } catch { ctx.addIssue({ code: "custom", message: "Enter a public HTTPS business website." }); return z.NEVER; }
+  try { return publicUrl(websiteAddress(value)).href; } catch { ctx.addIssue({ code: "custom", message: "Enter a public HTTPS business website." }); return z.NEVER; }
 });
 
 export const draftProfile = draftBrandInput;
@@ -18,6 +19,8 @@ const startInput = z.object({ organizationId: z.string().min(1), requestId: z.uu
   name: brandInput.shape.name, website: requiredWebsite, industry: brandInput.shape.industry }).strict();
 const connectionDraftInput = z.object({ organizationId: z.string().min(1), requestId: z.uuid(), name: brandInput.shape.name }).strict();
 const actionInput = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("simple-save"), revision: z.number().int().positive(), version: z.number().int().positive(),
+    step: z.union([z.literal(1), z.literal(2), z.literal(5)]), profile: draftProfile.extend({ website: requiredWebsite }), details: setupDetails }).strict(),
   z.object({ action: z.literal("save"), revision: z.number().int().positive(), version: z.number().int().positive(), step: z.number().int().min(1).max(5), profile: draftProfile }).strict(),
   z.object({ action: z.literal("finish"), revision: z.number().int().positive(), version: z.number().int().positive(), confirmed: z.literal(true) }).strict(),
 ]);
@@ -50,7 +53,7 @@ export async function readSetup(scope: Scope) {
   const business = await db.business.findFirst({ where: { id: scope.businessId, organizationId: scope.organizationId } });
   const member = await db.membership.findUnique({ where: { organizationId_userId: { organizationId: scope.organizationId, userId: scope.actorId } } });
   if (!business || !member || business.setupStep === null) throw new AppError(404, "Setup not found.");
-  return { profile: profileFromBusiness(business), step: business.setupStep, revision: business.setupRevision, version: business.version, canEdit: ["OWNER", "ADMIN", "EDITOR"].includes(member.role) };
+  return { profile: profileFromBusiness(business), details: setupDetails.parse(business.setupDetails), step: business.setupStep, revision: business.setupRevision, version: business.version, canEdit: ["OWNER", "ADMIN", "EDITOR"].includes(member.role) };
 }
 export async function manageSetup(scope: Scope, raw: unknown) {
   const input = actionInput.parse(raw);
@@ -60,6 +63,23 @@ export async function manageSetup(scope: Scope, raw: unknown) {
     if (input.action === "finish" && business.setupStep === 6 && business.version === input.version) return { ok: true };
     if (business.setupRevision !== input.revision || business.version !== input.version) throw new AppError(409, "This setup changed in another tab or through brand analysis. Reload the saved setup before continuing.");
     if (business.setupStep === 6) throw new AppError(409, "Setup is complete. Edit your saved brand profile instead.");
+    if (input.action === "simple-save") {
+      const profile = { ...input.profile, website: requiredWebsite.parse(input.profile.website) };
+      if (input.step === 5) {
+        if (business.setupStep < 2) throw new AppError(409, "Choose your brand-book option first.");
+        brandInput.parse(profile);
+      }
+      if (input.step >= 2 && input.details.brandBook === "undecided") throw new AppError(400, "Choose whether you have a brand book.");
+      if (new Set(input.details.socialProfiles.map(s => s.platform)).size !== input.details.socialProfiles.length)
+        throw new AppError(400, "Add one public profile per platform.");
+      let socialProfiles;
+      try { socialProfiles = input.details.socialProfiles.map(s => ({ ...s, url: socialAddress(s.platform, s.url) })); }
+      catch { throw new AppError(400, "Check your public social profile links."); }
+      if (JSON.stringify(profileFromBusiness(business)) !== JSON.stringify(profile)) await replaceBrandProfile(tx, scope, profile);
+      await tx.business.update({ where: { id: business.id }, data: { setupStep: input.step, setupDetails: { ...input.details, socialProfiles }, setupRevision: { increment: 1 } } });
+      await tx.auditEvent.create({ data: { ...scope, action: "SETUP_SAVED", detail: "Simple setup saved. Public profile links do not connect accounts or authorize publishing." } });
+      return { ok: true };
+    }
     if (input.action === "save") {
       requiredWebsite.parse(input.profile.website);
       if (input.step > business.setupStep + 1) throw new AppError(409, "Complete the preceding setup step first.");

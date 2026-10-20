@@ -4,6 +4,7 @@ import { db } from "../db";
 import { selfHostedScraperBase } from "./service";
 import { readWebsite, scraperHeaders } from "./scraper-client";
 import { SourceImportError } from "./import-errors";
+import { websiteScraper } from "./scraper-config";
 import type { Job, Prisma } from "@prisma/client";
 const payloadSchema = z.object({ sourceId: z.string(), url: z.url() }).strict();
 async function sourceContext(tx: Prisma.TransactionClient, job: Job, status: "QUEUED" | "FETCHING", requestedBy?: string) {
@@ -34,9 +35,10 @@ async function failSource(tx: Prisma.TransactionClient, job: Job) {
       organizationId: job.organizationId, kind: "WEBSITE", status: { in: ["QUEUED", "FETCHING"] } }, data: { status: "FAILED" } });
 }
 export async function runOneSourceJob(transport: typeof fetch = fetch) {
-  const base = selfHostedScraperBase();
+  const provider = websiteScraper();
+  const base = selfHostedScraperBase(provider);
   // Invalid operator credentials must not consume a customer's queued attempt.
-  const headers = scraperHeaders();
+  const headers = scraperHeaders(provider);
   const job = await db.$transaction(async tx => {
     await tx.$queryRaw`SELECT pg_advisory_xact_lock(71403219)::text`;
     const stale = await tx.job.findMany({ where: { kind: "WEBSITE_READ", status: "RUNNING", leaseUntil: { lt: new Date() } } });
@@ -59,7 +61,7 @@ export async function runOneSourceJob(transport: typeof fetch = fetch) {
       if (!owned.count) throw new SourceImportError("IMPORT_INTERRUPTED");
       return tx.knowledgeSource.update({ where: { id: source.id }, data: { status: "FETCHING" } });
     });
-    const data = await readWebsite(base, payload.url, headers, transport);
+    const data = await readWebsite(base, payload.url, headers, transport, provider);
     await db.$transaction(async tx => {
       await sourceContext(tx, job, "FETCHING", source.createdBy);
       const owned = await tx.job.updateMany({ where: { id: job.id, status: "RUNNING", leaseUntil: job.leaseUntil,

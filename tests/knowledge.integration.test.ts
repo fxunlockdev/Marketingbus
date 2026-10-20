@@ -32,6 +32,27 @@ suite("source ingestion boundaries", () => {
     for (const change of [{ rightsConfirmed: false }, { text: "\u0000" + input.text }, { text: "漢".repeat(10000) }]) await expect(manageSource(a, { ...input, ...change })).rejects.toThrow();
   });
   function enable() { vi.stubEnv("WEBSITE_EXTRACTION_ENABLED", "true"); vi.stubEnv("FIRECRAWL_SELF_HOSTED_URL", "http://firecrawl.railway.internal:3002"); vi.stubEnv("FIRECRAWL_EGRESS_RESTRICTED", "true"); }
+  it.each([false, true])("Crawl4AI uses the scoped queue and honors permission revocation (%s)", async revoke => {
+    vi.stubEnv("WEBSITE_EXTRACTION_ENABLED", "true"); vi.stubEnv("WEBSITE_SCRAPER", "crawl4ai");
+    vi.stubEnv("CRAWL4AI_SELF_HOSTED_URL", "http://crawl4ai.railway.internal:11235");
+    vi.stubEnv("CRAWL4AI_EGRESS_RESTRICTED", "true"); vi.stubEnv("CRAWL4AI_API_TOKEN", "synthetic-token");
+    const scope = await setup(), other = await setup(), url = "https://example.com/";
+    const created = await manageSource(scope, { action: "website", url, rightsConfirmed: true });
+    const transport = vi.fn(async (target, init) => {
+      expect(String(target)).toBe("http://crawl4ai.railway.internal:11235/crawl");
+      expect(JSON.parse(String(init?.body)).urls).toEqual([url]);
+      if (revoke) await db.membership.updateMany({ where: { organizationId: scope.organizationId, userId: scope.actorId }, data: { role: "VIEWER" } });
+      return Response.json({ success: true, results: [{ success: true, url, redirected_url: url, status_code: 200, markdown: { raw_markdown: input.text } }] });
+    });
+    await runOneSourceJob(transport); await runOneSourceJob(transport);
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(await db.knowledgeSource.findUniqueOrThrow({ where: { id: created.sourceId } })).toMatchObject({
+      status: revoke ? "FAILED" : "PROPOSED", body: revoke ? "" : input.text,
+    });
+    expect(await listSources({ organizationId: other.organizationId, businessId: scope.businessId })).toEqual([]);
+    if (!revoke) expect(await manageSource(scope, { action: "website", url, rightsConfirmed: true })).toMatchObject({ cached: true });
+    expect(await db.reservation.count({ where: { organizationId: scope.organizationId } })).toBe(0);
+  });
   it.each(["VIEWER", "REMOVED"])("does not scrape after the requesting member becomes %s", async role => {
     enable(); const scope = await setup();
     const created = await manageSource(scope, { action: "website", url: "https://example.com", rightsConfirmed: true });

@@ -1,0 +1,1 @@
+ALTER TABLE "Business" ADD COLUMN "setupDetails" JSONB NOT NULL DEFAULT '{}';

@@ -146,10 +146,6 @@ export function AuthForm() {
               : "New here? Create an account"}
           </button>
           <p><a href="/recover">Forgot your password?</a></p>
-          <div className="notice subtle">
-            Private pilot · AI generation requires configured providers and credits. Social publishing is not activated yet.
-            No payment is collected.
-          </div>
         </div>
       </section>
     </main>

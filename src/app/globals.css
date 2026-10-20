@@ -1127,6 +1127,20 @@ hr {
 .setup-option small { display: block; line-height: 1.5; margin-top: 8px; color: var(--muted); }
 .setup-save-state { display: flex; gap: 8px 20px; align-items: center; flex-wrap: wrap; font-size: 12px; margin-bottom: 20px; }
 .setup-save-state small { color: var(--muted); }
+.simple-setup { max-width: 780px; margin-inline: auto; }
+.simple-setup .setup-progress { justify-content: center; }
+.simple-setup .setup-heading { text-align: center; margin: 32px auto 24px; }
+.simple-setup .setup-heading p { margin-inline: auto; }
+.simple-setup .setup-fields { gap: 20px; }
+.simple-setup .setup-choice { border: 0; padding: 0; margin: 0; min-width: 0; }
+.simple-setup .setup-choice legend { font-size: 19px; font-weight: 600; }
+.simple-setup summary { cursor: pointer; padding-block: 8px; }
+.simple-setup .setup-socials label { margin-top: 14px; }
+.simple-setup .setup-extras { display: grid; gap: 16px; margin-top: 16px; }
+.simple-setup .setup-import-status { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.simple-setup .setup-import-status details p { white-space: pre-wrap; max-height: 220px; overflow: auto; }
+.simple-setup .form-actions { position: static; margin-top: 0; }
+.simple-setup .channel-options { flex-wrap: wrap; }
 .setup-assets { margin-bottom: 24px; }
 .setup-assets summary { padding: 18px 0; cursor: pointer; }
 .setup-summary dl { display: grid; gap: 8px; margin-top: 24px; }

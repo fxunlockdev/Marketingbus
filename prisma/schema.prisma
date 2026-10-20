@@ -107,6 +107,7 @@ model Business {
   setupKey          String?           @unique
   setupStep         Int?
   setupRevision     Int               @default(0)
+  setupDetails      Json              @default("{}")
   version           Int               @default(1)
   confirmedAt       DateTime?
   productionEnabled Boolean           @default(false)

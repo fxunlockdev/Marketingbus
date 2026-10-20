@@ -1,29 +1,31 @@
 "use client";
 import { useEffect, useId, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, Globe, Palette, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check } from "lucide-react";
 import { brandInput, type BrandInput } from "@/lib/brand";
-import { contentPreferences, strategies } from "@/lib/onboarding/preferences";
-import { KnowledgeLibrary } from "./knowledge-library";
-import { AssetLibrary } from "./asset-library";
-import { presets } from "./brand-form";
+import { contentPreferences } from "@/lib/onboarding/preferences";
+import { setupDetails, socialAddress, websiteAddress, websiteExcerpt, type SetupDetails } from "@/lib/onboarding/simple";
+import { BrandBookDownload } from "./brand-book-download";
 
-const empty: BrandInput = { name: "", website: "", industry: "", offering: "", audience: "", goal: "", difference: "", proof: "", tone: "Clear and conversational", restrictions: "", color: "#c67139", designPreset: "editorial", channels: ["Instagram", "LinkedIn"], contentPreferences: contentPreferences.parse({}) };
-type Setup = { profile: BrandInput; step: number; revision: number; version: number; canEdit: boolean };
-const steps = ["Welcome", "Sources", "Business", "Strategy", "Look & assets", "Review"];
+const empty: BrandInput = { name: "", website: "", industry: "", offering: "", audience: "", goal: "Help more people discover our business", difference: "", proof: "", tone: "Clear and conversational", restrictions: "", color: "#c67139", designPreset: "editorial", channels: ["Instagram", "LinkedIn"], contentPreferences: contentPreferences.parse({}) };
+type Setup = { profile: BrandInput; details: SetupDetails; step: number; revision: number; version: number; canEdit: boolean };
+type Source = { id: string; title: string; sourceUrl: string; body: string; status: string };
+const steps = ["Your website", "Your brand", "Quick review"];
 export function BusinessSetup({ businessId, workspaces, onComplete, onChange }: {
   businessId?: string; workspaces: { id: string; name: string }[]; onComplete: (id: string) => void; onChange: () => void;
 }) {
   const uid = useId(), heading = useRef<HTMLHeadingElement>(null), requestId = useRef("");
-  const [id, setId] = useState(businessId), [saved, setSaved] = useState<Setup | null>(null), [step, setStep] = useState(businessId ? 1 : 0);
-  const [profile, setProfile] = useState<BrandInput>(empty), [organizationId, setOrganizationId] = useState(workspaces[0]?.id ?? "");
-  const [busy, setBusy] = useState(!!businessId), [error, setError] = useState(""), [confirmed, setConfirmed] = useState(false);
-  const [importRights, setImportRights] = useState(false);
-  const [importRevision, setImportRevision] = useState(0);
-  const preferences = contentPreferences.parse(profile.contentPreferences ?? {});
+  const [id, setId] = useState(businessId), [saved, setSaved] = useState<Setup | null>(null), [step, setStep] = useState(0);
+  const [profile, setProfile] = useState<BrandInput>(empty), [details, setDetails] = useState<SetupDetails>(setupDetails.parse({}));
+  const [organizationId, setOrganizationId] = useState(workspaces[0]?.id ?? "");
+  const [busy, setBusy] = useState(!!businessId), [error, setError] = useState(""), [notice, setNotice] = useState("");
+  const [rights, setRights] = useState(false), [confirmed, setConfirmed] = useState(false), [file, setFile] = useState<File | null>(null);
+  const [sources, setSources] = useState<Source[]>([]), [sourceError, setSourceError] = useState("");
+  const edited = useRef(new Set<string>());
   async function load(target: string, signal?: AbortSignal) {
     const response = await fetch(`/api/businesses/${target}/onboarding`, { signal }); const data = await response.json();
-    if (!response.ok) throw Error(data.error || "Could not load setup.");
-    if (!signal?.aborted) { setSaved(data); setProfile(data.profile); setStep(!data.profile.website && data.step < 6 ? 0 : Math.min(data.step, 5)); setConfirmed(false); }
+    if (!response.ok) throw Error(data.error || "Could not load your saved details.");
+    if (!signal?.aborted) { setSaved(data); setProfile({ ...empty, ...data.profile, goal: data.profile.goal || empty.goal }); setDetails(data.details); setStep(!data.profile.website ? 0 : data.step >= 2 ? 2 : 1); setConfirmed(false); }
+    return data as Setup;
   }
   useEffect(() => {
     if (!businessId) return;
@@ -32,70 +34,135 @@ export function BusinessSetup({ businessId, workspaces, onComplete, onChange }: 
     return () => controller.abort();
   }, [businessId]);
   useEffect(() => { heading.current?.focus(); }, [step]);
-  const set = (key: keyof BrandInput, value: unknown) => { setProfile(old => ({ ...old, [key]: value })); setConfirmed(false); };
-  function field(key: "name" | "website" | "industry" | "offering" | "audience" | "goal" | "difference" | "proof" | "tone" | "restrictions", label: string, hint: string, required = false, area = false) {
-    const limits = { name: 100, website: 500, industry: 100, offering: 2500, audience: 1500, goal: 1000, difference: 1500, proof: 2000, tone: 300, restrictions: 2000 };
-    const props = { id: `${uid}-${key}`, value: profile[key], required, maxLength: limits[key], placeholder: hint, onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => set(key, e.target.value), "aria-describedby": `${uid}-error` };
-    return <label htmlFor={props.id}>{label}{area ? <textarea {...props} rows={3} /> : <input {...props} type={key === "website" ? "url" : "text"} />}</label>;
+  useEffect(() => {
+    if (!id) return;
+    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>, checks = 0;
+    async function refresh() {
+      try {
+        const response = await fetch(`/api/businesses/${id}/sources`, { signal: controller.signal });
+        if (!response.ok) throw Error();
+        const data = await response.json();
+        if (!controller.signal.aborted) {
+          setSources(data.sources); setSourceError("");
+          // Queue creation can finish just after the first read. Poll briefly even before it appears.
+          if (++checks < 20 && (!data.sources.length || data.sources.some((s: Source) => ["QUEUED", "FETCHING"].includes(s.status)))) timer = setTimeout(refresh, 6000);
+        }
+      } catch { if (!controller.signal.aborted) setSourceError("We couldn’t check your import. Your saved details are safe."); }
+    }
+    void refresh(); return () => { controller.abort(); clearTimeout(timer); };
+  }, [id, step, notice]);
+  useEffect(() => {
+    const source = sources.find(s => s.sourceUrl === profile.website && s.status === "PROPOSED")
+      ?? sources.find(s => !s.sourceUrl && s.status === "PROPOSED");
+    if (!source || step !== 2) return;
+    const excerpt = websiteExcerpt(source.body);
+    if (excerpt && !profile.offering && !edited.current.has("offering")) { setProfile(old => ({ ...old, offering: excerpt })); setConfirmed(false); }
+  }, [sources, profile.website, profile.offering, step]);
+  const set = (key: keyof BrandInput, value: unknown) => { edited.current.add(key); setProfile(old => ({ ...old, [key]: value })); setConfirmed(false); };
+  function field(key: "name" | "website" | "offering" | "audience" | "tone", label: string, hint: string, required = true, area = false) {
+    const props = { id: `${uid}-${key}`, value: profile[key], required, maxLength: { name: 100, website: 500, offering: 2500, audience: 1500, tone: 300 }[key], placeholder: hint,
+      onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => set(key, e.target.value), "aria-describedby": `${uid}-error` };
+    return <label htmlFor={props.id}>{label}{area ? <textarea {...props} rows={3} /> : <input {...props} type="text" inputMode={key === "website" ? "url" : "text"} autoCapitalize={key === "website" ? "none" : undefined} />}</label>;
   }
   async function request(url: string, body: unknown) {
     const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const data = await response.json(); if (!response.ok) throw Error(data.error || "Could not save setup."); return data;
+    const data = await response.json(); if (!response.ok) throw Error(data.error || "Could not save. Please try again."); return data;
+  }
+  async function scan(target: string, urls: string[]) {
+    let failed = false;
+    for (const url of urls) {
+      try { await request(`/api/businesses/${target}/sources`, { action: "website", url, rightsConfirmed: true }); }
+      catch { failed = true; }
+    }
+    setNotice(failed ? "Some pages couldn’t be read. You can continue and check your details yourself." : "Your pages are being read. You can keep going.");
   }
   async function advance() {
     setBusy(true); setError("");
     try {
-      if (!id) {
-        requestId.current ||= crypto.randomUUID();
-        const data = await request("/api/onboarding", { organizationId, requestId: requestId.current, name: profile.name, website: profile.website, industry: profile.industry });
-        setId(data.id); await load(data.id); onChange();
-        await request(`/api/businesses/${data.id}/sources`, { action: "website", url: profile.website, rightsConfirmed: importRights });
-        setImportRevision(v => v + 1);
-        return;
-      }
-      if (!saved) throw Error("Reload the saved setup before continuing.");
       if (step === 0) {
-        await request(`/api/businesses/${id}/onboarding`, { action: "save", revision: saved.revision, version: saved.version, step: 1, profile });
-        await load(id); onChange();
-        await request(`/api/businesses/${id}/sources`, { action: "website", url: profile.website, rightsConfirmed: importRights });
-        setImportRevision(v => v + 1);
+        const website = websiteAddress(profile.website);
+        let host: string;
+        try { host = new URL(website).hostname.replace(/^www\./, ""); } catch { throw Error("Enter your website, for example www.yourbusiness.com."); }
+        const next = { ...profile, website, name: profile.name || host };
+        let target = id;
+        if (!target) {
+          requestId.current ||= crypto.randomUUID();
+          const data = await request("/api/onboarding", { organizationId, requestId: requestId.current, name: next.name, website, industry: "" });
+          target = data.id; setId(target);
+        } else {
+          if (!saved) throw Error("Please reload your saved details.");
+          await request(`/api/businesses/${target}/onboarding`, { action: "simple-save", revision: saved.revision, version: saved.version, step: 1, profile: next, details });
+        }
+        await load(target!); setRights(false); onChange(); await scan(target!, [website]); return;
+      }
+      if (!id || !saved) throw Error("Please reload your saved details.");
+      const normalized = { ...details, socialProfiles: details.socialProfiles.filter(s => s.url.trim()).map(s => ({ ...s, url: socialAddress(s.platform, s.url) })) };
+      if (step === 1) {
+        if (normalized.brandBook === "undecided") throw Error("Choose whether you have a brand book.");
+        if (file && normalized.brandBook === "upload") {
+          if (file.size > 5 * 1024 * 1024) throw Error("Choose a file smaller than 5 MB.");
+          const response = await fetch(`/api/businesses/${id}/sources/upload`, { method: "POST", headers: { "Content-Type": "application/octet-stream", "x-document-name": file.name.replace(/[^\x20-\x7e]/g, "_"), "x-content-rights": rights ? "confirmed" : "" }, body: file });
+          const result = await response.json(); if (!response.ok) throw Error(result.error || "We couldn’t read this file.");
+        }
+        await request(`/api/businesses/${id}/onboarding`, { action: "simple-save", revision: saved.revision, version: saved.version, step: 2, profile, details: normalized });
+        setFile(null); await load(id); onChange();
+        if (normalized.socialProfiles.length) await scan(id, normalized.socialProfiles.map(s => s.url));
         return;
       }
-      if (step >= 2) {
-        const valid = brandInput.safeParse(profile);
-        if (!valid.success) throw Error(valid.error.issues[0].message);
-      }
-      await request(`/api/businesses/${id}/onboarding`, step === 5
-        ? { action: "finish", revision: saved.revision, version: saved.version, confirmed }
-        : { action: "save", revision: saved.revision, version: saved.version, step: step + 1, profile });
-      if (step === 5) { onComplete(id); return; }
-      await load(id); onChange();
-    } catch (e) { setError(e instanceof Error ? e.message : "Unable to save."); }
+      const valid = brandInput.safeParse(profile); if (!valid.success) throw Error(valid.error.issues[0].message);
+      if (!confirmed) throw Error("Check your details before finishing.");
+      await request(`/api/businesses/${id}/onboarding`, { action: "simple-save", revision: saved.revision, version: saved.version, step: 5, profile: valid.data, details: normalized });
+      const current = await load(id);
+      await request(`/api/businesses/${id}/onboarding`, { action: "finish", revision: current.revision, version: current.version, confirmed: true });
+      onComplete(id);
+    } catch (e) { setError(e instanceof Error ? e.message : "Please check your details and try again."); }
     finally { setBusy(false); }
   }
   const canEdit = !id || !!saved?.canEdit;
-  return <section className="setup-flow" aria-busy={busy} aria-label="Guided business setup">
+  const ready = sources.filter(s => s.status === "PROPOSED");
+  const pending = sources.some(s => ["QUEUED", "FETCHING"].includes(s.status));
+  return <section className="setup-flow simple-setup" aria-busy={busy} aria-label="Guided business setup">
     <nav aria-label="Setup progress"><ol className="setup-progress">{steps.map((name, index) => <li key={name} aria-current={index === step ? "step" : undefined}><span>{index < step ? <Check size={13} aria-hidden="true" /> : index + 1}</span>{name}</li>)}</ol></nav>
-    <div className="setup-heading"><span className="eyebrow">YOUR BUSINESS. YOUR CREATIVE DIRECTION.</span><h1 ref={heading} tabIndex={-1}>{["Let’s build around your business.", "Give your team the real story.", "Make sure we understand you.", "Choose a direction worth following.", "Make it unmistakably yours.", "Your foundation is ready to review."][step]}</h1><p>{["Start with your business website. Review the evidence and add your own context.", "Review your website import and source-backed suggestions. Nothing becomes an approved fact automatically.", "Confirm the offering, audience and facts that every creative will use.", "Set the purpose, writing language and destinations for your first planning outline.", "Choose a visual starting point and add originals you have permission to use.", "Confirm your brand to create a planning outline. No credits are spent and nothing is published."][step]}</p></div>
+    <div className="setup-heading"><h1 ref={heading} tabIndex={-1}>{["Let’s start with your website.", "A little more about your brand.", "Does this sound like you?"][step]}</h1><p>{["We’ll look at your website to help get your brand ready.", "Add what you have. We’ll help with the rest.", "We’ve filled in what we could. Check your details and add anything missing."][step]}</p></div>
     <p id={`${uid}-error`} role={error ? "alert" : undefined} className="error">{error}</p>
-    {id && <div className="setup-save-state"><span>Last completed step saved · current edits save when you continue</span><button type="button" className="text-button" disabled={busy} onClick={async () => { setBusy(true); setError(""); try { await load(id); } catch (e) { setError(e instanceof Error ? e.message : "Reload failed."); } finally { setBusy(false); } }}>Reload saved setup</button><small>Reload discards unsaved changes on this step.</small></div>}
-    {id && !saved ? <p role="status">{busy ? "Loading saved setup…" : "Setup could not be loaded. Use Reload saved setup to try again."}</p> : <>
-    {step === 1 && id && <KnowledgeLibrary key={`${id}-${importRevision}`} businessId={id} initialUrl={profile.website} />}
-    {step === 4 && id && <div className="setup-assets"><details><summary>Upload and approve logos, product photos and references</summary><AssetLibrary businessId={id} /></details></div>}
-    <form className="form-card setup-card" onSubmit={e => { e.preventDefault(); void advance(); }}>
+    {id && !saved ? <p role="status">{busy ? "Loading your details…" : "We couldn’t load your details. Please refresh this page."}</p> : <form className="form-card setup-card" onSubmit={e => { e.preventDefault(); void advance(); }}>
       <fieldset disabled={busy || !canEdit} className="setup-fields">
-      {step === 0 && <div className="setup-split"><div><div className="section-title"><Globe size={20} aria-hidden="true" /><h2>The essentials</h2></div>
-        <label>Workspace<select required value={organizationId} onChange={e => setOrganizationId(e.target.value)}>{workspaces.map(w => <option value={w.id} key={w.id}>{w.name}</option>)}</select></label>
-        {field("name", "Business name", "Your business", true)}{field("website", "Business website (required)", "https://yourbusiness.com", true)}{field("industry", "Industry", "e.g. Architecture or skincare")}
-        <label className="checkbox-label"><input type="checkbox" required checked={importRights} onChange={e => setImportRights(e.target.checked)} />I have permission to import this business website.</label>
-      </div><aside className="setup-note"><ShieldCheck size={25} aria-hidden="true" /><h2>One brief. Every creative.</h2><p>Your confirmed brand will guide copy, images and video in one Asset studio.</p><p>Continue to save your website and request a bounded website scan. Recent results are reused to avoid repeat scraping. You will review imported evidence before it becomes brand guidance.</p><p>Social accounts can be connected first; your website is required to complete brand setup. If the scraper is unavailable, we show the error and keep your setup saved.</p></aside></div>}
-      {step === 1 && <div className="notice subtle">Check the website import status above. If a scan could not start, use Queue website import to retry after scraper setup is available. Documents can supplement your website. AI analysis requires a separate quote and credit authorization. If you apply suggestions above, reload the saved setup before continuing.</div>}
-      {step === 2 && <><div className="form-grid">{field("name", "Business name", "Your business", true)}{field("industry", "Industry", "Your category")}</div>{field("offering", "What do you offer?", "Describe your actual products or services.", true, true)}{field("audience", "Who is it for?", "Who buys and what are they trying to achieve?", true, true)}{field("goal", "What should your marketing achieve?", "e.g. Book consultations", true, true)}{field("difference", "Why do customers choose you?", "A specific, supportable difference.", false, true)}{field("proof", "What evidence can we use?", "Approved facts and their sources. Leave unknown details blank.", false, true)}{field("tone", "How should your brand sound?", "Warm, practical and clear", true)}{field("restrictions", "What should we avoid?", "Claims, topics, visual styles or words to avoid.", false, true)}</>}
-      {step === 3 && <><div className="form-grid"><label>Business type<select value={preferences.businessType} onChange={e => set("contentPreferences", { ...preferences, businessType: e.target.value })}><option value="services">Services</option><option value="local">Local business</option><option value="products">Products</option></select></label><label>Writing language<select value={preferences.language} onChange={e => set("contentPreferences", { ...preferences, language: e.target.value })}><option>English (US)</option><option>English (UK)</option></select></label></div><fieldset><legend>Content strategy</legend><div className="setup-options">{strategies.map(s => <label key={s.id} className={`setup-option ${preferences.strategy === s.id ? "selected" : ""}`}><input type="radio" name={`${uid}-strategy`} checked={preferences.strategy === s.id} onChange={() => set("contentPreferences", { ...preferences, strategy: s.id })} /><span><strong>{s.name}</strong><small>{s.description}</small></span></label>)}</div></fieldset><fieldset><legend>Publishing destinations</legend><p className="muted">Choose where to prepare content. These choices do not connect accounts or authorize posts.</p><div className="channel-options">{["Instagram", "Facebook", "LinkedIn"].map(ch => <label key={ch}><input type="checkbox" checked={profile.channels.includes(ch as never)} onChange={e => set("channels", e.target.checked ? [...profile.channels, ch] : profile.channels.filter(c => c !== ch))} />{ch}</label>)}</div><p className="small muted">X and YouTube are not offered in guided setup until their publishing integrations are available.</p></fieldset></>}
-      {step === 4 && <><div className="section-title"><Palette size={20} aria-hidden="true" /><h2>Your design direction</h2></div><div className="form-grid"><label>Brand accent<input type="color" value={profile.color} onChange={e => set("color", e.target.value)} /></label><label>Image direction<select value={preferences.visualStyle} onChange={e => set("contentPreferences", { ...preferences, visualStyle: e.target.value })}><option value="natural">Natural light, everyday context</option><option value="studio">Clean studio, controlled lighting</option><option value="cinematic">Cinematic light, considered contrast</option></select></label></div><fieldset><legend>Layout preset</legend><div className="preset-grid">{presets.map(p => <label className={`preset-option ${profile.designPreset === p.id ? "selected" : ""}`} key={p.id}><input type="radio" name={`${uid}-preset`} checked={profile.designPreset === p.id} onChange={() => set("designPreset", p.id)} /><div className={`design-preview ${p.id}`} style={{ "--brand-accent": profile.color } as React.CSSProperties}><small>{profile.name}</small><strong>Your story.<br />Your point of view.</strong><span>Layout preview · not generated content</span></div><div className="preset-description"><b>{p.name}</b><p>{p.description}</p></div></label>)}</div></fieldset><p className="small muted">Original logos and products are composited without redrawing. Generated supporting artwork is reviewed separately. Bundled Figtree typography is currently supported; custom fonts and transformation-strength controls are not offered here.</p></>}
-      {step === 5 && <><div className="setup-summary"><section><h2>{profile.name}</h2><p>{profile.offering}</p><dl><dt>Audience</dt><dd>{profile.audience}</dd><dt>Goal</dt><dd>{profile.goal}</dd><dt>Voice</dt><dd>{profile.tone}</dd><dt>Proof</dt><dd>{profile.proof || "No approved proof supplied. Do not invent claims."}</dd><dt>Restrictions</dt><dd>{profile.restrictions || "None supplied"}</dd></dl></section><aside className="setup-note"><h2>Your first direction</h2><p>{strategies.find(s => s.id === preferences.strategy)?.name}</p><p>{profile.channels.join(" · ")}</p><p>{preferences.language} · {profile.designPreset} · {preferences.visualStyle}</p><strong>0 credits to save this outline</strong><p>This is a planning outline, not generated creatives or a scheduled week. Production quotes, exact-content approvals and social connections come next.</p></aside></div><label className="checkbox-label"><input type="checkbox" required checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />I have reviewed this business profile and approve it as the basis for content.</label></>}
-      <div className="form-actions">{step > 1 ? <button type="button" className="button secondary" onClick={() => { setStep(step - 1); setConfirmed(false); }}><ArrowLeft size={16} aria-hidden="true" />Back</button> : <span />}<button className="button dark" disabled={busy || !canEdit || step === 0 && !organizationId || step === 5 && !confirmed}>{busy ? "Saving…" : step === 0 ? "Start business setup" : step === 1 ? "Continue to business details" : step === 5 ? "Confirm brand & open content plan" : "Save & continue"}<ArrowRight size={16} aria-hidden="true" /></button></div>
+        {step === 0 && <>
+          {workspaces.length > 1 && !id && <label>Workspace<select value={organizationId} onChange={e => setOrganizationId(e.target.value)}>{workspaces.map(w => <option value={w.id} key={w.id}>{w.name}</option>)}</select></label>}
+          {field("website", "Your website", "www.yourbusiness.com")}
+          <label className="checkbox-label"><input type="checkbox" required checked={rights} onChange={e => setRights(e.target.checked)} />This is my business, and I have permission to read its website.</label>
+        </>}
+        {step === 1 && <>
+          <details className="setup-socials"><summary>Add your social profiles <span className="muted">(optional)</span></summary>
+            <p className="small muted">We’ll try to read public pages. This won’t connect your accounts or post anything.</p>
+            {(["Instagram", "Facebook", "LinkedIn"] as const).map(platform => <label key={platform}>{platform}<input type="text" autoCapitalize="none" maxLength={500} placeholder={platform === "LinkedIn" ? "Company page link or handle" : "@yourbusiness or profile link"} value={details.socialProfiles.find(s => s.platform === platform)?.url ?? ""} onChange={e => setDetails(old => ({ ...old, socialProfiles: [...old.socialProfiles.filter(s => s.platform !== platform), { platform, url: e.target.value }] }))} aria-describedby={`${uid}-error`} /></label>)}
+          </details>
+          <fieldset className="setup-choice"><legend>Do you have a brand book?</legend><p className="small muted">A guide to your logo, colours or writing style.</p>
+            <div className="channel-options">{[["upload", "Yes"], ["create", "No, help me make one"], ["skip", "Not now"]].map(([value, label]) => <label key={value}><input type="radio" name={`${uid}-book`} required checked={details.brandBook === value} onChange={() => setDetails(old => ({ ...old, brandBook: value as SetupDetails["brandBook"] }))} />{label}</label>)}</div>
+          </fieldset>
+          {details.brandBook === "upload" && <><label>Drop your brand book here, or choose a file<input type="file" accept=".pdf,.docx,.pptx,.txt,.md" onChange={e => setFile(e.target.files?.[0] ?? null)} aria-describedby={`${uid}-file-help ${uid}-error`} /></label><p id={`${uid}-file-help`} className="small muted">PDF, Word, PowerPoint or text · up to 5 MB. Text is read; logos and images aren’t imported. You can also add it later.</p></>}
+          {details.brandBook === "create" && <p className="small muted">We’ll make a simple starter guide from the details you review next. You can change it later.</p>}
+          {(file && details.brandBook === "upload" || details.socialProfiles.some(s => s.url.trim())) && <label className="checkbox-label"><input type="checkbox" required checked={rights} onChange={e => setRights(e.target.checked)} />I have permission to use these files and public profiles.</label>}
+        </>}
+        {step === 2 && <>
+          {field("name", "Business name", "Your business")}
+          {field("offering", "What do you do?", "A short description of your products or services.", true, true)}
+          {field("audience", "Who is it for?", "For example, local families or small business owners.")}
+          <label>Your main goal<select value={profile.goal} onChange={e => set("goal", e.target.value)}>{[...new Set([profile.goal, "Help more people discover our business", "Get more enquiries", "Sell more products", "Keep our customers engaged"])].map(goal => <option key={goal}>{goal}</option>)}</select></label>
+          <details><summary>Colours, voice and channels <span className="muted">(optional)</span></summary><div className="setup-extras">
+            {field("tone", "How should you sound?", "Clear and conversational")}
+            <label>Brand colour<input type="color" value={profile.color} onChange={e => set("color", e.target.value)} /></label>
+            <fieldset><legend>Where would you like content?</legend><div className="channel-options">{(["Instagram", "Facebook", "LinkedIn"] as const).map(ch => <label key={ch}><input type="checkbox" checked={profile.channels.includes(ch)} onChange={e => set("channels", e.target.checked ? [...profile.channels, ch] : profile.channels.filter(c => c !== ch))} />{ch}</label>)}</div></fieldset>
+          </div></details>
+          {details.brandBook === "create" && brandInput.safeParse(profile).success && <div><BrandBookDownload profile={profile} draft /><p className="small muted">A starter guide using these details and your brand colour. Open it in a browser to save as PDF.</p></div>}
+          <label className="checkbox-label"><input type="checkbox" required checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />These details are correct.</label>
+        </>}
+        {step > 0 && <div className="setup-import-status" role="status"><p>{sourceError || (pending ? "Reading your pages…" : ready.length ? `${ready.length} ${ready.length === 1 ? "source" : "sources"} ready.` : notice || "No website text is available yet. You can still add your details.")}</p>{notice && ready.length > 0 && <p>{notice}</p>}
+          {!!sources.length && <details><summary>View what we found</summary>{sources.map(s => <div key={s.id}><strong>{s.title}</strong><p>{s.status === "PROPOSED" ? s.body.slice(0, 3000) : s.status === "FAILED" ? "This page couldn’t be read. You can add the details yourself." : "Reading…"}</p></div>)}</details>}
+        </div>}
+        {!canEdit && <p>Ask a workspace admin to finish these details.</p>}
+        <div className="form-actions">{step > 0 ? <button type="button" className="button secondary" onClick={() => { setStep(step - 1); setConfirmed(false); }}><ArrowLeft size={16} aria-hidden="true" />Back</button> : <span />}<button className="button dark" disabled={busy || !canEdit || !organizationId}>{busy ? "Saving…" : step === 0 ? "Continue" : step === 1 ? "Review my brand" : "Finish setup"}<ArrowRight size={16} aria-hidden="true" /></button></div>
       </fieldset>
-    </form></>}
+    </form>}
   </section>;
 }

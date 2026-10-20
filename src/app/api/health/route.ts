@@ -47,10 +47,10 @@ export async function GET() {
     await db.$queryRaw`SELECT "outboxId" FROM "TeamInvitation" LIMIT 0`;
     await db.$queryRaw`SELECT "actorId" FROM "TeamEvent" LIMIT 0`;
     await db.$queryRaw`SELECT "enabledAt", "lastStep" FROM "MfaCredential" LIMIT 0`;
-    await db.$queryRaw`SELECT "independentApproval", "contentPreferences", "setupKey", "setupStep", "setupRevision" FROM "Business" LIMIT 0`;
+    await db.$queryRaw`SELECT "independentApproval", "contentPreferences", "setupKey", "setupStep", "setupRevision", "setupDetails" FROM "Business" LIMIT 0`;
     await db.$queryRaw`SELECT "authorId", "approvedBy" FROM "CreativeRevision" LIMIT 0`;
     await db.$queryRaw`SELECT "blocking" FROM "ReviewComment" LIMIT 0`;
-    await db.$queryRaw`SELECT "creditsPerWeek", "imagesAfterApproval", "videosAfterApproval", "videoItems" FROM "WeeklyPolicy" LIMIT 0`;
+    await db.$queryRaw`SELECT "creditsPerWeek", "imagesAfterApproval", "videosAfterApproval", "videoItems", "pauseReason" FROM "WeeklyPolicy" LIMIT 0`;
     await db.$queryRaw`SELECT "creditsAuthorized", "mediaStatus", "mediaLeaseUntil", "nextMediaAt", "videoStatus", "videoLeaseUntil", "nextVideoAt" FROM "WeeklyCycle" LIMIT 0`;
     await db.$queryRaw`SELECT "quoteId", "imageStatus", "imageGenerationId", "videoStatus", "storyboardId", "renderId" FROM "WeeklyTask" LIMIT 0`;
     await db.$queryRaw`SELECT "taskId", "shotId", "generationId" FROM "WeeklyVideoShot" LIMIT 0`;

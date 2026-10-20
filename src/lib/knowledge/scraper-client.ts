@@ -1,14 +1,24 @@
 import { z } from "zod";
 import { validatePublicDns } from "../providers/url-policy";
 import { SourceImportError } from "./import-errors";
+import { websiteScraper, type WebsiteScraper } from "./scraper-config";
 
 const resultSchema = z.object({ success: z.literal(true), data: z.object({
   markdown: z.string().trim().min(20).max(80000).refine(value => !/[\u0000\uFFFD]/.test(value)),
   metadata: z.object({ statusCode: z.number().int(), url: z.string(), sourceURL: z.string().optional(), title: z.string().max(1000).optional() }),
 }) });
 
-export function scraperHeaders(): Record<string, string> {
-  const key = process.env.FIRECRAWL_API_KEY;
+const crawlResultSchema = z.object({ success: z.literal(true), results: z.array(z.object({
+  success: z.literal(true), url: z.string(), redirected_url: z.string().min(1),
+  status_code: z.number().int(), redirected_status_code: z.number().int().nullish(),
+  markdown: z.union([z.string(), z.object({ raw_markdown: z.string() })]),
+  metadata: z.object({ title: z.string().max(1000).nullish() }).nullish(),
+})).length(1) });
+
+export function scraperHeaders(provider = websiteScraper()): Record<string, string> {
+  const key = provider === "crawl4ai" ? process.env.CRAWL4AI_API_TOKEN : process.env.FIRECRAWL_API_KEY;
+  // Crawl4AI exposes more than a crawl endpoint. Require its server-side authentication.
+  if (provider === "crawl4ai" && !key) throw new SourceImportError("SCRAPER_AUTH_REQUIRED");
   if (key !== undefined && key !== "" && (!key.trim() || key !== key.trim() || !/^[\x21-\x7e]{1,4096}$/.test(key))) {
     throw new SourceImportError("SCRAPER_AUTH_REQUIRED");
   }
@@ -20,13 +30,21 @@ async function publicAddress(value: string) {
   catch { throw new SourceImportError("SOURCE_ADDRESS_RESTRICTED"); }
 }
 
-export async function readWebsite(base: URL, input: string, headers: Record<string, string>, transport: typeof fetch = fetch) {
+export async function readWebsite(base: URL, input: string, headers: Record<string, string>, transport: typeof fetch = fetch, provider: WebsiteScraper = websiteScraper()) {
   const url = await publicAddress(input);
   try {
     // Never send model keys, extraction/branding requests, crawl actions or paid proxy fallbacks.
-    const response = await transport(new URL("v2/scrape", base), {
+    const response = await transport(new URL(provider === "crawl4ai" ? "crawl" : "v2/scrape", base), {
       method: "POST", headers, redirect: "error", signal: AbortSignal.timeout(45000),
-      body: JSON.stringify({ url: url.href, formats: ["markdown"], onlyMainContent: true, timeout: 30000, maxAge: 604800000 }),
+      body: JSON.stringify(provider === "crawl4ai" ? {
+        urls: [url.href],
+        browser_config: { type: "BrowserConfig", params: { headless: true, text_mode: true, light_mode: true, accept_downloads: false, verbose: false } },
+        crawler_config: { type: "CrawlerRunConfig", params: {
+          cache_mode: "bypass", page_timeout: 30000, wait_until: "domcontentloaded", check_robots_txt: true,
+          excluded_tags: ["nav", "footer", "header"], process_iframes: false, scan_full_page: false,
+          screenshot: false, pdf: false, stream: false, max_retries: 0, verbose: false,
+        } },
+      } : { url: url.href, formats: ["markdown"], onlyMainContent: true, timeout: 30000, maxAge: 604800000 }),
     });
     if (!response.ok) {
       await response.body?.cancel();
@@ -51,6 +69,17 @@ export async function readWebsite(base: URL, input: string, headers: Record<stri
     let raw: unknown;
     try { raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks))); }
     catch { throw new SourceImportError("SOURCE_INVALID_RESULT"); }
+    if (provider === "crawl4ai") {
+      const crawl = crawlResultSchema.safeParse(raw);
+      if (!crawl.success) throw new SourceImportError("SOURCE_INVALID_RESULT");
+      const page = crawl.data.results[0];
+      if (page.url !== url.href) throw new SourceImportError("SOURCE_REDIRECT_CHANGED");
+      raw = { success: true, data: {
+        markdown: typeof page.markdown === "string" ? page.markdown : page.markdown.raw_markdown,
+        metadata: { statusCode: page.redirected_status_code ?? page.status_code, sourceURL: page.url,
+          url: page.redirected_url, title: page.metadata?.title ?? undefined },
+      } };
+    }
     const parsed = resultSchema.safeParse(raw);
     if (!parsed.success) throw new SourceImportError("SOURCE_INVALID_RESULT");
     const { data } = parsed.data;

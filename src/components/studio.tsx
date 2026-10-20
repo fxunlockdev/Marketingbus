@@ -28,6 +28,7 @@ import {
 import type { BrandInput } from "@/lib/brand";
 import { brandSuggestions } from "@/lib/brand";
 import { BrandForm, presets } from "./brand-form";
+import { BrandBookDownload } from "./brand-book-download";
 import { BusinessSetup } from "./business-setup";
 import { LearnedSkills } from "./learned-skills";
 import { AssetLibrary } from "./asset-library";
@@ -373,11 +374,6 @@ export function Studio({
           <ChevronRight size={13} />
           <b>{editing ? "Brand setup" : page}</b>
           <span className="topbar-spacer" />
-          <span className="status-pill">
-            <i />
-            Setup mode
-          </span>
-          <span className="pilot-badge">PRIVATE PILOT</span>
         </header>
         <main id="main-content" className="content" tabIndex={-1}>
           {!editing && business && ["Content plan", "Review inbox", "Asset studio", "Publishing & analytics"].includes(page) && <div className="notice subtle plan-context" aria-busy={planLoading}>
@@ -396,7 +392,7 @@ export function Studio({
               {message}
             </p>
           )}
-          {guidedSetup ? <BusinessSetup key={editing === "new" ? "new-setup" : business?.id ?? "first-setup"} businessId={editing === "new" ? undefined : business?.id} workspaces={workspaces} onChange={() => router.refresh()} onComplete={id => { setSelected(id); setEditing(null); setPage("Content plan"); setMessage("Brand confirmed and planning outline saved. No generation or publication started."); router.refresh(); }} /> : editing ? (
+          {guidedSetup ? <BusinessSetup key={editing === "new" ? "new-setup" : business?.id ?? "first-setup"} businessId={editing === "new" ? undefined : business?.id} workspaces={workspaces} onChange={() => router.refresh()} onComplete={id => { setSelected(id); setEditing(null); setPage("Content plan"); setMessage("Your brand is ready. Let’s plan your first content."); router.refresh(); }} /> : editing ? (
             <BrandForm
               key={`${editing}-${selected}`}
               initial={editing === "edit" ? profile : undefined}
@@ -629,6 +625,7 @@ export function Studio({
                         </span>
                       </div>
                       <section className="panel brand-facts">
+                        {!!business.confirmedAt && <BrandBookDownload profile={business} />}
                         <div className="panel-heading">
                           <h2>{business.name}</h2>
                           <span className="tag">
@@ -898,7 +895,7 @@ export function Studio({
           )}
         </main>
         <footer className="app-footer">
-          MARKETINGBUS · PRIVATE PILOT
+          MARKETINGBUS
           <span>Thoughtful work starts with a thoughtful brief.</span>
         </footer>
       </div>

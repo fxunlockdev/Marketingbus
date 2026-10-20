@@ -6,6 +6,8 @@ import { lockBusiness, type Scope } from "../production/service";
 import { publicUrl } from "../providers/url-policy";
 import { invalidateBrandAnalyses } from "./invalidation";
 import { sourceImportMessage } from "./import-errors";
+export { scraperBase as selfHostedScraperBase } from "./scraper-config";
+import { scraperBase as selfHostedScraperBase } from "./scraper-config";
 export const sourceInput = z.discriminatedUnion("action", [
   z.object({ action: z.literal("document"), title: z.string().trim().min(2).max(120), text: z.string().trim().min(20).max(24000).refine(s => Buffer.byteLength(s) <= 24000 && !/[\u0000\uFFFD]/.test(s), "Use valid UTF-8 text up to 24 KB."), rightsConfirmed: z.literal(true) }).strict(),
   z.object({ action: z.literal("website"), url: z.url().max(500), rightsConfirmed: z.literal(true) }).strict(),
@@ -19,16 +21,6 @@ export async function listSources(scope: Pick<Scope, "businessId" | "organizatio
   const jobs = keys.length ? await db.job.findMany({ where: { ...scope, kind: "WEBSITE_READ", key: { in: keys }, status: "FAILED" }, select: { key: true, errorCode: true } }) : [];
   const failures = new Map(jobs.map(job => [job.key, sourceImportMessage(job.errorCode)]));
   return sources.map(source => ({ ...source, failureMessage: source.status === "FAILED" ? failures.get(`source:${source.id}`) ?? sourceImportMessage(null) : null }));
-}
-export function selfHostedScraperBase() {
-  const value = process.env.FIRECRAWL_SELF_HOSTED_URL;
-  if (process.env.WEBSITE_EXTRACTION_ENABLED !== "true" || !value) throw new AppError(503, "Self-hosted website extraction is not configured yet. You can upload a text document instead.");
-  const url = new URL(value);
-  if (url.username || url.password || url.search || url.hash || url.pathname !== "/" || !["http:", "https:"].includes(url.protocol)) throw new AppError(503, "Invalid scraper configuration.");
-  if (!url.hostname.endsWith(".railway.internal") && !(process.env.NODE_ENV !== "production" && ["localhost", "127.0.0.1"].includes(url.hostname))) throw new AppError(503, "The scraper must use its private service address.");
-  // Deployment must attest network-level restrictions: DNS preflight alone cannot prevent redirect/rebinding SSRF.
-  if (process.env.FIRECRAWL_EGRESS_RESTRICTED !== "true") throw new AppError(503, "Scraper network isolation must be verified before importing websites.");
-  return url;
 }
 export async function manageSource(scope: Scope, raw: unknown) {
   const input = sourceInput.parse(raw);
