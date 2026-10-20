@@ -1,5 +1,21 @@
 # Acceptance ledger — 19 October 2026
 
+## 20 October — authenticated Lodha failure reproduced; field validation fix
+
+The owner signed into the live application and authorized a Lodha analysis. The actual customer flow accepted `www.lodhagroup.com`, imported the website's business text and submitted analysis `ad1407ce6364bbedfced7552e2095d7486bc81fad7791a3614b0fa4c893084a3`. The saved result is **FAILED / GROUNDING_CHECK_FAILED**, not a scraper failure. Its seven-credit quote bounded supplier authorization at US$0.07; the customer hold was released. Actual supplier expense is not exposed in the customer read endpoint. No details were delivered or confirmed. The original rejected model response was not retained, so the precise failing field cannot be reconstructed.
+
+A confirmed validation mismatch is corrected: a short factual value may be a verbatim contiguous substring of its verified supporting quotation, rather than needing to equal the whole quotation. Independently valid fields survive another field's rejection; duplicate fields are all withheld, malformed envelopes still fail, and source IDs, hashes, exact quotations, field limits, instruction filtering and tone rules remain enforced. Fixed field/reason diagnostics expose no source or model text. No automatic retry or approval is added. Runtime is `studio-v74-brand-field-validation`.
+
+Initial verification: 98 focused unit/database checks passed in a fresh disposable database, removed afterward. The owner subsequently authorized further verification attempts; this run retains the original US$0.50 cumulative ceiling. No second paid call has yet been made. Full release verification, deployment, successful live autofill and useful brand-book acceptance remain pending.
+
+## 20 October — scraper text cleanup and bounded failure reasons (source only)
+
+Public Lodha reads in the previous investigation returned substantial business text, but also enquiry-form country lists. The extractor now excludes form/select/option/button/noscript content while preserving main/article/section prose. The private gateway and application preserve a fixed, allowlisted failure reason for robots permission, TLS, timeout, restricted addresses, redirects, size and unavailable/invalid pages. Arbitrary child diagnostics and remote content are never forwarded. This does not add retries, bypass robots or relax TLS/network restrictions.
+
+Verification: 15 Python gateway/runtime checks and 48 focused TypeScript scraper/startup checks pass, as do typechecking and the production build. A real installed Crawl4AI extraction of synthetic HTML preserved business paragraphs and removed dropdown/button/noscript markers. No production data was used as a test fixture. These changes are not deployed and do not establish that live Lodha autofill or the brand-book output is fixed.
+
+The owner has now explicitly authorized **one Lodha OpenAI analysis, up to US$0.50 total**. No paid call has been made under that authorization. The Codex browser remains at the live sign-in page; authenticated customer-flow inspection awaits the owner's sign-in. The approval does not authorize repeated analyses, other paid generation, infrastructure or social publication.
+
 ## 20 October — onboarding evidence selection follow-up (source only)
 
 The owner's post-v73 screenshot still shows an unfilled offering and a domain as the business name. The supplied HTML is a basic export of saved draft fields, not evidence of a successful website analysis or a developed brand book. **The reported live failure is not resolved or live-verified by this entry.** A read-only production-record diagnostic could not proceed because no public database connection was available; no public database endpoint, SSH key, test customer or paid request was created to work around that. The interrupted browser inspection did not establish the actual import/analysis state.

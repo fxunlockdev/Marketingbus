@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import ssl
 import threading
 import unittest
 from email.message import Message
@@ -28,6 +29,30 @@ def dns(_host, _port, **_kwargs):
     return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
 
 class Boundaries(unittest.TestCase):
+    def test_failure_codes_never_include_exception_details(self):
+        for error, code in [
+            (ValueError("robots"), "SOURCE_ROBOTS_DISALLOWED"),
+            (ValueError("restricted"), "SOURCE_ADDRESS_RESTRICTED"),
+            (ValueError("redirect"), "SOURCE_REDIRECT_CHANGED"),
+            (ValueError("size"), "SOURCE_TOO_LARGE"),
+            (ValueError("page"), "SOURCE_PAGE_UNAVAILABLE"),
+            (ValueError("parse"), "SOURCE_INVALID_RESULT"),
+            (ValueError("encoding"), "SOURCE_INVALID_RESULT"),
+            (ValueError("text"), "SOURCE_INVALID_RESULT"),
+            (TimeoutError("private URL"), "SCRAPER_TIMEOUT"),
+            (ssl.SSLError("private certificate details"), "SOURCE_TLS_FAILED"),
+            (OSError("secret diagnostic"), "SCRAPER_UNAVAILABLE"),
+            (ValueError("secret diagnostic"), "SOURCE_INVALID_RESULT"),
+        ]:
+            with self.subTest(code=code):
+                self.assertEqual(worker.failure_code(error), code)
+
+    def test_excludes_form_controls_and_script_fallbacks_not_business_content(self):
+        for tag in ("form", "select", "option", "button", "noscript"):
+            self.assertIn(tag, worker.EXCLUDED_TAGS)
+        for tag in ("main", "article", "section", "p", "h1", "h2"):
+            self.assertNotIn(tag, worker.EXCLUDED_TAGS)
+
     def test_gzip_is_bounded_and_complete(self):
         self.assertEqual(worker.decode_body(gzip.compress(b"safe"), "gzip", 100), b"safe")
         for body in (gzip.compress(b"x" * 10000), gzip.compress(b"safe")[:-3],
@@ -128,6 +153,27 @@ class Gateway(unittest.TestCase):
             self.assertNotIn("CRAWL4AI_API_TOKEN", proc.call_args.kwargs["env"])
             self.assertNotIn("OPENAI_API_KEY", proc.call_args.kwargs["env"])
             self.assertFalse(Path(proc.call_args.kwargs["env"]["CRAWL4_AI_BASE_DIRECTORY"]).exists())
+    def test_known_failure_survives_gateway_without_raw_diagnostics(self):
+        for code in server.FAILURE_CODES:
+            with self.subTest(code=code), patch.object(server.subprocess, "Popen") as proc:
+                proc.return_value.communicate.return_value = (json.dumps({
+                    "success": False, "error_code": code, "details": "secret response body",
+                }).encode(), None)
+                proc.return_value.returncode = 1
+                status, body = self.request("/crawl", '{"urls":["https://example.com"]}')
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body), {"success": False, "error_code": code})
+
+    def test_unknown_or_inconsistent_child_failure_is_not_forwarded(self):
+        for result in ({"success": False, "error_code": "secret diagnostic"},
+                       {"success": True, "error_code": "SOURCE_TLS_FAILED"},
+                       {"success": False, "error_code": ["SOURCE_TLS_FAILED"]}):
+            with self.subTest(result=result), patch.object(server.subprocess, "Popen") as proc:
+                proc.return_value.communicate.return_value = (json.dumps(result).encode(), None)
+                proc.return_value.returncode = 1
+                status, body = self.request("/crawl", '{"urls":["https://example.com"]}')
+                self.assertEqual(status, 502)
+                self.assertEqual(json.loads(body), {"success": False})
 
 if __name__ == "__main__":
     unittest.main()

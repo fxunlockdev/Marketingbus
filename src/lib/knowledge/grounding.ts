@@ -28,7 +28,9 @@ export function validateSuggestions(raw: unknown, sources: Evidence[]): Suggesti
       const source = sources.find(s => s.id === cite.sourceId && s.sha256 === cite.sha256);
       if (!source || !source.body.includes(cite.excerpt)) throw Error("Citation does not match the selected source");
     }
-    if (item.kind === "EXACT_EXCERPT" && !item.citations.some(c => c.excerpt === item.value)) throw Error("Factual proposal is not an exact excerpt");
+    // A short answer may sit inside a longer supporting quotation. It must
+    // still occur verbatim and contiguously in that verified quotation.
+    if (item.kind === "EXACT_EXCERPT" && !item.citations.some(c => c.excerpt.includes(item.value))) throw Error("Factual proposal is not an exact excerpt");
     // Defense in depth, not a claim of complete semantic/injection detection.
     if (/(ignore (all |the )?(previous|prior|system)|system prompt|api[ _-]?key|access token|bypass.{0,20}approval)/i.test(item.value)) throw Error("Instruction-like proposal requires manual entry");
     if (item.kind === "INFERRED_TONE") {
@@ -37,4 +39,34 @@ export function validateSuggestions(raw: unknown, sources: Evidence[]): Suggesti
     }
   }
   return result;
+}
+
+/** Keep independently grounded fields, never repair or infer rejected values. */
+export function reviewSuggestions(raw: unknown, sources: Evidence[]) {
+  const candidates = suggestionsSchema.parse(raw).suggestions;
+  const accepted: Suggestions = [], withheld: z.infer<typeof suggestionField>[] = [];
+  const failures: { field: z.infer<typeof suggestionField>; code: string }[] = [];
+  const reasons: Record<string, string> = {
+    "Ambiguous field": "DUPLICATE_FIELD",
+    "Supporting evidence is too short": "SHORT_CITATION",
+    "Invalid evidence classification": "INVALID_KIND",
+    "Citation does not match the selected source": "CITATION_MISMATCH",
+    "Factual proposal is not an exact excerpt": "VALUE_NOT_IN_CITATION",
+    "Instruction-like proposal requires manual entry": "INSTRUCTION_LIKE",
+    "Tone must use supported style words, not factual claims or instructions": "UNSUPPORTED_TONE",
+  };
+  const counts = new Map<string, number>();
+  for (const item of candidates) counts.set(item.field, (counts.get(item.field) ?? 0) + 1);
+  for (const item of candidates) {
+    try {
+      if (counts.get(item.field) !== 1) throw Error("Ambiguous field");
+      accepted.push(...validateSuggestions({ suggestions: [item] }, sources));
+    } catch (error) {
+      if (!withheld.includes(item.field)) {
+        withheld.push(item.field);
+        failures.push({ field: item.field, code: error instanceof Error ? reasons[error.message] ?? "INVALID_FIELD_VALUE" : "INVALID_FIELD_VALUE" });
+      }
+    }
+  }
+  return { accepted, withheld, failures };
 }

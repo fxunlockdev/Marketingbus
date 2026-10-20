@@ -234,10 +234,25 @@ suite("evidence-grounded brand intelligence", () => {
   });
   it("rejects fabricated dates and unsupported paraphrases, records supplier expense and releases customer credits", async () => {
     const f = await setup(), id = await accepted(f);
+    f.suggestions.splice(1);
     f.suggestions[0].value = "Our studio launches on 25 October 2026.";
     await runOneBrandAnalysis(f.reasoner);
     expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "FAILED", supplierCostMicros: 1000, suggestions: null, errorCode: "GROUNDING_CHECK_FAILED" });
     expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } })).toMatchObject({ available: 1000, held: 0 });
+  });
+  it("delivers independently grounded fields while withholding an unsupported field without another call", async () => {
+    const f = await setup(); await setupAutofill(f);
+    f.suggestions[0].value = "architecture consultations";
+    f.suggestions[1].value = "Award-winning since 2020";
+    await prepareSetupAutofill(f.scope);
+    await runOneBrandAnalysis(f.reasoner);
+    expect(await readSetupAutofill(f.scope)).toMatchObject({ status: "READY", suggestions: [f.suggestions[0]] });
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } })).toMatchObject({ available: 999, held: 0 });
+    expect(await db.auditEvent.findFirst({ where: { businessId: f.scope.businessId, action: "BRAND_ANALYSIS_FIELDS_WITHHELD" } }))
+      .toMatchObject({ detail: "Unsupported or ambiguous fields withheld: tone. No automatic retry." });
+    await prepareSetupAutofill(f.scope); await runOneBrandAnalysis(f.reasoner);
+    expect(f.reasoner).toHaveBeenCalledTimes(1);
+    expect(await db.business.findUniqueOrThrow({ where: { id: f.scope.businessId } })).toMatchObject({ offering: "", confirmedAt: null });
   });
   it("enforces fresh membership and tenant scope on quote, review and apply", async () => {
     const f = await setup(), other = await setup(), id = await accepted(f); await runOneBrandAnalysis(f.reasoner);

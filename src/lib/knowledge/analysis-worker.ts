@@ -5,7 +5,7 @@ import { actualCostMicros, assertExecutionEnabled, keyFor, routeSchema } from ".
 import { reason } from "../providers/reasoning";
 import { finishReservationInTransaction } from "../billing/wallet";
 import { analysisEvidence, analysisConfigurationHash, assertBrandEditor } from "./analysis";
-import { analysisPrompt, analysisSystem, suggestionsJsonSchema, validateSuggestions, type Suggestions } from "./grounding";
+import { analysisPrompt, analysisSystem, suggestionsJsonSchema, reviewSuggestions, type Suggestions } from "./grounding";
 import { ownedAnalysisClaim } from "./analysis-claim";
 
 export async function runOneBrandAnalysis(reasoner: typeof reason = reason) {
@@ -32,7 +32,14 @@ export async function runOneBrandAnalysis(reasoner: typeof reason = reason) {
     const result = await reasoner(request.route.model.provider, { system: analysisSystem, input: request.prompt, model: request.route.model.model, maxOutputTokens: request.route.maxOutputTokens, jsonSchema: suggestionsJsonSchema }, request.key);
     const micros = actualCostMicros(request.route, result.usage);
     let suggestions: Suggestions | null = null;
-    try { suggestions = validateSuggestions(JSON.parse(result.text), request.sources); } catch { /* Do not deliver ungrounded output. */ }
+    let withheld: string[] = [];
+    try {
+      const reviewed = reviewSuggestions(JSON.parse(result.text), request.sources);
+      withheld = reviewed.withheld;
+      if (reviewed.failures.length) console.warn(JSON.stringify({ event: "brand_analysis_validation", analysisId: claimed.id, failures: reviewed.failures }));
+      // All-invalid is a failed analysis, not a successful empty draft.
+      suggestions = reviewed.accepted.length || !withheld.length ? reviewed.accepted : null;
+    } catch { console.warn(JSON.stringify({ event: "brand_analysis_validation", analysisId: claimed.id, code: "INVALID_RESPONSE_ENVELOPE" })); }
     await db.$transaction(async tx => {
       const business = await lockBusiness(tx, scope);
       const row = await ownedAnalysisClaim(tx, claimed, "BRAND", ["SUBMITTING"], true);
@@ -50,6 +57,7 @@ export async function runOneBrandAnalysis(reasoner: typeof reason = reason) {
         errorCode: deliver ? null : fresh ? "GROUNDING_CHECK_FAILED" : "BRAND_OR_SOURCE_CHANGED",
       } });
       await tx.auditEvent.create({ data: { ...scope, action: deliver ? "BRAND_ANALYSIS_READY" : "BRAND_ANALYSIS_FAILED", detail: deliver ? `Source-linked proposals ready for human review. ${consumed} credits consumed; unused hold released.` : "No eligible proposals delivered. Customer credits released; supplier cost recorded." } });
+      if (withheld.length) await tx.auditEvent.create({ data: { ...scope, action: "BRAND_ANALYSIS_FIELDS_WITHHELD", detail: `Unsupported or ambiguous fields withheld: ${withheld.join(", ")}. No automatic retry.` } });
     });
   } catch {
     await db.$transaction(async tx => {

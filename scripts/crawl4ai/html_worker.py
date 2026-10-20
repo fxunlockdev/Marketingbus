@@ -15,6 +15,28 @@ from urllib.robotparser import RobotFileParser
 MAX_HTML = 2_000_000
 MAX_TEXT = 80_000
 USER_AGENT = "Marketingbus"
+EXCLUDED_TAGS = ["script", "style", "nav", "footer", "header", "iframe",
+                 "form", "select", "option", "button", "noscript"]
+
+
+def failure_code(error):
+    """A fixed diagnostic vocabulary, never remote text or exception details."""
+    if isinstance(error, ssl.SSLError):
+        return "SOURCE_TLS_FAILED"
+    if isinstance(error, TimeoutError):
+        return "SCRAPER_TIMEOUT"
+    if isinstance(error, ValueError):
+        return {
+            "robots": "SOURCE_ROBOTS_DISALLOWED",
+            "restricted": "SOURCE_ADDRESS_RESTRICTED",
+            "redirect": "SOURCE_REDIRECT_CHANGED",
+            "size": "SOURCE_TOO_LARGE",
+            "page": "SOURCE_PAGE_UNAVAILABLE",
+            "parse": "SOURCE_INVALID_RESULT",
+            "text": "SOURCE_INVALID_RESULT",
+            "encoding": "SOURCE_INVALID_RESULT",
+        }.get(str(error), "SOURCE_INVALID_RESULT")
+    return "SCRAPER_UNAVAILABLE"
 
 
 def target(value):
@@ -142,7 +164,7 @@ def extract(url, html):
     from crawl4ai.content_scraping_strategy import LXMLWebScrapingStrategy
     from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
     scraped = LXMLWebScrapingStrategy().scrap(
-        url, html, excluded_tags=["script", "style", "nav", "footer", "header", "iframe"],
+        url, html, excluded_tags=EXCLUDED_TAGS,
         word_count_threshold=1,
     )
     if not scraped.success:
@@ -178,7 +200,7 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except BaseException:
+    except BaseException as error:
         # Never return remote HTML, stack traces, credentials or internal addresses.
-        print('{"success":false}')
+        print(json.dumps({"success": False, "error_code": failure_code(error)}))
         sys.exit(1)

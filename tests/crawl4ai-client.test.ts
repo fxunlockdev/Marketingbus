@@ -86,3 +86,22 @@ it("redacts upstream failures and does not retry another scraper", async () => {
   await expect(readWebsite(base, source, {}, transport, "crawl4ai")).rejects.toMatchObject({ code: "SCRAPER_AUTH_REQUIRED" });
   expect(transport).toHaveBeenCalledTimes(1);
 });
+it.each(["SOURCE_ROBOTS_DISALLOWED", "SOURCE_TLS_FAILED", "SCRAPER_TIMEOUT",
+  "SOURCE_ADDRESS_RESTRICTED", "SOURCE_REDIRECT_CHANGED", "SOURCE_TOO_LARGE",
+  "SOURCE_PAGE_UNAVAILABLE", "SOURCE_INVALID_RESULT", "SCRAPER_UNAVAILABLE"])(
+  "retains the fixed %s reason without exposing diagnostics or retrying", async code => {
+    const transport = vi.fn(async () => Response.json({
+      success: false, error_code: code, details: "private upstream content",
+    }));
+    const error = await readWebsite(base, source, {}, transport, "crawl4ai").catch(error => error);
+    expect(error).toMatchObject({ code });
+    expect(error.message).not.toContain("private upstream content");
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+it.each(["unexpected secret diagnostic", ["SOURCE_TLS_FAILED"], null])(
+  "does not trust arbitrary child error codes (%#)", async error_code => {
+    const transport = vi.fn(async () => Response.json({ success: false, error_code }));
+    await expect(readWebsite(base, source, {}, transport, "crawl4ai"))
+      .rejects.toMatchObject({ code: "SOURCE_INVALID_RESULT" });
+    expect(transport).toHaveBeenCalledTimes(1);
+  });

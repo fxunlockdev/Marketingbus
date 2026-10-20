@@ -16,6 +16,11 @@ TOKEN = os.environ.get("CRAWL4AI_API_TOKEN", "")
 if not re.fullmatch(r"[\x21-\x7e]{24,256}", TOKEN):
     raise RuntimeError("A dedicated scraper token is required")
 BUSY = threading.Lock()
+FAILURE_CODES = frozenset((
+    "SOURCE_ROBOTS_DISALLOWED", "SOURCE_TLS_FAILED", "SCRAPER_TIMEOUT",
+    "SOURCE_ADDRESS_RESTRICTED", "SOURCE_REDIRECT_CHANGED", "SOURCE_TOO_LARGE",
+    "SOURCE_PAGE_UNAVAILABLE", "SOURCE_INVALID_RESULT", "SCRAPER_UNAVAILABLE",
+))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -81,10 +86,21 @@ class Handler(BaseHTTPRequestHandler):
                 return
             scratch.cleanup()
             scratch = None
-            if child.returncode != 0 or len(output) > 500_000:
+            if len(output) > 500_000:
                 self.send(502, {"success": False})
                 return
             result = json.loads(output)
+            if not isinstance(result, dict):
+                raise ValueError("result")
+            if child.returncode != 0:
+                code = result.get("error_code")
+                if result.get("success") is False and isinstance(code, str) and code in FAILURE_CODES:
+                    # A completed read with a known failure, not a gateway outage.
+                    # Reconstruct rather than forwarding any child diagnostics.
+                    self.send(200, {"success": False, "error_code": code})
+                else:
+                    self.send(502, {"success": False})
+                return
             if result.get("success") is not True:
                 raise ValueError("result")
             self.send(200, result)

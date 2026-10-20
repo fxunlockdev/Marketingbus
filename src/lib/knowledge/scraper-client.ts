@@ -15,6 +15,12 @@ const crawlResultSchema = z.object({ success: z.literal(true), results: z.array(
   markdown: z.union([z.string(), z.object({ raw_markdown: z.string() })]),
   metadata: z.object({ title: z.string().max(1000).nullish() }).nullish(),
 })).length(1) });
+const crawlFailureSchema = z.object({
+  success: z.literal(false),
+  error_code: z.enum(["SOURCE_ROBOTS_DISALLOWED", "SOURCE_TLS_FAILED", "SCRAPER_TIMEOUT",
+    "SOURCE_ADDRESS_RESTRICTED", "SOURCE_REDIRECT_CHANGED", "SOURCE_TOO_LARGE",
+    "SOURCE_PAGE_UNAVAILABLE", "SOURCE_INVALID_RESULT", "SCRAPER_UNAVAILABLE"]),
+});
 
 export function scraperHeaders(provider = websiteScraper()): Record<string, string> {
   const key = provider === "crawl4ai" ? process.env.CRAWL4AI_API_TOKEN : process.env.FIRECRAWL_API_KEY;
@@ -72,6 +78,8 @@ export async function readWebsite(base: URL, input: string, headers: Record<stri
     try { raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks))); }
     catch { throw new SourceImportError("SOURCE_INVALID_RESULT"); }
     if (provider === "crawl4ai") {
+      const failure = crawlFailureSchema.safeParse(raw);
+      if (failure.success) throw new SourceImportError(failure.data.error_code);
       const crawl = crawlResultSchema.safeParse(raw);
       if (!crawl.success) throw new SourceImportError("SOURCE_INVALID_RESULT");
       const page = crawl.data.results[0];

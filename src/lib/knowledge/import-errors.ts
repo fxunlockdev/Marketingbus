@@ -10,6 +10,8 @@ const messages: Record<string, string> = {
   SOURCE_ADDRESS_RESTRICTED: "This website address cannot be imported. Use a public HTTPS business website.",
   SOURCE_REDIRECT_CHANGED: "The page redirected to a different website address. Review that address and submit it explicitly.",
   SOURCE_PAGE_UNAVAILABLE: "The website did not return a successful page. Check that the page is publicly accessible.",
+  SOURCE_ROBOTS_DISALLOWED: "We couldn’t confirm permission to read this page automatically. Try another page or upload your business information.",
+  SOURCE_TLS_FAILED: "We couldn’t verify this website’s secure connection. Check the website address or upload your business information.",
   SOURCE_TOO_LARGE: "This page exceeds the import size limit. Try a shorter page, such as your About page.",
   SOURCE_INVALID_RESULT: "The importer could not extract usable text from this page. Try another page or upload a document.",
   SOURCE_IMPORT_FAILED: "The website import failed. No automatic retry was made.",
