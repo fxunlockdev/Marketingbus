@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import type { Job, Prisma } from "@prisma/client";
 import { db } from "../db";
 import { reason } from "../providers/reasoning";
 import { finishReservationInTransaction } from "../billing/wallet";
@@ -12,6 +12,19 @@ import { assertKnowledgeCurrent } from "../harness/knowledge-graph";
 import { assertBrandEditor } from "../knowledge/analysis";
 
 type Reasoner = typeof reason;
+async function ownedClaim(tx: Prisma.TransactionClient, claimed: Job, statuses: string[], requireLive: boolean) {
+  // A status alone is not ownership: recovery may have reassigned RUNNING work.
+  // Keep the fence locked through this boundary, never across the supplier call.
+  await tx.$queryRaw`SELECT id FROM "Job" WHERE id=${claimed.id} FOR UPDATE`;
+  const current = await tx.job.findFirst({ where: {
+    id: claimed.id, organizationId: claimed.organizationId, businessId: claimed.businessId,
+    kind: claimed.kind, key: claimed.key, quoteId: claimed.quoteId, reservationId: claimed.reservationId,
+    attempts: claimed.attempts, leaseUntil: claimed.leaseUntil, status: { in: statuses },
+  } });
+  if (!current || !current.leaseUntil || JSON.stringify(current.payload) !== JSON.stringify(claimed.payload)
+    || requireLive && current.leaseUntil.getTime() <= Date.now()) return null;
+  return current;
+}
 // A test can inject a fixture transport. No environment switch can enable fake results in the application.
 export async function runOneJob(reasoner: Reasoner = reason) {
   assertExecutionEnabled();
@@ -27,20 +40,22 @@ export async function runOneJob(reasoner: Reasoner = reason) {
   let submitted = false;
   try {
     const quote = job.quote;
-    if (!quote || !job.reservationId) throw Error("Missing authorization");
+    if (!quote || !job.reservationId || quote.organizationId !== job.organizationId || quote.businessId !== job.businessId) throw Error("Missing authorization");
     const request = requestSchema.parse(quote.request);
     const key = keyFor(request.route.model.provider);
     if (!key || quote.configurationHash !== configurationHash() || new Date(request.route.model.verifiedUntil).getTime() <= Date.now()) throw Error("Configuration changed");
     // No network I/O while holding business/wallet locks.
     await db.$transaction(async tx => {
       const business = await lockBusiness(tx, scope);
+      if (!await ownedClaim(tx, job, ["RUNNING"], true)) throw Error("Job no longer owned");
       await assertBrandEditor(tx, authorScope);
       const item = await currentItem(tx, scope, quote.itemId);
       if (!business.confirmedAt || business.version !== quote.brandVersion || item.plan.status !== "PROPOSED" || (item.revisions[0]?.version || 0) !== quote.baseVersion) throw Error("Stale brand or revision");
       if (request.preferenceFingerprint !== preferenceFingerprint(await productionMemories(tx, scope, business.version))) throw Error("Preferences or experiment evidence changed");
       await assertKnowledgeCurrent(tx, scope, request.knowledgeContext);
       assertExecutionEnabled();
-      const changed = await tx.job.updateMany({ where: { id: job.id, status: "RUNNING" }, data: { status: "SUBMITTING", submittedAt: new Date() } });
+      const changed = await tx.job.updateMany({ where: { id: job.id, status: "RUNNING", leaseUntil: job.leaseUntil,
+        AND: { leaseUntil: { gt: new Date(Date.now()) } }, attempts: job.attempts }, data: { status: "SUBMITTING", submittedAt: new Date() } });
       if (changed.count !== 1) throw Error("Job no longer owned");
     });
     submitted = true;
@@ -57,9 +72,8 @@ export async function runOneJob(reasoner: Reasoner = reason) {
     } catch { /* Invalid deliverables do not reach customer review. Record cost and release customer credits. */ }
     await db.$transaction(async tx => {
       const business = await lockBusiness(tx, scope);
+      if (!await ownedClaim(tx, job, ["SUBMITTING"], true)) throw Error("Lost submission lease; reconcile instead of duplicating output");
       const item = await currentItem(tx, scope, quote.itemId);
-      const current = await tx.job.findUniqueOrThrow({ where: { id: job.id } });
-      if (current.status !== "SUBMITTING") throw Error("Lost submission lease; reconcile instead of duplicating output");
       let contextCurrent = true;
       try {
         await assertBrandEditor(tx, authorScope);
@@ -95,14 +109,15 @@ export async function runOneJob(reasoner: Reasoner = reason) {
     // Once submission starts, even an HTTP error/timeout can have ambiguous billing. Never auto-retry it.
     await db.$transaction(async tx => {
       await lockBusiness(tx, scope);
-      const current = await tx.job.findUniqueOrThrow({ where: { id: job.id } });
-      if (["COMPLETED", "FAILED", "CANCELLED"].includes(current.status)) return;
+      const current = await ownedClaim(tx, job, ["RUNNING", "SUBMITTING"], false);
+      if (!current) return; // Never fail, settle or clear a replacement/recovered claim.
       const ambiguous = submitted || current.status === "SUBMITTING";
       if (!ambiguous && job.reservationId) await finishReservationInTransaction(tx, scope.organizationId, job.reservationId, 0);
       await tx.job.update({ where: { id: job.id }, data: { status: ambiguous ? "NEEDS_RECONCILIATION" : "FAILED", errorCode: ambiguous ? "PROVIDER_OUTCOME_UNKNOWN" : "PREFLIGHT_FAILED", leaseUntil: null } });
-      if (job.quoteId) {
-        await tx.generationQuote.update({ where: { id: job.quoteId }, data: { status: ambiguous ? "RECONCILE" : "RELEASED" } });
-        await tx.productionItem.update({ where: { id: job.quote!.itemId }, data: { status: ambiguous ? "NEEDS_RECONCILIATION" : "FAILED" } });
+      if (job.quote && job.quote.organizationId === scope.organizationId && job.quote.businessId === scope.businessId) {
+        await tx.generationQuote.update({ where: { id: job.quote.id }, data: { status: ambiguous ? "RECONCILE" : "RELEASED" } });
+        await tx.productionItem.updateMany({ where: { id: job.quote.itemId, organizationId: scope.organizationId,
+          plan: { businessId: scope.businessId }, status: "QUEUED" }, data: { status: ambiguous ? "NEEDS_RECONCILIATION" : "FAILED" } });
       }
       await tx.auditEvent.create({ data: { ...scope, action: "PRODUCTION_STOPPED", detail: ambiguous
         ? "Provider outcome is uncertain. Credits remain held for operator reconciliation; no automatic retry."

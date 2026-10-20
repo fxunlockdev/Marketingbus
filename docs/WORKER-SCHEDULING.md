@@ -1,5 +1,11 @@
 # Production worker scheduling
 
+## Copy claim ownership and late-result fencing
+
+Runtime `studio-v63-copy-lease-fence` binds submission and delivery to the exact claimed job, organization/business, kind/key, quote, reservation, attempt count, lease and payload. A short row lock protects each boundary. The lease must still be live before submission and delivery; status alone is not ownership. A worker returning after replacement or recovery cannot clear the new claim, settle its hold, deliver a creative or overwrite the retained recovery reason. No row lock spans the provider request.
+
+If the same unreplaced claim expires before submission, failure releases unused customer credits. Expiry after submission leaves uncertainty and holds for operator reconciliation, even if a late response has arrived. A claim whose identity changed is left untouched for its current worker/recovery process; this guard does not automatically repair corrupt records, retry a provider or extend leases. Scoped cleanup also preserves newer creative states. Database tests inject replacement leases, attempt/payload changes, elapsed time and recovery while a fixture provider response is pending. These are deterministic lifecycle tests, not a live supplier or distributed-host failure drill.
+
 ## Hard-stop recovery checkpoint
 
 Runtime `studio-v61-crash-recovery` closes a copy-recovery visibility gap: after an expired `SUBMITTING` lease, the job and its scoped quote enter reconciliation and the still-queued creative now enters `NEEDS_RECONCILIATION` in the same transaction. Only the recovery winner updates the associated state. Exact organization/business/item scope is checked; newer creative states are preserved. Credits remain held and supplier submission is never automatically repeated.

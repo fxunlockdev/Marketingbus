@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { db } from "../src/lib/db";
 import { actOnProduction, type Scope } from "../src/lib/production/service";
+import * as productionService from "../src/lib/production/service";
 import { runOneJob as processJob, recoverExpiredLeases } from "../src/lib/production/worker";
 import { reconcileFailedJob } from "../src/lib/production/reconcile";
 import { heartbeat, HEARTBEAT_TTL_MS } from "../src/lib/production/readiness";
@@ -187,6 +188,79 @@ suite("production authorization, review and worker integration", () => {
     await db.membership.updateMany({ where: { organizationId: scope.organizationId, userId: scope.actorId }, data: { role: "EDITOR" } });
     await runOneJob(fixtureReasoner);
     expect(await db.creativeRevision.findFirstOrThrow({ where: { itemId } })).toMatchObject({ status: "READY", authorId: scope.actorId });
+  });
+  it.each(["lease", "attempt", "payload"])("a replaced copy %s cannot submit or change the new claim's holds", async change => {
+    const { scope, itemId } = await setup(); const q = await quote(scope, itemId);
+    await actOnProduction(scope, { action: "accept", quoteId: q.id });
+    const original = productionService.lockBusiness;
+    const spy = vi.spyOn(productionService, "lockBusiness").mockImplementationOnce(async (tx, candidate) => {
+      await db.job.updateMany({ where: { quoteId: q.id }, data: change === "lease" ? { leaseUntil: new Date(Date.now() + 600000) }
+        : change === "attempt" ? { attempts: { increment: 1 } } : { payload: { actorId: scope.actorId, changed: true } } });
+      return original(tx, candidate);
+    });
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } });
+    const call = vi.fn(fixtureReasoner);
+    try { await runOneJob(call); } finally { spy.mockRestore(); }
+    expect(call).not.toHaveBeenCalled();
+    expect(await db.creativeRevision.count({ where: { itemId } })).toBe(0);
+    expect(await db.job.findUniqueOrThrow({ where: { quoteId: q.id } })).toMatchObject({ status: "RUNNING", submittedAt: null, errorCode: null });
+    expect(await db.generationQuote.findUniqueOrThrow({ where: { id: q.id } })).toMatchObject({ status: "ACCEPTED" });
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } })).toEqual(wallet);
+    // Isolate this fixture from later workers; no supplier request took place.
+    await db.job.updateMany({ where: { quoteId: q.id }, data: { status: "CANCELLED" } });
+  });
+  it("an expired but unreplaced copy claim cannot submit", async () => {
+    const { scope, itemId } = await setup(); const q = await quote(scope, itemId);
+    await actOnProduction(scope, { action: "accept", quoteId: q.id });
+    const original = productionService.lockBusiness;
+    let restoreClock = () => {};
+    const spy = vi.spyOn(productionService, "lockBusiness").mockImplementationOnce(async (tx, candidate) => {
+      const claimed = await db.job.findUniqueOrThrow({ where: { quoteId: q.id } });
+      const clock = vi.spyOn(Date, "now").mockReturnValue(claimed.leaseUntil!.getTime() + 1);
+      restoreClock = () => { clock.mockRestore(); };
+      return original(tx, candidate);
+    });
+    const call = vi.fn(fixtureReasoner);
+    try { await runOneJob(call); } finally { restoreClock(); spy.mockRestore(); }
+    expect(call).not.toHaveBeenCalled();
+    expect(await db.job.findUniqueOrThrow({ where: { quoteId: q.id } })).toMatchObject({ status: "FAILED", submittedAt: null, errorCode: "PREFLIGHT_FAILED" });
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } })).toMatchObject({ held: 0, available: 500 });
+  });
+  it.each(["lease", "attempt", "payload", "recovered"])("late copy output cannot settle or overwrite a %s submission", async change => {
+    const { scope, itemId } = await setup(); const q = await quote(scope, itemId);
+    await actOnProduction(scope, { action: "accept", quoteId: q.id });
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } });
+    let retained: unknown;
+    const call = vi.fn(async () => {
+      await db.job.updateMany({ where: { quoteId: q.id }, data: change === "lease" ? { leaseUntil: new Date(Date.now() + 600000) }
+        : change === "attempt" ? { attempts: { increment: 1 } } : change === "payload" ? { payload: { actorId: scope.actorId, changed: true } } : { leaseUntil: new Date(0) } });
+      if (change === "recovered") await recoverExpiredLeases();
+      retained = await db.job.findUniqueOrThrow({ where: { quoteId: q.id } });
+      return fixtureReasoner();
+    });
+    await runOneJob(call);
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(await db.creativeRevision.count({ where: { itemId } })).toBe(0);
+    expect(await db.job.findUniqueOrThrow({ where: { quoteId: q.id } })).toEqual(retained);
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } })).toEqual(wallet);
+    expect((await db.generationQuote.findUniqueOrThrow({ where: { id: q.id } })).status).toBe(change === "recovered" ? "RECONCILE" : "ACCEPTED");
+  });
+  it("retains uncertainty when a submission expires before recovery runs", async () => {
+    const { scope, itemId } = await setup(); const q = await quote(scope, itemId);
+    await actOnProduction(scope, { action: "accept", quoteId: q.id });
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } });
+    let restoreClock = () => {};
+    try {
+      await runOneJob(async () => {
+        const current = await db.job.findUniqueOrThrow({ where: { quoteId: q.id } });
+        const clock = vi.spyOn(Date, "now").mockReturnValue(current.leaseUntil!.getTime() + 1);
+        restoreClock = () => { clock.mockRestore(); };
+        return fixtureReasoner();
+      });
+    } finally { restoreClock(); }
+    expect(await db.creativeRevision.count({ where: { itemId } })).toBe(0);
+    expect(await db.job.findUniqueOrThrow({ where: { quoteId: q.id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", errorCode: "PROVIDER_OUTCOME_UNKNOWN" });
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } })).toEqual(wallet);
   });
   it("withholds stale-preference output after submission without charging the customer", async () => {
     const { scope, itemId } = await setup(); const q = await quote(scope, itemId);
