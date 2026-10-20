@@ -1,5 +1,13 @@
 # Acceptance ledger — 19 October 2026
 
+## 20 October — onboarding evidence selection follow-up (source only)
+
+The owner's post-v73 screenshot still shows an unfilled offering and a domain as the business name. The supplied HTML is a basic export of saved draft fields, not evidence of a successful website analysis or a developed brand book. **The reported live failure is not resolved or live-verified by this entry.** A read-only production-record diagnostic could not proceed because no public database connection was available; no public database endpoint, SSH key, test customer or paid request was created to work around that. The interrupted browser inspection did not establish the actual import/analysis state.
+
+A separate confirmed implementation gap is fixed in source: onboarding previously ignored successfully imported saved social-profile URLs and could authorize analysis of an uploaded book while its requested website was still being read. Evidence selection now waits for an already queued/fetching website and includes available saved public-profile evidence within the existing three-source allowance, prioritizing one website, one document and one profile. Other profile URLs and other tenants remain excluded. Newer failed imports cannot silently fall back to older successful copies. Unavailable optional profiles do not block usable website evidence, and no additional analysis attempt is created for an existing authorization.
+
+Verification: **74 focused unit/database tests pass**, including role/tenant, consent, credit, duplicate-request and late/stale-response regression cases; **27 pure onboarding/evidence tests pass** separately. Typechecking and production build pass. The database run used a newly created disposable local database, removed after completion, and injected provider responses only. No UI control changed in this increment. Independent full regression/browser CI and deployment remain pending; production is still the v73 source recorded below. This does not establish social-page accessibility, source truth, improved brand-book quality or the cause of the owner's current live failure.
+
 ## 20 October — website-to-review autofill (v73)
 
 The earlier v72 release did **not** activate its separately deployed scraper and did **not** connect brand analysis to onboarding. The reported empty review forms were therefore a real missing workflow, not a customer input error.

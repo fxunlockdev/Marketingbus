@@ -99,6 +99,42 @@ suite("evidence-grounded brand intelligence", () => {
     expect(await db.brandAnalysis.count({ where: { businessId: f.scope.businessId } })).toBe(0);
     expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(0);
   });
+  it("waits for the requested website even if a brand book is already available", async () => {
+    const f = await setup(); await setupAutofill(f);
+    await db.knowledgeSource.create({ data: {
+      businessId: f.scope.businessId, organizationId: f.scope.organizationId, createdBy: f.scope.actorId,
+      kind: "WEBSITE", title: "Website", sourceUrl: "https://example.com/", status: "FETCHING",
+    } });
+    expect(await prepareSetupAutofill(f.scope)).toEqual({ status: "WAITING", suggestions: [] });
+    expect(await db.brandAnalysis.count({ where: { businessId: f.scope.businessId } })).toBe(0);
+    expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(0);
+  });
+  it("includes only saved same-business public profiles in the one authorized analysis", async () => {
+    const f = await setup(), other = await setup(); await setupAutofill(f);
+    const url = "https://www.instagram.com/fixture";
+    const business = await db.business.findUniqueOrThrow({ where: { id: f.scope.businessId } });
+    await db.business.update({ where: { id: business.id }, data: {
+      setupDetails: { ...(business.setupDetails as Prisma.JsonObject), socialProfiles: [{ platform: "Instagram", url }] },
+    } });
+    const addProfile = (scope: typeof f.scope, sourceUrl: string) => db.knowledgeSource.create({ data: {
+      businessId: scope.businessId, organizationId: scope.organizationId, createdBy: scope.actorId, kind: "WEBSITE",
+      title: "Public profile", sourceUrl, body: text, sha256: f.source.sha256, status: "PROPOSED", retrievedAt: new Date(),
+    } });
+    const selected = await addProfile(f.scope, url);
+    const foreign = await addProfile(other.scope, url);
+    const unselected = await addProfile(f.scope, "https://www.instagram.com/not-selected");
+    await prepareSetupAutofill(f.scope);
+    const row = await db.brandAnalysis.findFirstOrThrow({ where: { businessId: business.id } });
+    const refs = row.sources as { id: string }[];
+    expect(refs.map(ref => ref.id).sort()).toEqual([f.source.id, selected.id].sort());
+    expect(refs.map(ref => ref.id)).not.toContain(foreign.id);
+    expect(refs.map(ref => ref.id)).not.toContain(unselected.id);
+    await prepareSetupAutofill(f.scope);
+    expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(1);
+    // Settle through the ordinary injected worker path; no public-profile or AI call.
+    await runOneBrandAnalysis(f.reasoner);
+    expect(await readSetupAutofill(f.scope)).toMatchObject({ status: "READY" });
+  });
   it.each(["source", "profile"] as const)("does not return stale setup results after %s changes", async changed => {
     const f = await setup(); await setupAutofill(f);
     await prepareSetupAutofill(f.scope); await runOneBrandAnalysis(f.reasoner);

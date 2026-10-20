@@ -5,6 +5,7 @@ import type { Scope } from "../production/service";
 import { analysisEvidence, manageBrandAnalysis } from "../knowledge/analysis";
 import { validateSuggestions } from "../knowledge/grounding";
 import { setupDetails } from "./simple";
+import { selectAutofillSources } from "./autofill-sources";
 
 export function setupAutofillId(scope: Pick<Scope, "organizationId" | "businessId">, requestId: string) {
   return createHash("sha256").update(JSON.stringify(["setup-autofill-v1", scope.organizationId, scope.businessId, requestId])).digest("hex");
@@ -35,14 +36,13 @@ export async function prepareSetupAutofill(scope: Scope) {
   if (!consent) throw new AppError(409, "Choose Review my brand to prepare your details.");
   const existing = await db.brandAnalysis.findFirst({ where: { id: setupAutofillId(scope, consent.requestId), businessId: scope.businessId, organizationId: scope.organizationId } });
   if (existing) return readSetupAutofill(scope);
+  const socialUrls = setupDetails.parse(business.setupDetails).socialProfiles.map(profile => profile.url);
   const sources = await db.knowledgeSource.findMany({ where: {
     businessId: scope.businessId, organizationId: scope.organizationId,
-    OR: [{ sourceUrl: business.website }, { sourceUrl: "" }],
-  }, orderBy: { createdAt: "desc" }, take: 30 });
-  const website = sources.find(s => s.sourceUrl === business.website);
-  const documents = sources.filter(s => !s.sourceUrl && s.status === "PROPOSED");
-  const selected = [...(website?.status === "PROPOSED" ? [website] : []), ...documents].slice(0, 3);
-  if (!selected.length) return { status: website && ["QUEUED", "FETCHING"].includes(website.status) ? "WAITING" : "IMPORT_REQUIRED", suggestions: [] };
-  await manageBrandAnalysis(scope, { action: "prepare", ...consent, sourceIds: selected.map(s => s.id) });
+    sourceUrl: { in: [business.website, "", ...socialUrls] },
+  }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 30 });
+  const selected = selectAutofillSources(sources, business.website, socialUrls);
+  if (selected.status !== "READY") return { status: selected.status, suggestions: [] };
+  await manageBrandAnalysis(scope, { action: "prepare", ...consent, sourceIds: selected.sourceIds });
   return readSetupAutofill(scope);
 }
