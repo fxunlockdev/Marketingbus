@@ -1,6 +1,6 @@
 # Acceptance ledger — 19 October 2026
 
-## 20 October — website-to-review autofill (v73, release verification)
+## 20 October — website-to-review autofill (v73)
 
 The earlier v72 release did **not** activate its separately deployed scraper and did **not** connect brand analysis to onboarding. The reported empty review forms were therefore a real missing workflow, not a customer input error.
 
@@ -15,6 +15,14 @@ Verification in progress: initial full regression passed 2,353 tests and failed 
 Local release follow-up: **113 focused unit/database checks and six browser journeys pass**, including the actual saved-consent → injected worker response → editable review → confirmed setup workflow, duplicate-request/credit safeguards, tenant/role boundaries, stale evidence, uncertain results, manual fallback, mobile width and accessibility. Production build/typechecking pass. The new credit-ceiling test needed its fixture heartbeat refreshed after changing its mock rate card; the browser's textarea selector was corrected after the snapshot proved the user's edit was preserved. Disposable databases and private-storage fixtures were removed. Full independent CI and hosted activation remain pending at this checkpoint.
 
 Rate verification for the rollout: official OpenAI pricing retrieved on 20 October still lists GPT-4.1 at $2 input/$8 output and GPT-4.1-mini at $0.40/$1.60 per million uncached tokens ([pricing](https://developers.openai.com/api/docs/pricing)). Existing model IDs and rates remain unchanged; their verification expiry can be refreshed to 19 November. This does not increase supplier budgets or authorize a paid acceptance test.
+
+Independent release verification supersedes the pending checkpoints above: exact source `66c3b3803ba8f0f0613c6a57d87c1ae051b88617` passed [CI 39433131575](https://github.com/fxunlockdev/Marketingbus/actions/runs/39433131575): **2,364 tests / 99 suites, 57 browser journeys, production build, isolated recovery, built web/worker quarantine checks and zero reported dependency vulnerabilities**, with no skipped journeys. Source was archived directly from the verified commit for deployment; no local credentials or untracked files were packaged.
+
+Worker deployment `a8095f5a-8d41-4e89-9979-cd85a30294e0` reports SUCCESS. At 13:58:23 UTC its hosted preflight explicitly passed actual public extraction, missing-auth rejection, private-address rejection, expired-TLS rejection and recovery through the private scraper. All 62 migrations were already applied. Website extraction, private service/token references and bounded cold-start handling are now configured on both application services. Existing model rates were preserved and their verification expiry refreshed to 19 November. The temporary startup verification flag was set false for the worker's next deployment after its successful acceptance run, without restarting the verified worker.
+
+Web deployment `8193c463-6f03-4936-9f4d-f1e672c1b9e1` also reports SUCCESS, serving the same verified source/runtime `studio-v73-onboarding-autofill`. At 14:03 UTC startup reported ready with no pending migrations. Hosted read-only smoke checks pass: health 200/no-store, login 200 without the removed provider disclaimer, signed-out studio 307 to login, and anonymous autofill/source requests 401/no-store. No production customer record was created or changed by these checks. Existing incomplete setups can use “Read my website again” followed by “Fill in my details”; new setups save the bounded autofill choice at “Review my brand”.
+
+This establishes actual hosted scraper acceptance, not a paid production-model response or an authenticated live customer journey. Automatic draft generation has been exercised with an injected provider response in isolated browser/database tests; no new paid AI/media acceptance request, real post, email or payment was sent. JavaScript-only/restricted pages and missing social-platform app configuration remain outside this release's verified capabilities.
 
 ## 20 October — v72 verified application delivery
 
