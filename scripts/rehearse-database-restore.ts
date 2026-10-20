@@ -5,9 +5,11 @@ import { PrismaClient } from "@prisma/client";
 import { resolve } from "node:path";
 import { localRecoveryConfig, recoveryNames, recoveryIdentifier, recoveryUrl, assertLocalContainer, isolatedEnvironment, MAX_ARCHIVE_BYTES, archiveDigest, verifyArchive } from "./recovery/safety";
 import { recoverySnapshot, assertSnapshot } from "./recovery/snapshot";
+import { previewIdentityQuarantine, quarantineRestoredIdentity } from "./recovery/identity-quarantine";
 import { sealSecret, openSecret } from "../src/lib/secrets";
 import { reserveCreditsInTransaction, finishReservationInTransaction } from "../src/lib/billing/wallet";
 import { payloadHash } from "../src/lib/social/integrity";
+import { base32, decodeBase32, totp, verifyTotp } from "../src/lib/identity/totp";
 
 // This runner only makes its own synthetic databases. It cannot accept an external
 // backup, overwrite an existing DB, start an app/worker, or enable paid execution.
@@ -125,6 +127,18 @@ async function main() {
     await source.session.create({ data: { id: "synthetic-session-hash", userId: user.id, expiresAt: new Date(Date.now() + 60000) } });
     await source.socialOAuthFlow.create({ data: { id: "synthetic-meta-flow", organizationId: a.id, businessId: business.id, actorId: user.id, sessionId: "synthetic-session-hash", provider: "Facebook", authentication: "META_CONFIDENTIAL", stateHash: "synthetic-meta-state", configurationHash: "synthetic-config", expiresAt: new Date(Date.now() + 60000) } });
     await source.emailOutbox.create({ data: { id: "synthetic-email", userId: user.id, kind: "VERIFY_EMAIL", encryptedPayload: sealSecret("synthetic message", `email:synthetic-email:${user.id}`), expiresAt: new Date(Date.now() + 60000) } });
+    const secondUser = await source.user.create({ data: { email: `restore-second-${randomUUID()}@example.test`, name: "Second restore fixture", passwordHash: "not-a-login-credential", authVersion: 7, memberships: { create: { organizationId: b.id, role: "VIEWER" } } } });
+    await source.session.create({ data: { id: "synthetic-second-session", userId: secondUser.id, authVersion: 7, expiresAt: new Date(Date.now() + 60000) } });
+    await source.identityToken.createMany({ data: [
+      { id: "synthetic-reset", userId: user.id, kind: "RESET_PASSWORD", expiresAt: new Date(Date.now() + 60000) },
+      { id: "synthetic-verify", userId: secondUser.id, kind: "VERIFY_EMAIL", expiresAt: new Date(Date.now() + 60000) },
+      { id: "synthetic-used", userId: user.id, kind: "VERIFY_EMAIL", usedAt: new Date("2026-01-01Z"), expiresAt: new Date("2026-01-02Z") },
+    ] });
+    await source.teamInvitation.createMany({ data: ["PENDING", "ACCEPTED", "REVOKED"].map(status => ({ id: `synthetic-invite-${status}`, organizationId: a.id, email: "invited@example.test", role: "VIEWER", createdBy: user.id, outboxId: `synthetic-invite-mail-${status}`, status, expiresAt: new Date(Date.now() + 60000) })) });
+    await source.emailOutbox.createMany({ data: ["SENDING", "ACCEPTED", "FAILED"].map(status => ({ id: `synthetic-mail-${status}`, userId: secondUser.id, kind: "RESET_PASSWORD", encryptedPayload: status === "SENDING" ? "synthetic-encrypted-payload" : "", status, attempts: 2, leaseUntil: status === "SENDING" ? new Date(Date.now() + 60000) : null, providerId: status === "ACCEPTED" ? "synthetic-provider-receipt" : null, expiresAt: new Date(Date.now() + 60000) })) });
+    const fixtureFactor = base32(Buffer.alloc(20, 7));
+    await source.mfaCredential.create({ data: { userId: user.id, encryptedSecret: sealSecret(fixtureFactor, `mfa:${user.id}`), enabledAt: new Date(), recoveryHashes: ["synthetic-recovery-hash"], lastStep: 1 } });
+    await source.mfaCredential.create({ data: { userId: secondUser.id, pendingSecret: "synthetic-pending-enrollment", pendingExpiresAt: new Date(Date.now() + 60000) } });
     phase = "provisional video accounting fixture";
     await source.supplierAuthorization.create({ data: { key: "synthetic-provisional-video", ceilingMicros: 70000 } });
     await source.videoGeneration.create({ data: {
@@ -278,11 +292,62 @@ async function main() {
     check((await target.wallet.findUniqueOrThrow({ where: { organizationId: b.id } })).available === 17, "Other tenant wallet changed.");
     check(await target.emailOutbox.count({ where: { status: "QUEUED", providerId: null, attempts: 0 } }) === 1, "Email outbox changed without delivery authorization.");
     await mustReject(async () => assertSnapshot(before, await recoverySnapshot(target)));
+    phase = "restored identity quarantine";
+    const identityBefore = await recoverySnapshot(target), preview = await previewIdentityQuarantine(target, names.target);
+    assertSnapshot(identityBefore, await recoverySnapshot(target));
+    await mustReject(() => previewIdentityQuarantine(source, names.target));
+    await mustReject(() => quarantineRestoredIdentity(target, names.source, preview.fingerprint));
+    await mustReject(() => quarantineRestoredIdentity(target, names.target, "0".repeat(64)));
+    assertSnapshot(identityBefore, await recoverySnapshot(target));
+    // Same counts but changed content must invalidate the preview.
+    await target.session.update({ where: { id: "synthetic-second-session" }, data: { expiresAt: new Date(Date.now() + 120000) } });
+    await mustReject(() => quarantineRestoredIdentity(target, names.target, preview.fingerprint));
+    // A late failure rolls back session/token/email writes as well as auth versions.
+    await target.$executeRawUnsafe('ALTER TABLE "MfaCredential" ADD CONSTRAINT synthetic_quarantine_failure CHECK ("enabledAt" IS NOT NULL OR "pendingSecret" <> \'\')');
+    const rollbackBefore = await recoverySnapshot(target), rollbackPreview = await previewIdentityQuarantine(target, names.target);
+    await mustReject(() => quarantineRestoredIdentity(target, names.target, rollbackPreview.fingerprint));
+    assertSnapshot(rollbackBefore, await recoverySnapshot(target));
+    await target.$executeRawUnsafe('ALTER TABLE "MfaCredential" DROP CONSTRAINT synthetic_quarantine_failure');
+    const confirmed = await previewIdentityQuarantine(target, names.target), protectedBefore = await recoverySnapshot(target), quarantineAt = new Date();
+    const competingQuarantines = await Promise.allSettled([
+      quarantineRestoredIdentity(target, names.target, confirmed.fingerprint, quarantineAt),
+      quarantineRestoredIdentity(target, names.target, confirmed.fingerprint, quarantineAt),
+    ]);
+    const successfulQuarantines = competingQuarantines.filter(result => result.status === "fulfilled");
+    check(successfulQuarantines.length === 1, "Concurrent quarantine was applied more than once.");
+    const quarantine = successfulQuarantines[0].value;
+    check(quarantine.before.fingerprint === confirmed.fingerprint && quarantine.after.fingerprint !== confirmed.fingerprint, "Quarantine receipt did not bind the inspected target.");
+    check(await target.session.count() === 0 && await target.socialOAuthFlow.count() === 0, "Restored session or OAuth grant survived quarantine.");
+    check(await target.identityToken.count({ where: { usedAt: null } }) === 0, "Restored identity token remains usable.");
+    check((await target.identityToken.findUniqueOrThrow({ where: { id: "synthetic-used" } })).usedAt?.toISOString() === "2026-01-01T00:00:00.000Z", "Used-token evidence changed.");
+    check(await target.teamInvitation.count({ where: { status: "PENDING" } }) === 0 && await target.teamInvitation.count({ where: { status: "ACCEPTED" } }) === 1, "Invitation quarantine lost accepted history.");
+    check(await target.emailOutbox.count({ where: { status: { in: ["QUEUED", "SENDING"] } } }) === 0, "Restored mail can still be retried.");
+    const quarantinedMail = await target.emailOutbox.findUniqueOrThrow({ where: { id: "synthetic-mail-SENDING" } });
+    check(quarantinedMail.status === "EXPIRED" && quarantinedMail.encryptedPayload === "" && quarantinedMail.leaseUntil === null && quarantinedMail.attempts === 2 && quarantinedMail.providerId === null, "Uncertain mail history or secret cleanup failed.");
+    check((await target.emailOutbox.findUniqueOrThrow({ where: { id: "synthetic-mail-ACCEPTED" } })).providerId === "synthetic-provider-receipt", "Accepted mail receipt lost.");
+    const factor = await target.mfaCredential.findUniqueOrThrow({ where: { userId: user.id } });
+    check(factor.enabledAt !== null && openSecret(factor.encryptedSecret, `mfa:${user.id}`) === fixtureFactor && factor.recoveryHashes.length === 0 && factor.lastStep === Math.floor(quarantineAt.getTime() / 30000) + 1, "Enrolled MFA or replay fence lost.");
+    for (const offset of [-30000, 0, 30000]) check(verifyTotp(fixtureFactor, totp(decodeBase32(fixtureFactor), quarantineAt.getTime() + offset), factor.lastStep, quarantineAt) === null, "Restored TOTP replay window remains usable.");
+    const later = new Date(quarantineAt.getTime() + 90000);
+    check(verifyTotp(fixtureFactor, totp(decodeBase32(fixtureFactor), later.getTime()), factor.lastStep, later) !== null, "Retained authenticator cannot resume after the replay fence.");
+    check((await target.mfaCredential.findUniqueOrThrow({ where: { userId: secondUser.id } })).pendingSecret === "", "Pending MFA enrollment survived.");
+    check((await target.user.findUniqueOrThrow({ where: { id: user.id } })).authVersion === 1 && (await target.user.findUniqueOrThrow({ where: { id: secondUser.id } })).authVersion === 8, "Not all restored login versions were invalidated.");
+    for (const id of [user.id, secondUser.id]) {
+      const original = await source.user.findUniqueOrThrow({ where: { id } }), restored = await target.user.findUniqueOrThrow({ where: { id } });
+      check(isDeepStrictEqual({ ...restored, authVersion: original.authVersion }, original), "Quarantine modified retained user identity or password.");
+    }
+    const protectedAfter = await recoverySnapshot(target), identityTables = new Set(["User", "Session", "IdentityToken", "TeamInvitation", "EmailOutbox", "MfaCredential", "SocialOAuthFlow"]);
+    assertSnapshot({ ...protectedBefore, tables: protectedBefore.tables.filter(t => !identityTables.has(t.name)) }, { ...protectedAfter, tables: protectedAfter.tables.filter(t => !identityTables.has(t.name)) });
+    await mustReject(() => quarantineRestoredIdentity(target, names.target, confirmed.fingerprint));
+    assertSnapshot(protectedAfter, await recoverySnapshot(target));
+    check(await source.session.count() === 2 && await source.identityToken.count({ where: { usedAt: null } }) === 2, "Source was modified by target quarantine.");
     report = { status: "passed", scope: "synthetic-local-database-only", archiveBytes: archive.length, archiveSha256: digest,
       tablesVerified: before.tables.length, rowsVerified: before.tables.reduce((n, t) => n + t.count, 0),
       migrationsVerified: before.tables.find(t => t.name === "_prisma_migrations")?.count,
       schemaHash: before.schemaHash, backupMs, restoreMs, elapsedMs: Date.now() - started,
       checks: ["schema-and-all-row-fingerprints", "post-backup-change-excluded", "corrupt-archive-rejected", "tenant-foreign-keys", "ledger-and-payment-uniqueness", "settlement-replay", "refund-debt", "uncertain-job-and-refund-preservation", "uncertain-publication-journal-and-constraint", "retained-key-decryption", "missing-key-and-cross-tenant-decryption-denial", "unchanged-email-outbox"],
+      identityQuarantineVerified: true, identityQuarantineCounts: quarantine.before.counts,
+      identityQuarantineChecks: ["preview-read-only", "exact-target", "changed-content-denial", "late-failure-rollback", "single-concurrent-application", "sessions-and-oauth-cleared", "one-use-links-invalidated", "queued-email-quarantined", "mfa-retained-and-replay-fenced", "unrelated-table-fingerprints-unchanged", "source-unchanged", "stale-replay-denied"],
       metricProvenanceVerified: true, provisionalVideoExpenseVerified: true, productionRecoveryVerified: false, objectStorageVerified: false, workersStarted: 0, providerCalls: 0 };
   } finally {
     if (oldKeys === undefined) delete process.env.SECRET_ENCRYPTION_KEYS_JSON; else process.env.SECRET_ENCRYPTION_KEYS_JSON = oldKeys;

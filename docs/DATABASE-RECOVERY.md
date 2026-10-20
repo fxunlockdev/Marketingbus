@@ -29,6 +29,16 @@ On completion or handled failure, only databases successfully created by that ru
 - Encrypted social credentials decrypt with the original retained key after the active key changes. A missing original key or a different tenant context fails closed. No real provider token is used.
 - Pending email remains pending with no provider receipt or delivery attempt. The test records asset metadata but does not recover or fetch bucket objects.
 
+### Restored identity quarantine rehearsal
+
+After proving backup fidelity, the runner now rehearses a separate identity-quarantine transaction on its fresh synthetic target. A read-only preview returns only table counts and a fingerprint; application requires that exact fingerprint and generated target name. The connected database is checked, writes to the seven identity tables are serialized with table locks, and row/byte/statement/lock limits fail closed. Changed content with identical counts, stale replay and concurrent application are rejected. An injected late database constraint failure proves all earlier mutations roll back.
+
+The transaction invalidates every restored session and its temporary OAuth flow, marks unused verification/reset tokens used, revokes pending invitations, and expires queued/sending identity email while clearing encrypted payloads and leases. Sending-email attempts and any provider receipt are retained: quarantine is not a claim that an already-sent message was cancelled. Accepted/revoked history remains intact. All users receive a new authentication version. Pending MFA enrollment and restored recovery-code hashes are cleared; enrolled authenticators are retained and the consumed-TOTP fence advances through the quarantine time plus the verifier's one-step clock-skew window without moving backwards. Users must wait for a later authenticator code; real TOTP checks verify replay rejection and subsequent login-factor availability.
+
+The rehearsal compares every unrelated table fingerprint before and after, preserving wallets, holds, memberships, provider credentials, jobs, uncertain publications and payment receipts. It verifies unchanged user identity/password fields and the untouched source database. No worker or email/provider transport runs. The helper is **rehearsal-only**, reachable through the existing loopback/container-validated runner; it is not an approved production quarantine CLI. A database name alone is not proof of isolation.
+
+This does not reconcile post-backup password/factor changes, deleted accounts or revoked permissions; it does not disable outbound production queues or recover missing encryption keys. Production identity/queue quarantine, incident approval, authoritative revocation reconciliation and cutover acceptance remain required before reopening access. Users whose restored recovery codes are invalidated still need their enrolled authenticator or a separately verified recovery process; the rehearsal does not bypass MFA.
+
 The JSON report contains hashes, counts, local timings and check names, not row contents, connection strings or encryption keys. GitHub CI runs the rehearsal against its disposable PostgreSQL service before the application build and browser tests. These fixture timings must not be advertised as production RPO or RTO.
 
 ## Production recovery procedure

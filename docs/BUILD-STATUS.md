@@ -1,5 +1,15 @@
 # Acceptance ledger — 19 October 2026
 
+## 20 October — restored identity quarantine rehearsal
+
+Added a rehearsal-only, exact-target/preview-bound identity quarantine transaction after synthetic backup fidelity verification. It invalidates sessions and temporary OAuth flows, unused reset/verification tokens, pending invitations/email, pending MFA enrollment and restored recovery-code hashes. Enrolled authenticators and user identity/password fields remain; the TOTP fence includes the accepted future clock-skew step. The source database and every nonidentity table fingerprint remain unchanged, including financial holds and uncertain external operations. No production command, automatic recovery, outbound queue activation, new service or runtime route is introduced.
+
+Full local regression passes **1,986 tests across 90 suites**; the final focused recovery suite passes **25 checks**. The expanded real dump/restore rehearsal verifies **60 migrations, 53 tables and 153 synthetic rows**, plus exact target binding, unchanged read-only preview, same-count altered-content denial, late-failure transaction rollback, one successful concurrent application, stale-replay denial, actual TOTP window rejection/subsequent factor availability, preserved unrelated fingerprints and untouched source. Production build/type checking and dependency audit (zero reported vulnerabilities) pass. **Five identity/invitation/MFA browser journeys** pass against a separate disposable database and real private storage; these exercise existing application flows, not a production recovery UI. Temporary rehearsal, regression and browser databases and storage/TLS resources were removed after verification. No provider calls, production fixtures or Railway mutation occurred.
+
+This is source-only tooling pending independent CI, not a deployed application change. Production restoration, post-backup identity/revocation reconciliation, object/key recovery, outbound queue quarantine and cutover acceptance remain open. The helper is only used by the existing loopback/container-validated synthetic runner; a matching database name alone is not proof of isolation.
+
+The preceding payment-backed integrity source `5405c5127ba2fa5951c9e9cd5dbda8e7d15c8bbb` passed independent [CI 39345986248](https://github.com/fxunlockdev/Marketingbus/actions/runs/39345986248). It remains source-delivered tooling; running application source is still `54931882d44a3d83e341a327b912f6f210652f7a`, with deployment receipts below.
+
 ## 20 October — payment-backed credit integrity
 
 Extended the read-only operator report to bind grants to same-workspace payment allocations and reconcile cumulative refund journals, including separate-pool rounding and zero-credit steps. Missing/foreign payments, malformed or oversized keys and offsetting incorrect refund steps are flagged even when net credits balance. No runtime route, schema, provider call or accounting mutation was added. This checks retained local records, not Stripe authenticity, supplier invoices or cash settlement.

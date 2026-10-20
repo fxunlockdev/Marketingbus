@@ -1,9 +1,48 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { archiveDigest, assertLocalContainer, isolatedEnvironment, localRecoveryConfig, recoveryIdentifier, recoveryNames, recoveryUrl, verifyArchive } from "../scripts/recovery/safety";
 import { assertSnapshot, tableIdentifier, type RecoverySnapshot } from "../scripts/recovery/snapshot";
+import { assertQuarantineTarget, previewIdentityQuarantine, quarantineRestoredIdentity } from "../scripts/recovery/identity-quarantine";
+import type { PrismaClient } from "@prisma/client";
 afterEach(() => vi.unstubAllEnvs());
 const local = "postgresql://fixture:local-only@127.0.0.1:55439/fixture";
 describe("isolated recovery rehearsal guards", () => {
+  it.each(["postgres", "railway", recoveryNames().source, "mb_restore_123_target", 'mb_restore_x_target";DELETE']) ("rejects identity quarantine outside an exact rehearsal target: %s", async database => {
+    const transaction = vi.fn(), client = { $transaction: transaction } as unknown as PrismaClient;
+    expect(() => assertQuarantineTarget(database)).toThrow("target");
+    await expect(previewIdentityQuarantine(client, database)).rejects.toThrow("target");
+    await expect(quarantineRestoredIdentity(client, database, "a".repeat(64))).rejects.toThrow("target");
+    expect(transaction).not.toHaveBeenCalled();
+  });
+  it("requires an exact quarantine fingerprint and valid time before accessing a database", async () => {
+    const transaction = vi.fn(), client = { $transaction: transaction } as unknown as PrismaClient, database = recoveryNames().target;
+    for (const value of ["", "a".repeat(63), "A".repeat(64), "x".repeat(64)])
+      await expect(quarantineRestoredIdentity(client, database, value)).rejects.toThrow("confirmation");
+    await expect(quarantineRestoredIdentity(client, database, "a".repeat(64), new Date(NaN))).rejects.toThrow("confirmation");
+    expect(transaction).not.toHaveBeenCalled();
+  });
+  it("refuses a different connected database before acquiring mutation locks", async () => {
+    const tx = { $queryRaw: vi.fn().mockResolvedValue([{ name: "different" }]), $executeRaw: vi.fn(), $executeRawUnsafe: vi.fn() };
+    const client = { $transaction: (fn: (value: unknown) => unknown) => fn(tx) } as unknown as PrismaClient;
+    await expect(quarantineRestoredIdentity(client, recoveryNames().target, "a".repeat(64))).rejects.toThrow("mismatch");
+    expect(tx.$executeRawUnsafe).not.toHaveBeenCalled();
+  });
+  it.each(["rows", "bytes"])("fails closed when the quarantine preview exceeds its %s limit", async limit => {
+    const database = recoveryNames().target;
+    const rows = limit === "rows" ? Array.from({ length: 10001 }, () => ({ row: "{}" })) : [{ row: "x".repeat(8 * 1024 * 1024 + 1) }];
+    const tx = { $queryRaw: vi.fn().mockResolvedValue([{ name: database }]), $executeRaw: vi.fn(), $queryRawUnsafe: vi.fn().mockResolvedValue(rows) };
+    const client = { $transaction: (fn: (value: unknown) => unknown) => fn(tx) } as unknown as PrismaClient;
+    await expect(previewIdentityQuarantine(client, database)).rejects.toThrow("limit exceeded");
+  });
+  it("returns only counts and a fingerprint, not identity data or encrypted secrets", async () => {
+    const database = recoveryNames().target, secret = "private-token-and-customer-data";
+    const tx = { $queryRaw: vi.fn().mockResolvedValue([{ name: database }]), $executeRaw: vi.fn(), $queryRawUnsafe: vi.fn().mockResolvedValue([{ row: JSON.stringify({ secret }) }]) };
+    const client = { $transaction: (fn: (value: unknown) => unknown) => fn(tx) } as unknown as PrismaClient;
+    const result = await previewIdentityQuarantine(client, database);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(result.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(Object.values(result.counts)).toEqual([1, 1, 1, 1, 1, 1, 1]);
+    expect(tx.$executeRaw.mock.calls[0][0][0]).toBe("SET TRANSACTION READ ONLY");
+  });
   it("requires explicit configuration and never falls back to DATABASE_URL", () => {
     vi.stubEnv("DATABASE_URL", "postgresql://secret@production.example/prod");
     expect(() => localRecoveryConfig(undefined, "fixture-db")).toThrow("explicit");
