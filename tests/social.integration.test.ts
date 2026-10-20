@@ -206,6 +206,14 @@ suite("social publishing and analytics isolation", () => {
     expect(provider.reconcile).not.toHaveBeenCalled();
     expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "CANCELLED", errorCode: "FACT_CHECK_FAILED", externalPostId: null });
   });
+  it.each(["February 31", "Friday 12 January 2028"])("refuses an exactly evidenced but invalid calendar date %s before scheduling", async caption => {
+    const ctx = await setup(), provider = adapter();
+    await db.business.update({ where: { id: ctx.scope.businessId }, data: { proof: caption } });
+    await db.creativeRevision.update({ where: { id: ctx.item.revisions[0].id }, data: { content: { ...creative, caption } } });
+    await expect(manageSocial(ctx.scope, ctx.action, { Facebook: provider })).rejects.toThrow("factual checks");
+    expect(await db.socialPublication.count({ where: { businessId: ctx.scope.businessId } })).toBe(0);
+    expect(provider.publish).not.toHaveBeenCalled();
+  });
   it("publishes a verified Facebook text receipt without inventing metrics or resending", async () => {
     const { f, post } = await facebookQueue();
     await runOnePublication({ Facebook: f.adapter });

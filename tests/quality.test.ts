@@ -37,14 +37,20 @@ describe("grounding regression and revision adherence", () => {
   ])("requires one contiguous confirmed price/date for %s", (caption, facts) => {
     expect(evaluateCreative({ ...creative, caption }, { facts }).eligible).toBe(false);
   });
-  it.each(["USD 100", "$100", "€100", "£100", "₹100", "CAD 1,200.50", "100 AED", "January 12, 2028", "12 January 2028", "Jan 12", "12th Jan", "Saturday, January 12", "Friday 12 January 2028"])("allows an exact confirmed compound %s", caption => {
+  it.each(["USD 100", "$100", "€100", "£100", "₹100", "CAD 1,200.50", "100 AED", "January 12, 2028", "12 January 2028", "Jan 12", "12th Jan", "Saturday, January 12", "Wednesday 12 January 2028"])("allows an exact confirmed compound %s", caption => {
     expect(evaluateCreative({ ...creative, caption }, { facts: `Confirmed: ${caption}.` }).eligible).toBe(true);
   });
-  it("retains conservative matching and never interprets prices, currencies or calendar truth", () => {
+  it("retains conservative price matching without inventing currency conversions", () => {
     expect(evaluateCreative({ ...creative, caption: "USD 100" }, { facts: "Price: $100" }).eligible).toBe(false);
     expect(evaluateCreative({ ...creative, caption: "USD 100.00" }, { facts: "Price: USD 100" }).eligible).toBe(false);
-    // An exact source match is not proof that a date exists or that the source is true.
-    expect(evaluateCreative({ ...creative, caption: "February 31" }, { facts: "February 31" })).toMatchObject({ eligible: true, humanReviewRequired: true });
+  });
+  it.each(["February 31", "31 April", "June 00", "January 32", "Feb 29, 2027", "29 February 1900", "February 29, 2100", "January 1, 0000", "Friday 12 January 2028", "Monday, February 29, 2028", "Ｊｕｎｅ ３１", "June 11st", "June 22th", "June 13rd"])("rejects an impossible named date even when confirmed: %s", caption => {
+    const result = evaluateCreative({ ...creative, caption }, { facts: caption });
+    expect(result).toMatchObject({ eligible: false, humanReviewRequired: true });
+    expect(result.defects).toEqual(expect.arrayContaining([expect.objectContaining({ code: "INVALID_CALENDAR_DATE" })]));
+  });
+  it.each(["February 29", "29 Feb. 2028", "February 29, 2000", "29th February 2028", "Tuesday, February 29, 2028", "Wednesday 12 January 2028", "1 January 0001", "December 31, 9999", "Saturday, January 12", "June 1st", "June 2nd", "June 3rd", "June 11th", "June 12th", "June 13th", "June 21st", "June 22nd", "June 23rd", "June 30th"])("allows a possible confirmed date without assuming a missing year: %s", caption => {
+    expect(evaluateCreative({ ...creative, caption }, { facts: caption })).toMatchObject({ eligible: true, humanReviewRequired: true });
   });
   it("rejects ignored shorter, hashtag and exact-opening requests", () => {
     const result = evaluateCreative({ ...creative, caption: creative.caption + " #pottery" }, { facts: "", previous: creative, feedback: 'Make it shorter; no hashtags. Start the caption with "Solo beginners".' });

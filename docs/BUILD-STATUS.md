@@ -1,5 +1,13 @@
 # Acceptance ledger — 19 October 2026
 
+## 20 October — impossible calendar-date protection
+
+Runtime `studio-v56-calendar-grounding`, quality policy `grounding-2026-10-20.2`, rejects recognized English named dates that are impossible in the Gregorian calendar even when the confirmed profile repeats the error. Checks cover month lengths, leap centuries, zero days/year, ordinal suffixes and explicit year/weekday consistency. Missing years are not guessed; yearless February 29 remains possible. The existing generation, editing, approval, calendar and social guards consume the same policy. This does not validate numeric/ISO dates, other calendars/languages, semantic truth, temporal relevance or visual claims; no automatic date correction or approval is introduced.
+
+Fourteen new regression cases first failed against the previous policy. Final local regression passes **2,077 tests across 91 suites with no skips**. Added database cases prove invalid generated copy makes one injected provider call, releases customer credits, retains supplier expense and never auto-retries; retained invalid copy cannot be approved/edited/scheduled, and rejected calendar moves preserve reservations/credits while still allowing removal. Production build, type checking and dependency audit (zero reported vulnerabilities) pass. The review browser journey passes with real isolated private storage: an invalid date copied from confirmed evidence cannot create a new revision or disturb the existing calendar entry, and a subsequent valid edit succeeds. Synthetic storage/TLS resources and the separate disposable database were removed after verification. No production/customer data, real provider calls, social posts, emails, payments or paid infrastructure were used.
+
+This increment is **source-only pending independent CI and deployment**, not live-provider verified. The deployed source remains `c2bc9ddc7ac591c54b1ae2431de17a9a0055084c`, with receipts below. Existing activation blockers were not bypassed or re-requested; internal implementation work remains across the seven modules.
+
 ## 20 October — verified release deployed; live journey still gated
 
 Exact source `c2bc9ddc7ac591c54b1ae2431de17a9a0055084c` passed [CI 39356109684](https://github.com/fxunlockdev/Marketingbus/actions/runs/39356109684): regression, synthetic database recovery (60 migrations, 53 tables, 153 rows), production build, built-process recovery quarantine, **54 browser journeys with isolated private storage**, and dependency audit (zero reported vulnerabilities). Local regression for this source passes **2,037 tests / 91 suites, no skips**. This supersedes the source-only status of compound grounding and the preceding recovery safeguards below.

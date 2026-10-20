@@ -282,6 +282,23 @@ suite("production authorization, review and worker integration", () => {
     expect(await db.creativeRevision.findFirstOrThrow({ where: { itemId: b.itemId } })).toMatchObject({ status: "READY", content: { caption } });
     await actOnProduction(b.scope, { action: "approve", itemId: b.itemId, version: 1 });
   });
+  it.each(["February 31", "February 29, 2100", "Friday 12 January 2028"])("rejects confirmed but invalid calendar copy %s without retry or customer charge", async caption => {
+    const { scope, itemId } = await setup();
+    await db.business.update({ where: { id: scope.businessId }, data: { proof: caption } });
+    const q = await quote(scope, itemId);
+    await actOnProduction(scope, { action: "accept", quoteId: q.id });
+    const call = vi.fn(async () => ({ ...await fixtureReasoner(), text: JSON.stringify({ ...creative, caption }) }));
+    await runOneJob(call); await runOneJob(call);
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(await db.job.findFirstOrThrow({ where: { businessId: scope.businessId } })).toMatchObject({ status: "FAILED", errorCode: "QUALITY_CHECK_FAILED",
+      result: { creditsConsumed: 0, supplierCostMicros: 1000, quality: { version: QUALITY_VERSION, eligible: false,
+        defects: expect.arrayContaining([expect.objectContaining({ code: "INVALID_CALENDAR_DATE" })]) } } });
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } })).toMatchObject({ available: 500, held: 0 });
+    expect(await db.creativeRevision.count({ where: { itemId } })).toBe(0);
+    await db.creativeRevision.create({ data: { itemId, organizationId: scope.organizationId, version: 1, status: "READY", content: { ...creative, caption } } });
+    await expect(actOnProduction(scope, { action: "approve", itemId, version: 1 })).rejects.toThrow("unconfirmed");
+    await expect(actOnProduction(scope, { action: "edit", itemId, version: 1, headline: creative.headline, caption, cta: creative.cta })).rejects.toThrow("unconfirmed");
+  });
   it("checks brand freshness before submission and releases a stale queued job", async () => {
     const { scope, itemId } = await setup(); const q = await quote(scope, itemId);
     await actOnProduction(scope, { action: "accept", quoteId: q.id });
