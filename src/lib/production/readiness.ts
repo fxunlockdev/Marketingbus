@@ -8,7 +8,7 @@ import { motionConfigurationHash } from "../video/limits";
 import { motionRendererAvailable } from "../video/render";
 import { shotConfigurationHash, shotRates, configuredShotAdapters } from "../video/generation-contracts";
 
-export const WORKER_RUNTIME = "studio-v63-copy-lease-fence";
+export const WORKER_RUNTIME = "studio-v64-supplier-exposure";
 export const HEARTBEAT_TTL_MS = 120_000;
 export function workerConfigurationHash() {
   return createHash("sha256").update(JSON.stringify({

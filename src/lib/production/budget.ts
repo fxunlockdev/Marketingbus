@@ -8,14 +8,25 @@ export async function authorizeSupplier(tx: Prisma.TransactionClient, key: strin
   const budget = assertExecutionEnabled();
   if (!Number.isSafeInteger(ceiling) || ceiling <= 0) throw Error("Invalid supplier ceiling");
   await tx.$queryRaw`SELECT pg_advisory_xact_lock(71403218)::text`;
-  const lifetime = await tx.supplierAuthorization.aggregate({ _sum: { ceilingMicros: true } });
-  if ((lifetime._sum.ceilingMicros || 0) + ceiling > totalSupplierBudget()) throw new AppError(409, "The approved total supplier-spend budget is exhausted. An operator must authorize any increase.");
   const day = new Date(); day.setUTCHours(0, 0, 0, 0);
+  const exposure = await supplierExposure(tx, day);
+  if (exposure.lifetimeMicros + BigInt(ceiling) > BigInt(totalSupplierBudget())) throw new AppError(409, "The approved total supplier-spend budget is exhausted. An operator must authorize any increase.");
+  if (exposure.dailyMicros + BigInt(ceiling) > BigInt(budget)) throw new AppError(409, "Production has reached its safe supplier-spend limit. Try later.");
+  await tx.supplierAuthorization.create({ data: { key, ceilingMicros: ceiling } });
+}
+
+// Shared by admission and the privileged read-only report. These are retained
+// authorization ceilings, not measured expense or available customer credits.
+export async function supplierExposure(tx: Prisma.TransactionClient, day: Date) {
+  if (!Number.isFinite(day.getTime()) || day.toISOString().slice(11) !== "00:00:00.000Z") throw Error("Expected a UTC day boundary");
   // Sum the union, not the maximum of overlapping totals: an older unresolved
   // call plus a deleted customer's authorization today must both count, once.
-  const totals = await tx.$queryRaw<{ total: bigint }[]>`
-    SELECT COALESCE(SUM(s."ceilingMicros"), 0)::bigint AS total FROM "SupplierAuthorization" s
-    WHERE s."createdAt" >= ${day}
+  const rows = await tx.$queryRaw<{
+    lifetimeMicros: bigint; dailyMicros: bigint; todayMicros: bigint; carriedMicros: bigint;
+    authorizationCount: bigint; carriedCount: bigint;
+  }[]>`
+    WITH exposure AS MATERIALIZED (
+    SELECT s."ceilingMicros", s."createdAt", (s."createdAt" >= ${day}
     OR EXISTS (SELECT 1 FROM "GenerationQuote" q LEFT JOIN "Job" j ON j."quoteId" = q.id
       WHERE q.id = s.key AND (q.status IN ('ACCEPTED', 'RECONCILE')
         OR (q.status = 'COMPLETED' AND (q."acceptedAt" >= ${day} OR j."submittedAt" >= ${day}))))
@@ -29,8 +40,14 @@ export async function authorizeSupplier(tx: Prisma.TransactionClient, key: strin
       AND (v.status IN ('QUEUED', 'RUNNING', 'SUBMITTING', 'POLLING', 'INGESTING', 'NEEDS_RECONCILIATION')
         OR (v."expenseBasis" = 'ACCOUNT_QUOTE_V1' AND v."supplierCostMicros" IS NULL)
         OR v."acceptedAt" >= ${day} OR v."submittedAt" >= ${day} OR v."settledAt" >= ${day}
-        OR v."supplierReconciledAt" >= ${day}))`;
-  const reserved = Number(totals[0].total);
-  if (reserved + ceiling > budget) throw new AppError(409, "Production has reached its safe supplier-spend limit. Try later.");
-  await tx.supplierAuthorization.create({ data: { key, ceilingMicros: ceiling } });
+        OR v."supplierReconciledAt" >= ${day}))) AS daily
+    FROM "SupplierAuthorization" s)
+    SELECT COALESCE(SUM("ceilingMicros"), 0)::bigint AS "lifetimeMicros",
+      COALESCE(SUM("ceilingMicros") FILTER (WHERE daily), 0)::bigint AS "dailyMicros",
+      COALESCE(SUM("ceilingMicros") FILTER (WHERE "createdAt" >= ${day}), 0)::bigint AS "todayMicros",
+      COALESCE(SUM("ceilingMicros") FILTER (WHERE daily AND "createdAt" < ${day}), 0)::bigint AS "carriedMicros",
+      COUNT(*) AS "authorizationCount",
+      COUNT(*) FILTER (WHERE daily AND "createdAt" < ${day}) AS "carriedCount"
+    FROM exposure`;
+  return rows[0];
 }
