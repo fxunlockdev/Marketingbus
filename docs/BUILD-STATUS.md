@@ -1,5 +1,21 @@
 # Acceptance ledger — 19 October 2026
 
+## 20 October — website-to-review autofill (v73, release verification)
+
+The earlier v72 release did **not** activate its separately deployed scraper and did **not** connect brand analysis to onboarding. The reported empty review forms were therefore a real missing workflow, not a customer input error.
+
+Implemented: the three-step setup now saves one explicit, up-to-20-credit authorization at “Review my brand”, waits for website/document evidence and prepares source-backed name/offering/audience and other supported draft fields through the existing single-submit brand worker. A deterministic business/request identity prevents duplicate paid attempts across reloads and concurrent requests. Suggestions populate only empty/default fields, preserve saved facts and in-progress edits, and never confirm the profile or publish. Unsupported fields remain visibly missing. Existing incomplete setups can re-read the website and request autofill without creating another business. Uncertain provider results are not retried. A manual-entry option remains available.
+
+The 80 KB website/24 KB analysis mismatch is also fixed through deterministic bounded opening excerpts, full-source hashes and exact-citation validation. Business names now support short exact citations without weakening the ten-character evidence minimum for other fields. Source/brand changes invalidate suggestions.
+
+Hosted activation is being verified through an opt-in worker-startup preflight: actual public extraction, missing-auth rejection, private-address rejection, expired-TLS rejection and subsequent recovery. It runs before worker readiness, without database fixtures or model calls. Private scraper cold starts use bounded, harmless health-GET retries; the actual crawl is submitted only once. No public scraper endpoint or SSH key is added.
+
+Verification in progress: initial full regression passed 2,353 tests and failed eight—seven new fixtures omitted required setup-state fields, and one worker-runtime comparison raced a source edit during the run. Fixtures were corrected; a clean rerun is required. An earlier Brand accessibility browser run exhausted its 30-second whole-journey deadline; that longer journey now has a 90-second test deadline, without changing production deadlines. Deployed/live-verified status will be recorded separately after successful release checks. No paid AI/media call, real social post, email or payment has been used for this work.
+
+Local release follow-up: **113 focused unit/database checks and six browser journeys pass**, including the actual saved-consent → injected worker response → editable review → confirmed setup workflow, duplicate-request/credit safeguards, tenant/role boundaries, stale evidence, uncertain results, manual fallback, mobile width and accessibility. Production build/typechecking pass. The new credit-ceiling test needed its fixture heartbeat refreshed after changing its mock rate card; the browser's textarea selector was corrected after the snapshot proved the user's edit was preserved. Disposable databases and private-storage fixtures were removed. Full independent CI and hosted activation remain pending at this checkpoint.
+
+Rate verification for the rollout: official OpenAI pricing retrieved on 20 October still lists GPT-4.1 at $2 input/$8 output and GPT-4.1-mini at $0.40/$1.60 per million uncached tokens ([pricing](https://developers.openai.com/api/docs/pricing)). Existing model IDs and rates remain unchanged; their verification expiry can be refreshed to 19 November. This does not increase supplier budgets or authorize a paid acceptance test.
+
 ## 20 October — v72 verified application delivery
 
 Exact source `332e721854af34a14aec433080cd2bd979ded657` passed independent CI `39423702528`: **2,333 tests / 96 suites, 56 browser journeys, production build, recovery rehearsal, built web/worker quarantine checks and zero reported dependency vulnerabilities**. This replaces the preceding pending-CI verdict; the earlier local timing failures remain recorded rather than erased.

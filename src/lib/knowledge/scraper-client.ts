@@ -2,6 +2,7 @@ import { z } from "zod";
 import { validatePublicDns } from "../providers/url-policy";
 import { SourceImportError } from "./import-errors";
 import { websiteScraper, type WebsiteScraper } from "./scraper-config";
+import { wakeScraper } from "./scraper-wakeup";
 
 const resultSchema = z.object({ success: z.literal(true), data: z.object({
   markdown: z.string().trim().min(20).max(80000).refine(value => !/[\u0000\uFFFD]/.test(value)),
@@ -33,6 +34,7 @@ async function publicAddress(value: string) {
 export async function readWebsite(base: URL, input: string, headers: Record<string, string>, transport: typeof fetch = fetch, provider: WebsiteScraper = websiteScraper()) {
   const url = await publicAddress(input);
   try {
+    if (provider === "crawl4ai" && process.env.CRAWL4AI_WAKE_BEFORE_READ === "true") await wakeScraper(base, transport);
     // Never send model keys, extraction/branding requests, crawl actions or paid proxy fallbacks.
     const response = await transport(new URL(provider === "crawl4ai" ? "crawl" : "v2/scrape", base), {
       method: "POST", headers, redirect: "error", signal: AbortSignal.timeout(45000),

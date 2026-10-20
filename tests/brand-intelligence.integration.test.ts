@@ -11,6 +11,8 @@ import { replaceBrandProfile } from "../src/lib/knowledge/profile";
 import { lockBusiness } from "../src/lib/production/service";
 import * as productionService from "../src/lib/production/service";
 import type { BrandAnalysis, Prisma } from "@prisma/client";
+import { createHash } from "node:crypto";
+import { prepareSetupAutofill, readSetupAutofill } from "../src/lib/onboarding/autofill";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (process.env.TEST_DATABASE_URL && (process.env.DATABASE_URL !== process.env.TEST_DATABASE_URL || !["localhost", "127.0.0.1"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Local test DB required");
 suite("evidence-grounded brand intelligence", () => {
@@ -48,6 +50,135 @@ suite("evidence-grounded brand intelligence", () => {
   async function accepted(f: Awaited<ReturnType<typeof setup>>) {
     const id = await quote(f); await manageBrandAnalysis(f.scope, { action: "accept", analysisId: id }); return id;
   }
+  async function longSource(f: Awaited<ReturnType<typeof setup>>) {
+    const body = text + "\n" + "More synthetic website details. ".repeat(2000);
+    const sha256 = createHash("sha256").update(body).digest("hex");
+    await db.knowledgeSource.update({ where: { id: f.source.id }, data: { body, sha256 } });
+    f.source.body = body; f.source.sha256 = sha256;
+    for (const s of f.suggestions) for (const c of s.citations) c.sha256 = sha256;
+  }
+  async function setupAutofill(f: Awaited<ReturnType<typeof setup>>) {
+    await db.business.update({ where: { id: f.scope.businessId }, data: {
+      setupStep: 2, setupKey: crypto.randomUUID(), setupRevision: 1, confirmedAt: null, website: "https://example.com/", offering: "", audience: "",
+      setupDetails: { brandBook: "skip", socialProfiles: [], autofill: { requestId: crypto.randomUUID(), maxCredits: 20 } },
+    } });
+  }
+  it("prepares setup once across concurrent requests and reloads without confirming or overwriting the brand", async () => {
+    const f = await setup(); await setupAutofill(f);
+    await Promise.all([prepareSetupAutofill(f.scope), prepareSetupAutofill(f.scope)]);
+    expect(await db.brandAnalysis.count({ where: { businessId: f.scope.businessId } })).toBe(1);
+    expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(1);
+    await runOneBrandAnalysis(f.reasoner);
+    expect(await prepareSetupAutofill(f.scope)).toMatchObject({ status: "READY", suggestions: f.suggestions });
+    expect(await readSetupAutofill(f.scope)).toMatchObject({ status: "READY" });
+    expect(await db.business.findUniqueOrThrow({ where: { id: f.scope.businessId } })).toMatchObject({ offering: "", audience: "", confirmedAt: null, version: 1 });
+    await runOneBrandAnalysis(f.reasoner); expect(f.reasoner).toHaveBeenCalledTimes(1);
+  });
+  it("does not prepare without saved consent or for another tenant or viewer", async () => {
+    const f = await setup(), other = await setup();
+    await expect(prepareSetupAutofill(f.scope)).rejects.toThrow("Review my brand");
+    await setupAutofill(f);
+    await expect(prepareSetupAutofill({ ...f.scope, actorId: other.scope.actorId })).rejects.toThrow("not found");
+    await db.membership.update({ where: { organizationId_userId: { organizationId: f.scope.organizationId, userId: f.scope.actorId } }, data: { role: "VIEWER" } });
+    await expect(prepareSetupAutofill(f.scope)).rejects.toThrow("editing access");
+    expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(0);
+  });
+  it("waits for a website, explains a failed import and never fabricates a result", async () => {
+    const f = await setup(); await setupAutofill(f);
+    await db.knowledgeSource.update({ where: { id: f.source.id }, data: { sourceUrl: "https://example.com/", status: "QUEUED" } });
+    expect(await prepareSetupAutofill(f.scope)).toMatchObject({ status: "WAITING", suggestions: [] });
+    await db.knowledgeSource.update({ where: { id: f.source.id }, data: { status: "FAILED" } });
+    expect(await prepareSetupAutofill(f.scope)).toMatchObject({ status: "IMPORT_REQUIRED", suggestions: [] });
+    expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(0);
+  });
+  it("will not exceed the setup credit consent or hold credits after a failed transaction", async () => {
+    const f = await setup(); await setupAutofill(f);
+    vi.stubEnv("REASONING_RATE_CARD_JSON", JSON.stringify([{ provider: "openai", model: "FIXTURE", lane: "creative", inputUsdPerMillion: 100, outputUsdPerMillion: 100, verifiedUntil: "2099-01-01T00:00:00Z" }]));
+    await heartbeat(workerId);
+    await expect(prepareSetupAutofill(f.scope)).rejects.toThrow("agreed credits");
+    expect(await db.brandAnalysis.count({ where: { businessId: f.scope.businessId } })).toBe(0);
+    expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(0);
+  });
+  it.each(["source", "profile"] as const)("does not return stale setup results after %s changes", async changed => {
+    const f = await setup(); await setupAutofill(f);
+    await prepareSetupAutofill(f.scope); await runOneBrandAnalysis(f.reasoner);
+    if (changed === "source") await db.knowledgeSource.update({ where: { id: f.source.id }, data: { body: "Changed source text without its hash." } });
+    else await db.business.update({ where: { id: f.scope.businessId }, data: { version: { increment: 1 } } });
+    expect(await readSetupAutofill(f.scope)).toEqual({ status: "STALE", suggestions: [] });
+    await prepareSetupAutofill(f.scope);
+    expect(await db.brandAnalysis.count({ where: { businessId: f.scope.businessId } })).toBe(1);
+  });
+  it("does not retry ambiguous paid setup requests", async () => {
+    const f = await setup(); await setupAutofill(f);
+    await prepareSetupAutofill(f.scope);
+    const reasoner = vi.fn(async () => { throw Error("uncertain"); });
+    await runOneBrandAnalysis(reasoner);
+    expect(await prepareSetupAutofill(f.scope)).toMatchObject({ status: "NEEDS_RECONCILIATION" });
+    await runOneBrandAnalysis(reasoner); expect(reasoner).toHaveBeenCalledTimes(1);
+  });
+  it("analyzes a large imported page within the existing allowance and applies only reviewed excerpts", async () => {
+    const f = await setup(); await longSource(f);
+    const id = await accepted(f);
+    const provider = vi.fn(async (_provider, request) => {
+      const evidence = JSON.parse(request.input).untrustedSources;
+      expect(evidence).toHaveLength(1);
+      expect(evidence[0]).toMatchObject({ id: f.source.id, sha256: f.source.sha256 });
+      expect(Buffer.byteLength(evidence[0].body)).toBe(24000);
+      expect(f.source.body.startsWith(evidence[0].body)).toBe(true);
+      return f.reasoner();
+    });
+    await runOneBrandAnalysis(provider);
+    expect(provider).toHaveBeenCalledTimes(1);
+    expect(await db.business.findUniqueOrThrow({ where: { id: f.scope.businessId } })).toMatchObject({ offering: "Design consultations", version: 1 });
+    await manageBrandAnalysis(f.scope, { action: "apply", analysisId: id, fields: ["offering"], version: 1 });
+    expect(await db.business.findUniqueOrThrow({ where: { id: f.scope.businessId } })).toMatchObject({ offering: f.suggestions[0].value, confirmedAt: null, version: 2 });
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } })).toMatchObject({ available: 999, held: 0 });
+  });
+  it("does not deliver a citation from text the model was not given", async () => {
+    const f = await setup(); await longSource(f);
+    const tail = "This unique claim appears only at the end of the original page.";
+    const body = f.source.body + tail, sha256 = createHash("sha256").update(body).digest("hex");
+    await db.knowledgeSource.update({ where: { id: f.source.id }, data: { body, sha256 } });
+    f.suggestions.splice(0, f.suggestions.length, { ...f.suggestions[0], value: tail, citations: [{ sourceId: f.source.id, sha256, excerpt: tail }] });
+    const id = await accepted(f);
+    await runOneBrandAnalysis(f.reasoner);
+    expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "FAILED", errorCode: "GROUNDING_CHECK_FAILED", supplierCostMicros: 1000 });
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } })).toMatchObject({ available: 1000, held: 0 });
+  });
+  it.each(["accept", "submit", "delivery", "apply"] as const)("rejects a changed unread source tail at %s", async boundary => {
+    const f = await setup(); await longSource(f);
+    const id = await quote(f);
+    const changeTail = () => db.knowledgeSource.update({ where: { id: f.source.id }, data: { body: f.source.body + " Changed tail." } });
+    if (boundary === "accept") {
+      await changeTail();
+      await expect(manageBrandAnalysis(f.scope, { action: "accept", analysisId: id })).rejects.toThrow("source evidence changed");
+      expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(0);
+      return;
+    }
+    await manageBrandAnalysis(f.scope, { action: "accept", analysisId: id });
+    if (boundary === "submit") await changeTail();
+    await runOneBrandAnalysis(async () => {
+      if (boundary === "delivery") await changeTail();
+      return f.reasoner();
+    });
+    if (boundary === "submit") {
+      expect(f.reasoner).not.toHaveBeenCalled();
+      expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "FAILED", errorCode: "PREFLIGHT_FAILED" });
+    } else if (boundary === "delivery") {
+      expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "STALE", suggestions: null, supplierCostMicros: 1000 });
+    } else {
+      await changeTail();
+      await expect(manageBrandAnalysis(f.scope, { action: "apply", analysisId: id, fields: ["offering"], version: 1 })).rejects.toThrow("source evidence changed");
+      expect(await db.business.findUniqueOrThrow({ where: { id: f.scope.businessId } })).toMatchObject({ offering: "Design consultations", version: 1 });
+    }
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } })).toMatchObject({ available: boundary === "apply" ? 999 : 1000, held: 0 });
+  });
+  it("refuses corrupted full-source evidence even before quoting", async () => {
+    const f = await setup(); await longSource(f);
+    await db.knowledgeSource.update({ where: { id: f.source.id }, data: { body: f.source.body + " Changed tail." } });
+    await expect(quote(f)).rejects.toThrow("source evidence changed");
+    expect(await db.brandAnalysis.count({ where: { businessId: f.scope.businessId } })).toBe(0);
+  });
   it("quotes without spending, accepts concurrently once and applies selected changes without confirming", async () => {
     const f = await setup(), id = await quote(f);
     expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(0);

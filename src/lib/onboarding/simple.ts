@@ -11,6 +11,7 @@ export const setupDetails = z.object({
     url: z.string().trim().max(500),
   }).strict()).max(3).default([]),
   brandBook: z.enum(["undecided", "upload", "create", "skip"]).default("undecided"),
+  autofill: z.object({ requestId: z.uuid(), maxCredits: z.literal(20) }).strict().optional(),
 }).strict();
 export type SetupDetails = z.infer<typeof setupDetails>;
 

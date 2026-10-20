@@ -27,6 +27,7 @@ import { expireSocialAccountData } from "../src/lib/social/account-data-service"
 import { expireOneSocialConnection } from "../src/lib/social/access-lifecycle";
 import { runOnePublication, runOneMetricSync, recoverSocialLeases, runOneReconciliation } from "../src/lib/social/worker";
 import { recoveryQuarantined } from "../src/lib/recovery-quarantine";
+import { verifyScraper } from "../src/lib/knowledge/scraper-preflight";
 // Deployment environment changes require a process restart. Never begin a lane
 // (including maintenance/recovery/readiness writes) in a restored quarantine.
 const quarantined = recoveryQuarantined();
@@ -119,6 +120,10 @@ async function main() {
     await new Promise<void>(resolve => server.close(() => resolve()));
     await db.$disconnect();
     return;
+  }
+  if (process.env.SCRAPER_STARTUP_VERIFY === "true") {
+    await verifyScraper();
+    console.info("Scraper acceptance passed: public read, authentication, private-address blocking, TLS validation and recovery.");
   }
   console.info("Production worker started; paid execution requires explicit server configuration.");
   await runWorkerGroups(groups, {

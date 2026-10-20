@@ -2,11 +2,12 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Suggestions } from "@/lib/knowledge/grounding";
+import { ANALYSIS_EVIDENCE_BYTES } from "@/lib/knowledge/analysis-evidence";
 type Field = Suggestions[number]["field"];
 type Analysis = { id: string; status: string; credits: number; expiresAt: string; brandVersion: number; suggestions: Suggestions; rejectedFields: string[]; appliedFields: string[]; errorCode: string | null };
 type View = { current: Record<Field, string>; version: number; canEdit: boolean; analyses: Analysis[] };
 type Source = { id: string; title: string; status: string; body: string };
-const labels: Record<Field, string> = { offering: "Offering", audience: "Audience", difference: "Differentiator", proof: "Supporting proof", tone: "Voice and tone", restrictions: "Content boundaries" };
+const labels: Record<Field, string> = { name: "Business name", offering: "Offering", audience: "Audience", difference: "Differentiator", proof: "Supporting proof", tone: "Voice and tone", restrictions: "Content boundaries" };
 const statuses: Record<string, string> = { OFFERED: "Awaiting authorization", QUEUED: "Queued", RUNNING: "Preparing", SUBMITTING: "Analyzing evidence", READY: "Ready for review", APPLIED: "Applied to draft", STALE: "Out of date", CANCELLED: "Cancelled", FAILED: "Stopped safely", NEEDS_RECONCILIATION: "Needs operator review" };
 
 export function BrandIntelligence({ businessId, sources }: { businessId: string; sources: Source[] }) {
@@ -45,12 +46,12 @@ export function BrandIntelligence({ businessId, sources }: { businessId: string;
     {!canEdit && view && <p>Read-only access. A workspace editor can authorize analysis and apply suggestions.</p>}
     <fieldset disabled={!canEdit || busy} aria-describedby={`${uid}-source-help ${uid}-error`}>
       <legend>1. Choose your evidence</legend>
-      <p id={`${uid}-source-help`} className="small muted">Select one to three imported sources, up to 24 KB combined. Getting a quote does not spend credits.</p>
+      <p id={`${uid}-source-help`} className="small muted">Choose up to three pages or documents. For longer sources, we read an opening excerpt from each. Getting a quote does not spend credits.</p>
       {!readySources.length && <p>Import a business document or website page in Business evidence below to begin.</p>}
       <div className="intelligence-sources">{readySources.map(s => <label className="checkbox-label" key={s.id}><input type="checkbox" checked={selectedIds.includes(s.id)} disabled={!selectedIds.includes(s.id) && selectedIds.length >= 3} onChange={e => setSelected(old => e.target.checked ? [...old, s.id] : old.filter(id => id !== s.id))} />{s.title}</label>)}</div>
-      <p className="small">{selectedIds.length} selected · {(selectedBytes / 1000).toFixed(1)} / 24 KB</p>
-      <button className="button secondary" type="button" disabled={!selectedIds.length || selectedBytes > 24000 || !!pending} onClick={() => act({ action: "quote", sourceIds: selectedIds }, "Quote prepared. Review the credit ceiling before authorizing analysis.")}>Get analysis quote</button>
-      {(selectedBytes > 24000 || pending) && <p className="small">{pending ? "Your current analysis is still processing." : "Choose fewer sources or import a shorter excerpt."}</p>}
+      <p className="small" role="status">{selectedIds.length} selected{selectedBytes > ANALYSIS_EVIDENCE_BYTES ? " · Opening excerpts will be used" : ""}</p>
+      <button className="button secondary" type="button" disabled={!selectedIds.length || !!pending} onClick={() => act({ action: "quote", sourceIds: selectedIds }, "Quote prepared. Review the credit ceiling before authorizing analysis.")}>Get analysis quote</button>
+      {pending && <p className="small">Your current analysis is still processing.</p>}
     </fieldset>
     <div className="panel-heading"><h3>2. Review proposed changes</h3><button className="text-button" type="button" disabled={busy} onClick={() => { setError(""); void load().catch(e => setError(e.message)); }}>Refresh suggestions</button></div>
     {view && !view.analyses.length && <p>No analysis yet. Your current brand profile stays unchanged until you apply a suggestion.</p>}

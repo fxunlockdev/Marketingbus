@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { PrismaClient } from "@prisma/client";
 import { episodeRefs, procedureEpisodes, procedureText } from "../src/lib/harness/procedure-evidence";
-test("simple setup reads an uploaded guide, saves social handles and keeps customer edits", async ({ page }) => {
+test("simple setup reads an uploaded guide, allows manual review and keeps customer edits", async ({ page }) => {
   const headers = { Origin: "http://127.0.0.1:3000" };
   expect((await page.request.post("/api/auth/register", { headers, data: { name: "Simple setup", email: `simple-${crypto.randomUUID()}@example.test`, password: "Test-only-password-2026!" } })).ok()).toBe(true);
   await page.goto("/studio");
@@ -17,9 +17,12 @@ test("simple setup reads an uploaded guide, saves social handles and keeps custo
   await expect(file).toHaveAttribute("accept", ".pdf,.docx,.pptx,.txt,.md");
   await file.setInputFiles({ name: "brand-guide.txt", mimeType: "text/plain", buffer: Buffer.from("We design thoughtful interiors for families who want comfortable, practical homes.") });
   await setup.getByLabel("I have permission to use these files and public profiles.").check();
+  await setup.getByLabel("Fill in my details from my website and brand book.").uncheck();
   expect((await new AxeBuilder({ page }).include("main").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
   await setup.getByRole("button", { name: "Review my brand", exact: true }).click();
-  await expect(setup.getByLabel("What do you do?")).toHaveValue("We design thoughtful interiors for families who want comfortable, practical homes.");
+  await expect(setup.getByLabel("What do you do?")).toHaveValue("");
+  await setup.getByText("View what we found", { exact: true }).click();
+  await expect(setup.getByText("We design thoughtful interiors for families who want comfortable, practical homes.", { exact: true })).toBeVisible();
   await setup.getByLabel("What do you do?").fill("Our own corrected business description.");
   await setup.getByRole("button", { name: "Back", exact: true }).click();
   await expect(setup.getByLabel("Instagram", { exact: true })).toHaveValue("https://www.instagram.com/sample.studio");

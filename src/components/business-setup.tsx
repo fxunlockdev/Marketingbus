@@ -3,12 +3,13 @@ import { useEffect, useId, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Check } from "lucide-react";
 import { brandInput, type BrandInput } from "@/lib/brand";
 import { contentPreferences } from "@/lib/onboarding/preferences";
-import { setupDetails, socialAddress, websiteAddress, websiteExcerpt, type SetupDetails } from "@/lib/onboarding/simple";
+import { setupDetails, socialAddress, websiteAddress, type SetupDetails } from "@/lib/onboarding/simple";
+import type { Suggestions } from "@/lib/knowledge/grounding";
 import { BrandBookDownload } from "./brand-book-download";
 
 const empty: BrandInput = { name: "", website: "", industry: "", offering: "", audience: "", goal: "Help more people discover our business", difference: "", proof: "", tone: "Clear and conversational", restrictions: "", color: "#c67139", designPreset: "editorial", channels: ["Instagram", "LinkedIn"], contentPreferences: contentPreferences.parse({}) };
 type Setup = { profile: BrandInput; details: SetupDetails; step: number; revision: number; version: number; canEdit: boolean };
-type Source = { id: string; title: string; sourceUrl: string; body: string; status: string };
+type Source = { id: string; title: string; sourceUrl: string; body: string; status: string; failureMessage?: string };
 const steps = ["Your website", "Your brand", "Quick review"];
 export function BusinessSetup({ businessId, workspaces, onComplete, onChange }: {
   businessId?: string; workspaces: { id: string; name: string }[]; onComplete: (id: string) => void; onChange: () => void;
@@ -20,6 +21,8 @@ export function BusinessSetup({ businessId, workspaces, onComplete, onChange }: 
   const [busy, setBusy] = useState(!!businessId), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const [rights, setRights] = useState(false), [confirmed, setConfirmed] = useState(false), [file, setFile] = useState<File | null>(null);
   const [sources, setSources] = useState<Source[]>([]), [sourceError, setSourceError] = useState("");
+  const [autoFill, setAutoFill] = useState(true), [fillStatus, setFillStatus] = useState(""), [fillError, setFillError] = useState("");
+  const [filled, setFilled] = useState<Suggestions>([]), [refreshKey, setRefreshKey] = useState(0);
   const edited = useRef(new Set<string>());
   async function load(target: string, signal?: AbortSignal) {
     const response = await fetch(`/api/businesses/${target}/onboarding`, { signal }); const data = await response.json();
@@ -50,14 +53,48 @@ export function BusinessSetup({ businessId, workspaces, onComplete, onChange }: 
       } catch { if (!controller.signal.aborted) setSourceError("We couldn’t check your import. Your saved details are safe."); }
     }
     void refresh(); return () => { controller.abort(); clearTimeout(timer); };
-  }, [id, step, notice]);
+  }, [id, step, notice, refreshKey]);
   useEffect(() => {
-    const source = sources.find(s => s.sourceUrl === profile.website && s.status === "PROPOSED")
-      ?? sources.find(s => !s.sourceUrl && s.status === "PROPOSED");
-    if (!source || step !== 2) return;
-    const excerpt = websiteExcerpt(source.body);
-    if (excerpt && !profile.offering && !edited.current.has("offering")) { setProfile(old => ({ ...old, offering: excerpt })); setConfirmed(false); }
-  }, [sources, profile.website, profile.offering, step]);
+    if (!id || step !== 2 || !saved?.canEdit || !details.autofill) return;
+    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout>, checks = 0;
+    setFillError(""); setFillStatus("WAITING");
+    async function refresh(prepare = false) {
+      try {
+        const response = await fetch(`/api/businesses/${id}/onboarding/autofill`, {
+          method: prepare ? "POST" : "GET", signal: controller.signal,
+          ...(prepare ? { headers: { "Content-Type": "application/json" }, body: "{}" } : {}),
+        });
+        const data = await response.json();
+        if (!response.ok) throw Error(data.error || "We couldn’t prepare your details. Please try again.");
+        if (controller.signal.aborted) return;
+        setFillStatus(data.status);
+        if (data.status === "READY") {
+          const suggestions = data.suggestions as Suggestions;
+          setFilled(suggestions);
+          setProfile(old => {
+            const next = { ...old };
+            for (const item of suggestions) {
+              // Existing saved facts and in-progress edits win over late results.
+              const isDefault = item.field === "name" ? old.name === new URL(old.website).hostname.replace(/^www\./, "")
+                : item.field === "tone" ? old.tone === empty.tone : !old[item.field];
+              if (!edited.current.has(item.field) && isDefault) next[item.field] = item.value;
+            }
+            return next;
+          });
+          setConfirmed(false);
+        } else if (["WAITING", "QUEUED", "RUNNING", "SUBMITTING"].includes(data.status)) {
+          if (++checks < 60) timer = setTimeout(() => void refresh(data.status === "WAITING"), 4000);
+          else setFillError("This is taking longer than usual. Your request is saved; reopen this page to check it.");
+        } else if (data.status === "NEEDS_RECONCILIATION") {
+          setFillError("We’re checking this request before trying again, so you won’t be charged twice. You can still edit your details.");
+        } else if (["FAILED", "STALE", "CANCELLED"].includes(data.status)) {
+          setFillError("We couldn’t finish preparing these details. Your edits are safe. You can try again or fill in what’s missing.");
+        }
+      } catch (e) { if (!controller.signal.aborted) setFillError(e instanceof Error ? e.message : "We couldn’t prepare your details."); }
+    }
+    void refresh(true);
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [id, step, details.autofill?.requestId, saved?.canEdit, saved?.version, refreshKey]);
   const set = (key: keyof BrandInput, value: unknown) => { edited.current.add(key); setProfile(old => ({ ...old, [key]: value })); setConfirmed(false); };
   function field(key: "name" | "website" | "offering" | "audience" | "tone", label: string, hint: string, required = true, area = false) {
     const props = { id: `${uid}-${key}`, value: profile[key], required, maxLength: { name: 100, website: 500, offering: 2500, audience: 1500, tone: 300 }[key], placeholder: hint,
@@ -72,9 +109,26 @@ export function BusinessSetup({ businessId, workspaces, onComplete, onChange }: 
     let failed = false;
     for (const url of urls) {
       try { await request(`/api/businesses/${target}/sources`, { action: "website", url, rightsConfirmed: true }); }
-      catch { failed = true; }
+      catch (e) { failed = true; setSourceError(e instanceof Error ? e.message : "We couldn’t read this page."); }
     }
     setNotice(failed ? "Some pages couldn’t be read. You can continue and check your details yourself." : "Your pages are being read. You can keep going.");
+    setRefreshKey(key => key + 1);
+  }
+  async function retryWebsite() {
+    if (!id) return;
+    setBusy(true); setError("");
+    try { await scan(id, [profile.website]); }
+    finally { setBusy(false); }
+  }
+  async function prepareAgain() {
+    if (!id || !saved) return;
+    setBusy(true); setError("");
+    try {
+      const next = { ...details, autofill: { requestId: crypto.randomUUID(), maxCredits: 20 as const } };
+      await request(`/api/businesses/${id}/onboarding`, { action: "simple-save", revision: saved.revision, version: saved.version, step: 2, profile, details: next });
+      await load(id); onChange();
+    } catch (e) { setError(e instanceof Error ? e.message : "Please try again."); }
+    finally { setBusy(false); }
   }
   async function advance() {
     setBusy(true); setError("");
@@ -104,7 +158,8 @@ export function BusinessSetup({ businessId, workspaces, onComplete, onChange }: 
           const response = await fetch(`/api/businesses/${id}/sources/upload`, { method: "POST", headers: { "Content-Type": "application/octet-stream", "x-document-name": file.name.replace(/[^\x20-\x7e]/g, "_"), "x-content-rights": rights ? "confirmed" : "" }, body: file });
           const result = await response.json(); if (!response.ok) throw Error(result.error || "We couldn’t read this file.");
         }
-        await request(`/api/businesses/${id}/onboarding`, { action: "simple-save", revision: saved.revision, version: saved.version, step: 2, profile, details: normalized });
+        const nextDetails = { ...normalized, autofill: autoFill ? normalized.autofill ?? { requestId: crypto.randomUUID(), maxCredits: 20 as const } : undefined };
+        await request(`/api/businesses/${id}/onboarding`, { action: "simple-save", revision: saved.revision, version: saved.version, step: 2, profile, details: nextDetails });
         setFile(null); await load(id); onChange();
         if (normalized.socialProfiles.length) await scan(id, normalized.socialProfiles.map(s => s.url));
         return;
@@ -121,9 +176,10 @@ export function BusinessSetup({ businessId, workspaces, onComplete, onChange }: 
   const canEdit = !id || !!saved?.canEdit;
   const ready = sources.filter(s => s.status === "PROPOSED");
   const pending = sources.some(s => ["QUEUED", "FETCHING"].includes(s.status));
+  const preparing = ["WAITING", "QUEUED", "RUNNING", "SUBMITTING"].includes(fillStatus) && !fillError;
   return <section className="setup-flow simple-setup" aria-busy={busy} aria-label="Guided business setup">
     <nav aria-label="Setup progress"><ol className="setup-progress">{steps.map((name, index) => <li key={name} aria-current={index === step ? "step" : undefined}><span>{index < step ? <Check size={13} aria-hidden="true" /> : index + 1}</span>{name}</li>)}</ol></nav>
-    <div className="setup-heading"><h1 ref={heading} tabIndex={-1}>{["Let’s start with your website.", "A little more about your brand.", "Does this sound like you?"][step]}</h1><p>{["We’ll look at your website to help get your brand ready.", "Add what you have. We’ll help with the rest.", pending ? "We’re still reading your website. You can check or edit your details while we work." : ready.length ? "Check your details and change anything that doesn’t sound right." : "We couldn’t read your website yet. You can add your details here."][step]}</p></div>
+    <div className="setup-heading"><h1 ref={heading} tabIndex={-1}>{["Let’s start with your website.", "A little more about your brand.", "Does this sound like you?"][step]}</h1><p>{["We’ll look at your website to help get your brand ready.", "Add what you have. We’ll help with the rest.", preparing || pending ? "We’re preparing your details. You can edit anything while we work." : filled.length ? "We’ve filled in what we found. Check it and change anything you like." : "Check your details below. You can read your website again if anything is missing."][step]}</p></div>
     <p id={`${uid}-error`} role={error ? "alert" : undefined} className="error">{error}</p>
     {id && !saved ? <p role="status">{busy ? "Loading your details…" : "We couldn’t load your details. Please refresh this page."}</p> : <form className="form-card setup-card" onSubmit={e => { e.preventDefault(); void advance(); }}>
       <fieldset disabled={busy || !canEdit} className="setup-fields">
@@ -143,8 +199,17 @@ export function BusinessSetup({ businessId, workspaces, onComplete, onChange }: 
           {details.brandBook === "upload" && <><label>Drop your brand book here, or choose a file<input type="file" accept=".pdf,.docx,.pptx,.txt,.md" onChange={e => setFile(e.target.files?.[0] ?? null)} aria-describedby={`${uid}-file-help ${uid}-error`} /></label><p id={`${uid}-file-help`} className="small muted">PDF, Word, PowerPoint or text · up to 5 MB. Text is read; logos and images aren’t imported. You can also add it later.</p></>}
           {details.brandBook === "create" && <p className="small muted">We’ll make a simple starter guide from the details you review next. You can change it later.</p>}
           {(file && details.brandBook === "upload" || details.socialProfiles.some(s => s.url.trim())) && <label className="checkbox-label"><input type="checkbox" required checked={rights} onChange={e => setRights(e.target.checked)} />I have permission to use these files and public profiles.</label>}
+          <label className="checkbox-label"><input type="checkbox" checked={autoFill} onChange={e => setAutoFill(e.target.checked)} />Fill in my details from my website and brand book.</label>
+          {autoFill && <p className="small muted">Review my brand uses up to 20 credits. You’ll check the details before saving.</p>}
         </>}
         {step === 2 && <>
+          <div role="status">
+            {preparing && <p>Preparing your details…</p>}
+            {fillError && <p>{fillError}</p>}
+            {fillStatus === "READY" && !filled.some(s => s.field === "audience") && <p>We couldn’t find who your customers are. Please add that below.</p>}
+            {fillStatus === "READY" && !filled.some(s => s.field === "offering") && <p>We couldn’t find a clear description of your services. Please add one below.</p>}
+          </div>
+          {!preparing && !["NEEDS_RECONCILIATION", "READY"].includes(fillStatus) && ready.length > 0 && <button type="button" className="button secondary" onClick={() => void prepareAgain()}>Fill in my details · up to 20 credits</button>}
           {field("name", "Business name", "Your business")}
           {field("offering", "What do you do?", "A short description of your products or services.", true, true)}
           {field("audience", "Who is it for?", "For example, local families or small business owners.")}
@@ -157,8 +222,9 @@ export function BusinessSetup({ businessId, workspaces, onComplete, onChange }: 
           {details.brandBook === "create" && brandInput.safeParse(profile).success && <div><BrandBookDownload profile={profile} draft /><p className="small muted">A starter guide using these details and your brand colour. Open it in a browser to save as PDF.</p></div>}
           <label className="checkbox-label"><input type="checkbox" required checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />These details are correct.</label>
         </>}
-        {step > 0 && <div className="setup-import-status" role="status"><p>{sourceError || (pending ? "Reading your pages…" : ready.length ? `${ready.length} ${ready.length === 1 ? "source" : "sources"} ready.` : notice || "No website text is available yet. You can still add your details.")}</p>{notice && ready.length > 0 && <p>{notice}</p>}
-          {!!sources.length && <details><summary>View what we found</summary>{sources.map(s => <div key={s.id}><strong>{s.title}</strong><p>{s.status === "PROPOSED" ? s.body.slice(0, 3000) : s.status === "FAILED" ? "This page couldn’t be read. You can add the details yourself." : "Reading…"}</p></div>)}</details>}
+        {step > 0 && <div className="setup-import-status"><p role="status">{sourceError || (pending ? "Reading your pages…" : ready.length ? "Your website or documents are ready." : notice || "Your website hasn’t been read yet.")}</p>
+          {!pending && !sources.some(s => s.sourceUrl === profile.website && s.status === "PROPOSED") && <button type="button" className="button secondary" onClick={() => void retryWebsite()}>Read my website again</button>}
+          {!!sources.length && <details><summary>View what we found</summary>{sources.map(s => <div key={s.id}><strong>{s.title}</strong><p>{s.status === "PROPOSED" ? s.body.slice(0, 3000) : s.status === "FAILED" ? s.failureMessage || "This page couldn’t be read. Try reading your website again." : "Reading…"}</p></div>)}</details>}
         </div>}
         {!canEdit && <p>Ask a workspace admin to finish these details.</p>}
         <div className="form-actions">{step > 0 ? <button type="button" className="button secondary" onClick={() => { setStep(step - 1); setConfirmed(false); }}><ArrowLeft size={16} aria-hidden="true" />Back</button> : <span />}<button className="button dark" disabled={busy || !canEdit || !organizationId}>{busy ? "Saving…" : step === 0 ? "Continue" : step === 1 ? "Review my brand" : "Finish setup"}<ArrowRight size={16} aria-hidden="true" /></button></div>
