@@ -42,4 +42,19 @@ describe("brand proposal grounding", () => {
     const prompt = JSON.parse(analysisPrompt({ name: "Fixture", secret: "DO-NOT-SEND" }, sources));
     expect(prompt.untrustedSources).toEqual(sources); expect(JSON.stringify(prompt)).not.toContain("DO-NOT-SEND");
   });
+  it("allows useful paraphrased offerings and explicitly suggested customers with real citations", () => {
+    const offering = { ...fact, kind: "SUMMARY_DRAFT", value: "Design advice to help people plan their homes." };
+    const audience = { ...fact, field: "audience", kind: "INFERRED_AUDIENCE", value: "People seeking guidance on a home design project." };
+    expect(validateSuggestions({ suggestions: [offering, audience] }, sources)).toEqual([offering, audience]);
+    for (const item of [offering, audience])
+      expect(() => validateSuggestions({ suggestions: [{ ...item, citations: [{ ...item.citations[0], sha256: "0".repeat(64) }] }] }, sources)).toThrow("Citation");
+  });
+  it("does not let draft summaries bypass proof, names, tone or numerical-claim checks", () => {
+    for (const field of ["proof", "name", "restrictions", "tone", "audience"])
+      expect(() => validateSuggestions({ suggestions: [{ ...fact, field, kind: "SUMMARY_DRAFT" }] }, sources)).toThrow();
+    for (const field of ["offering", "name", "proof"])
+      expect(() => validateSuggestions({ suggestions: [{ ...fact, field, kind: "INFERRED_AUDIENCE" }] }, sources)).toThrow();
+    for (const value of ["Serving 50 countries", "Guaranteed outcomes", "Certified specialists", "Award-winning design", "users"])
+      expect(() => validateSuggestions({ suggestions: [{ ...fact, kind: "SUMMARY_DRAFT", value }] }, sources)).toThrow();
+  });
 });

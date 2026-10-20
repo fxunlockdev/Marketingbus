@@ -22,7 +22,7 @@ const actions = z.discriminatedUnion("action", [
   z.object({ action: z.literal("apply"), analysisId: z.string().min(1), fields: z.array(suggestionField).min(1).max(7), version: z.number().int().positive() }).strict(),
 ]);
 export function analysisConfigurationHash() {
-  return createHash("sha256").update(JSON.stringify({ rates: configurationHash(), system: analysisSystem, schema: suggestionsJsonSchema, promptVersion: "brand-evidence-v3-field-validation", evidenceVersion: ANALYSIS_EVIDENCE_VERSION })).digest("hex");
+  return createHash("sha256").update(JSON.stringify({ rates: configurationHash(), system: analysisSystem, schema: suggestionsJsonSchema, promptVersion: "brand-evidence-v4-profile-drafts", evidenceVersion: ANALYSIS_EVIDENCE_VERSION })).digest("hex");
 }
 export async function assertBrandEditor(tx: Prisma.TransactionClient, scope: Scope) {
   const members = await tx.$queryRaw<{ role: string }[]>`SELECT role FROM "Membership" WHERE "organizationId"=${scope.organizationId} AND "userId"=${scope.actorId} FOR SHARE`;

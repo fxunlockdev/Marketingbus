@@ -1,5 +1,13 @@
 # Acceptance ledger — 19 October 2026
 
+## 20 October — live verification exposed an over-restrictive profile contract
+
+The v74 live retry (`09f911a9ba3b09a65b025bb2ca2db3a8f95570e52e890749a2e93aa4aec23947`) completed READY but returned only a difference and tone. The actual Lodha review still lacked offering/audience and retained the domain name. This is **not successful onboarding acceptance**. The exact-quotation-only prompt prevented the intended useful business summary and disallowed proposing an audience when it was implicit. Both live attempts were quoted at seven credits each, conservatively bounding combined supplier authorization at US$0.14 of the retained US$0.50 total limit; that is not a report of measured spend.
+
+Source changes now support separately classified, cited `SUMMARY_DRAFT` descriptions/differentiators and `INFERRED_AUDIENCE` proposals. Name, proof and restrictions still require exact quotations. Source identity/hash/excerpt validation, tenant/role checks, human confirmation, edit preservation and budget accounting remain. Numerical additions and a bounded set of high-risk claim phrases are withheld; these checks do **not** establish semantic truth. Draft summaries/audiences are visibly labelled for review. An incomplete READY result offers an explicit new bounded request, never an automatic paid retry. Runtime: `studio-v75-business-profile-drafts`. Live acceptance of these changes is still pending.
+
+Earlier commits `008227a` and `0541065` passed independent full CI runs `39444083329` and `39445054190`. v74 web `75c48acb-6cb9-456b-b992-38d4cf84ffec` and worker `3ae2dfd5-e90b-4844-aeb2-566bce39a3fe` were observed SUCCESS. The starter-book update adds practical messaging, voice, channel and visual guidance, explicitly distinguishing proposed guidance from business facts; its actual populated live download still requires inspection.
+
 ## 20 October — authenticated Lodha failure reproduced; field validation fix
 
 The owner signed into the live application and authorized a Lodha analysis. The actual customer flow accepted `www.lodhagroup.com`, imported the website's business text and submitted analysis `ad1407ce6364bbedfced7552e2095d7486bc81fad7791a3614b0fa4c893084a3`. The saved result is **FAILED / GROUNDING_CHECK_FAILED**, not a scraper failure. Its seven-credit quote bounded supplier authorization at US$0.07; the customer hold was released. Actual supplier expense is not exposed in the customer read endpoint. No details were delivered or confirmed. The original rejected model response was not retained, so the precise failing field cannot be reconstructed.

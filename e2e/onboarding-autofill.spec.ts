@@ -27,8 +27,9 @@ test("website setup fills the review fields, preserves a late edit and finishes 
     expect(business.website).toBe("https://www.example.com/");
     const scope = { businessId: business.id, organizationId, actorId: user.id };
     // Synthetic imported evidence; no public website or production data is used.
-    const name = "Fieldwork Studio", offering = "We design thoughtful homes around the people who live in them.", audience = "Homeowners planning a renovation.";
-    const body = `${name}\n${offering}\n${audience}`;
+    const name = "Fieldwork Studio", offering = "Home design with a focus on everyday life.", audience = "People planning changes to their homes.";
+    const description = "We design thoughtful homes around the people who live in them.";
+    const body = `${name}\n${description}`;
     const source = await db.knowledgeSource.create({ data: { businessId: business.id, organizationId, createdBy: user.id, kind: "WEBSITE", title: name, sourceUrl: business.website, body, sha256: createHash("sha256").update(body).digest("hex"), status: "PROPOSED", retrievedAt: new Date() } });
     await setup.getByLabel("Not now", { exact: true }).check();
     await expect(setup.getByText("Review my brand uses up to 20 credits. You’ll check the details before saving.")).toBeVisible();
@@ -48,11 +49,12 @@ test("website setup fills the review fields, preserves a late edit and finishes 
     await runOneBrandAnalysis(async () => ({
       id: "fixture-autofill-result", usage: { input_tokens: 100, output_tokens: 100 },
       text: JSON.stringify({ suggestions: Object.entries({ name, offering, audience }).map(([field, value]) => ({
-        field, value, kind: "EXACT_EXCERPT", reason: "Found directly in the website text.", citations: [{ sourceId: source.id, sha256: source.sha256, excerpt: value }],
+        field, value, kind: field === "name" ? "EXACT_EXCERPT" : field === "offering" ? "SUMMARY_DRAFT" : "INFERRED_AUDIENCE", reason: "Drafted from the website description for owner review.", citations: [{ sourceId: source.id, sha256: source.sha256, excerpt: field === "name" ? name : description }],
       })) }),
     }));
     await expect(setup.getByLabel("Business name", { exact: true })).toHaveValue(name, { timeout: 15000 });
     await expect(setup.getByLabel("Who is it for?", { exact: true })).toHaveValue(audience);
+    await expect(setup.getByText(/The suggested audience is our interpretation/)).toBeVisible();
     await expect(setup.getByRole("textbox", { name: "What do you do?", exact: true })).toHaveValue(editedOffering);
     expect(await db.business.findUniqueOrThrow({ where: { id: business.id } })).toMatchObject({ offering: "", audience: "", confirmedAt: null });
     expect((await new AxeBuilder({ page }).include(".simple-setup").analyze()).violations).toEqual([]);

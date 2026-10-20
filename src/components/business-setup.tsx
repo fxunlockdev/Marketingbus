@@ -209,10 +209,11 @@ export function BusinessSetup({ businessId, workspaces, onComplete, onChange }: 
             {fillStatus === "READY" && !filled.some(s => s.field === "audience") && <p>We couldn’t find who your customers are. Please add that below.</p>}
             {fillStatus === "READY" && !filled.some(s => s.field === "offering") && <p>We couldn’t find a clear description of your services. Please add one below.</p>}
           </div>
-          {!preparing && !["NEEDS_RECONCILIATION", "READY"].includes(fillStatus) && ready.length > 0 && <button type="button" className="button secondary" onClick={() => void prepareAgain()}>Fill in my details · up to 20 credits</button>}
+          {!preparing && fillStatus !== "NEEDS_RECONCILIATION" && (fillStatus !== "READY" || !profile.offering || !profile.audience) && ready.length > 0 && <button type="button" className="button secondary" onClick={() => void prepareAgain()}>Fill in my details · up to 20 credits</button>}
           {field("name", "Business name", "Your business")}
           {field("offering", "What do you do?", "A short description of your products or services.", true, true)}
           {field("audience", "Who is it for?", "For example, local families or small business owners.")}
+          {filled.some(s => s.kind === "SUMMARY_DRAFT" || s.kind === "INFERRED_AUDIENCE") && <p className="small muted">We’ve drafted these details from your website. The suggested audience is our interpretation—change anything that doesn’t fit.</p>}
           <label>Your main goal<select value={profile.goal} onChange={e => set("goal", e.target.value)}>{[...new Set([profile.goal, "Help more people discover our business", "Get more enquiries", "Sell more products", "Keep our customers engaged"])].map(goal => <option key={goal}>{goal}</option>)}</select></label>
           <details><summary>Colours, voice and channels <span className="muted">(optional)</span></summary><div className="setup-extras">
             {field("tone", "How should you sound?", "Clear and conversational")}

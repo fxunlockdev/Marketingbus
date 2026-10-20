@@ -83,6 +83,17 @@ suite("evidence-grounded brand intelligence", () => {
     await expect(prepareSetupAutofill(f.scope)).rejects.toThrow("editing access");
     expect(await db.reservation.count({ where: { organizationId: f.scope.organizationId } })).toBe(0);
   });
+  it("delivers interpreted business drafts through onboarding without silently confirming them", async () => {
+    const f = await setup(); await setupAutofill(f);
+    await prepareSetupAutofill(f.scope);
+    const suggestions = [
+      { ...f.suggestions[0], kind: "SUMMARY_DRAFT", value: "Architecture advice to help plan a home." },
+      { ...f.suggestions[0], field: "audience", kind: "INFERRED_AUDIENCE", value: "People planning changes to their homes.", reason: "A proposed customer segment based on the architecture consultation service." },
+    ];
+    await runOneBrandAnalysis(async () => ({ id: "fixture-draft", text: JSON.stringify({ suggestions }), usage: { input_tokens: 100, output_tokens: 100 } }));
+    expect(await readSetupAutofill(f.scope)).toMatchObject({ status: "READY", suggestions });
+    expect(await db.business.findUniqueOrThrow({ where: { id: f.scope.businessId } })).toMatchObject({ offering: "", audience: "", confirmedAt: null });
+  });
   it("waits for a website, explains a failed import and never fabricates a result", async () => {
     const f = await setup(); await setupAutofill(f);
     await db.knowledgeSource.update({ where: { id: f.source.id }, data: { sourceUrl: "https://example.com/", status: "QUEUED" } });

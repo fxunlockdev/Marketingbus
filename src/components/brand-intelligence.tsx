@@ -40,7 +40,7 @@ export function BrandIntelligence({ businessId, sources }: { businessId: string;
   return <section className="panel intelligence-panel" aria-labelledby={`${uid}-heading`} aria-busy={busy}>
     <div className="panel-heading"><div><p className="eyebrow">BRAND INTELLIGENCE</p><h2 id={`${uid}-heading`}>Evidence into direction.</h2></div><span className="tag">You stay in control</span></div>
     <p>Find useful facts and a writing voice in your business documents. Compare every suggestion with its source, then choose what belongs in your brand.</p>
-    <p className="small muted">Facts stay as exact source excerpts. Tone is an interpretation. Neither proves that a source is true; verify claims before confirming your brand.</p>
+    <p className="small muted">Descriptions and suggested audiences are drafts to check. Supporting facts keep their original wording. Review the source and correct anything that doesn’t fit before confirming your brand.</p>
     <p id={`${uid}-error`} role={error ? "alert" : undefined} className="error">{error}</p><p role={notice ? "status" : undefined}>{notice}</p>
     {!view && !error && <p role="status">Loading review queue…</p>}
     {!canEdit && view && <p>Read-only access. A workspace editor can authorize analysis and apply suggestions.</p>}
@@ -69,7 +69,7 @@ export function BrandIntelligence({ businessId, sources }: { businessId: string;
         {analysis.status === "APPLIED" && <p>Selected changes were saved to the draft. Review the brand profile and confirm it before creating a new content plan.</p>}
         {analysis.status === "READY" && !analysis.suggestions.length && <p>No supported improvements were found. No customer credits were consumed.</p>}
         {analysis.suggestions.map(s => <div className="intelligence-suggestion" key={s.field}>
-          <div className="panel-heading"><h5>{labels[s.field]}</h5><span className="tag">{analysis.appliedFields.includes(s.field) ? "Applied" : analysis.rejectedFields.includes(s.field) ? "Rejected" : s.kind === "INFERRED_TONE" ? "Inferred preference" : "Exact source excerpt"}</span></div>
+          <div className="panel-heading"><h5>{labels[s.field]}</h5><span className="tag">{analysis.appliedFields.includes(s.field) ? "Applied" : analysis.rejectedFields.includes(s.field) ? "Rejected" : s.kind === "INFERRED_TONE" ? "Inferred preference" : s.kind === "INFERRED_AUDIENCE" ? "Suggested audience" : s.kind === "SUMMARY_DRAFT" ? "Draft summary · check before use" : "Exact source excerpt"}</span></div>
           <div className="intelligence-compare"><div><span className="small muted">Current profile</span><p>{view.current[s.field] || "Not provided"}</p></div><div><span className="small muted">Proposed replacement</span><p>{s.value}</p></div></div>
           <p className="small">{s.reason}</p>
           <details><summary>Inspect supporting evidence</summary>{s.citations.map((c, i) => <div key={i}><p className="small"><strong>{sources.find(source => source.id === c.sourceId)?.title || "Source removed"}</strong></p><blockquote>{c.excerpt}</blockquote><p className="small muted" style={{ overflowWrap: "anywhere" }}>Source fingerprint: {c.sha256}</p></div>)}</details>

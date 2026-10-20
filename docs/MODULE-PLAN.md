@@ -317,3 +317,7 @@ The original local Docker disk filled during verification. A separate temporary,
 ## Brand analysis operator recovery
 
 An uncertain provider submission is never automatically retried. Verify the provider's actual expense independently, then use `scripts/reconcile-brand-analysis.ts` with `--analysis`, `--supplier-cost-micros`, `--evidence` and `--operator`. The procedure accepts only uncertain jobs, rejects expenses above authorization, releases customer credits and records supplier expense without delivering unverified suggestions. Repeated identical resolution is safe; changed replay evidence is rejected. This is a privileged server procedure, not a customer API. A full operator administration screen remains a release dependency.
+
+## Priority acceptance: website → useful draft → reviewed brand
+
+20 October live follow-up: the v74 Lodha analysis reached READY but populated only difference/tone, not offering/audience. This fails the owner's requested onboarding outcome despite green regression tests. v75 adds explicitly classified, citation-backed summary drafts and proposed audiences, preserving exact evidence for name/proof/restrictions, manual confirmation, edit preservation, tenant isolation and bounded single-submit accounting. The incomplete-result retry is user-triggered only. Do not mark this milestone live-verified until the actual Lodha form is populated and its useful brand-book download is inspected. No full-product completion is implied.
