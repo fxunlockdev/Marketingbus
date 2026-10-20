@@ -4,6 +4,8 @@ The target is a working multi-tenant marketing product, with only explicitly ide
 
 ## Completion rules
 
+Latest source increment, 20 October: `studio-v70-analysis-lease-fence` extends exact-claim ownership to brand intelligence and shares the boundary with creative reflection. Late results cannot save suggestions, settle changed holds or overwrite recovery reasons. No automatic apply, provider call, schema or infrastructure change is introduced. Verification and delivery status are in BUILD-STATUS.md; production remains v64, and the full live journey and remaining internal criteria are not complete.
+
 Latest source increment, 20 October: `studio-v69-reflection-lease-fence` binds semantic reflection submission, delivery and failure cleanup to the exact tenant, authorization, evidence, route and lease. Changed or expired claims cannot deliver lessons or settle replacement holds; late results/errors preserve recovery decisions. See CREATIVE-PROCEDURES.md and BUILD-STATUS.md for verification. This is learning-worker failure isolation, not semantic quality certification or full-product completion. Prior v68 passed independent CI `39399327381`; production remains v64.
 
 Latest source increment, 20 October: `studio-v68-shared-hashtag-rule` aligns corrected-example eligibility, learned-rule validation and explicit hashtag revision checks. Punctuation/full-width tags cannot masquerade as successful corrections; negated or embedded feedback cannot select a hashtag-removal rule. URL fragments remain distinct from standalone tags. Source-only pending independent CI/deployment; current verification is in BUILD-STATUS.md. This strengthens bounded feedback learning and revision adherence, not semantic visual evaluation, arbitrary-language understanding or full module completion.
@@ -59,6 +61,8 @@ Added and deployed: concrete Stripe transport, raw signature and authoritative e
 Remaining: actual Stripe lifecycle acceptance, tax/discount/dispute policies, full operator dashboard and financial settlement reconciliation. Unsupported commercial adjustments remain held for review. Commercial terms and margin acceptance remain separate. Credits currently carry forward; there is no expiration scheduler or invented initial balance.
 
 ## Module 2 Brand intelligence
+
+20 October analysis-ownership increment: brand analysis now checks the exact scoped purpose, author, evidence, route, accepted authorization, reservation, configuration, ceiling and live lease before submission and delivery. Failure cleanup only touches its original claim. Replaced/recovered work retains its existing status and holds; same-owner expiry before submission releases unused credits, while post-submission expiry requires reconciliation without retry. Reflection uses the same helper. See WEBSITE-INTAKE.md and BUILD-STATUS.md. This addresses worker recovery, not semantic source truth or live scraper/provider acceptance.
 
 20 October intake-authority increment: website extraction now revalidates the requesting member's editing role and exact retained source/job context before the scraper call and before persistence. Revoked authority, changed URL/author/payload or lost lease withholds fetched evidence without another attempt; recovery cannot overwrite proposed evidence or follow a corrupt payload into another source. This is a local authorization/lifecycle guard, not production scraper activation or semantic source validation. See WEBSITE-INTAKE.md and BUILD-STATUS.md.
 

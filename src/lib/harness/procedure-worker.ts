@@ -1,30 +1,13 @@
-import { Prisma, type BrandAnalysis } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { db } from "../db";
 import { lockBusiness } from "../production/service";
 import { actualCostMicros, assertExecutionEnabled, keyFor, routeSchema } from "../production/router";
 import { reason } from "../providers/reasoning";
 import { finishReservationInTransaction } from "../billing/wallet";
 import { assertBrandEditor } from "../knowledge/analysis";
+import { ownedAnalysisClaim } from "../knowledge/analysis-claim";
 import { reflectionConfigurationHash } from "./procedures";
 import { currentProcedureEpisodes, episodeRefs, hashProcedure, procedureEvidence, procedurePrompt, procedureSchema, procedureSystem, procedureText, validateProcedures, type ProcedureCandidate } from "./procedure-evidence";
-
-async function ownedReflection(tx: Prisma.TransactionClient, claimed: BrandAnalysis, statuses: string[], requireLive: boolean) {
-  // Serialize only the submission/delivery boundary, never the provider call.
-  // A recovered or replaced SUBMITTING row is not this worker's authorization.
-  await tx.$queryRaw`SELECT id FROM "BrandAnalysis" WHERE id=${claimed.id} FOR UPDATE`;
-  const row = await tx.brandAnalysis.findFirst({ where: {
-    id: claimed.id, organizationId: claimed.organizationId, businessId: claimed.businessId,
-    purpose: "SKILL_REFLECTION", actorId: claimed.actorId, brandVersion: claimed.brandVersion,
-    reservationId: claimed.reservationId, configurationHash: claimed.configurationHash,
-    credits: claimed.credits, supplierCeilingMicros: claimed.supplierCeilingMicros,
-    acceptedAt: claimed.acceptedAt, leaseUntil: claimed.leaseUntil, status: { in: statuses },
-  } });
-  if (!row || !row.leaseUntil || !row.reservationId || !row.acceptedAt ||
-    hashProcedure(row.sources) !== hashProcedure(claimed.sources) ||
-    hashProcedure(row.route) !== hashProcedure(claimed.route) ||
-    requireLive && row.leaseUntil.getTime() <= Date.now()) return null;
-  return row;
-}
 
 // Uses the existing analysis lifecycle for supplier accounting, recovery,
 // deletion fences and operator reconciliation; purpose prevents cross-routing.
@@ -39,7 +22,7 @@ export async function runOneProcedureReflection(reasoner: typeof reason = reason
   try {
     const request = await db.$transaction(async tx => {
       const business = await lockBusiness(tx, scope); await assertBrandEditor(tx, scope); assertExecutionEnabled();
-      const row = await ownedReflection(tx, claimed, ["RUNNING"], true);
+      const row = await ownedAnalysisClaim(tx, claimed, "SKILL_REFLECTION", ["RUNNING"], true);
       if (!row || !business.confirmedAt || row.brandVersion !== business.version || row.configurationHash !== reflectionConfigurationHash()) throw Error("Reflection preflight changed");
       const episodes = await currentProcedureEpisodes(tx, scope, business.version, row.sources), route = routeSchema.parse(row.route), key = keyFor(route.model.provider);
       if (!key || new Date(route.model.verifiedUntil).getTime() <= Date.now()) throw Error("Provider unavailable");
@@ -52,7 +35,7 @@ export async function runOneProcedureReflection(reasoner: typeof reason = reason
     let proposals: ProcedureCandidate[] | null = null;
     try { proposals = validateProcedures(JSON.parse(result.text), request.episodes); } catch { /* No delivery from malformed or fabricated evidence. */ }
     await db.$transaction(async tx => {
-      const business = await lockBusiness(tx, scope), row = await ownedReflection(tx, claimed, ["SUBMITTING"], true);
+      const business = await lockBusiness(tx, scope), row = await ownedAnalysisClaim(tx, claimed, "SKILL_REFLECTION", ["SUBMITTING"], true);
       if (!row) throw Error("Reflection outcome needs reconciliation");
       let fresh = !!business.confirmedAt && row.brandVersion === business.version;
       try { await assertBrandEditor(tx, scope); await currentProcedureEpisodes(tx, scope, business.version, row.sources); } catch { fresh = false; }
@@ -76,7 +59,7 @@ export async function runOneProcedureReflection(reasoner: typeof reason = reason
   } catch {
     await db.$transaction(async tx => {
       await lockBusiness(tx, scope);
-      const row = await ownedReflection(tx, claimed, ["RUNNING", "SUBMITTING"], false);
+      const row = await ownedAnalysisClaim(tx, claimed, "SKILL_REFLECTION", ["RUNNING", "SUBMITTING"], false);
       if (!row) return; // Preserve recovery/replacement decisions and their holds.
       const ambiguous = submitted || row.status !== "RUNNING";
       if (!ambiguous && row.reservationId) await finishReservationInTransaction(tx, scope.organizationId, row.reservationId, 0);

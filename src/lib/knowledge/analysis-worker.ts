@@ -6,6 +6,7 @@ import { reason } from "../providers/reasoning";
 import { finishReservationInTransaction } from "../billing/wallet";
 import { analysisEvidence, analysisConfigurationHash, assertBrandEditor } from "./analysis";
 import { analysisPrompt, analysisSystem, suggestionsJsonSchema, validateSuggestions, type Suggestions } from "./grounding";
+import { ownedAnalysisClaim } from "./analysis-claim";
 
 export async function runOneBrandAnalysis(reasoner: typeof reason = reason) {
   const claimed = await db.$transaction(async tx => {
@@ -19,9 +20,9 @@ export async function runOneBrandAnalysis(reasoner: typeof reason = reason) {
   try {
     const request = await db.$transaction(async tx => {
       const business = await lockBusiness(tx, scope); await assertBrandEditor(tx, scope);
-      const row = await tx.brandAnalysis.findUniqueOrThrow({ where: { id: claimed.id } });
+      const row = await ownedAnalysisClaim(tx, claimed, "BRAND", ["RUNNING"], true);
       assertExecutionEnabled();
-      if (row.status !== "RUNNING" || !row.leaseUntil || row.leaseUntil.getTime() !== claimed.leaseUntil?.getTime() || row.leaseUntil.getTime() <= Date.now() || row.brandVersion !== business.version || row.configurationHash !== analysisConfigurationHash()) throw Error("Analysis preflight changed");
+      if (!row || row.brandVersion !== business.version || row.configurationHash !== analysisConfigurationHash()) throw Error("Analysis preflight changed");
       const sources = await analysisEvidence(tx, row), route = routeSchema.parse(row.route), key = keyFor(route.model.provider);
       if (!key || new Date(route.model.verifiedUntil).getTime() <= Date.now()) throw Error("Provider configuration expired");
       await tx.brandAnalysis.update({ where: { id: row.id }, data: { status: "SUBMITTING", submittedAt: new Date() } });
@@ -34,8 +35,8 @@ export async function runOneBrandAnalysis(reasoner: typeof reason = reason) {
     try { suggestions = validateSuggestions(JSON.parse(result.text), request.sources); } catch { /* Do not deliver ungrounded output. */ }
     await db.$transaction(async tx => {
       const business = await lockBusiness(tx, scope);
-      const row = await tx.brandAnalysis.findUniqueOrThrow({ where: { id: claimed.id } });
-      if (row.status !== "SUBMITTING") throw Error("Submission requires reconciliation");
+      const row = await ownedAnalysisClaim(tx, claimed, "BRAND", ["SUBMITTING"], true);
+      if (!row) throw Error("Submission requires reconciliation");
       let fresh = row.brandVersion === business.version;
       try { await analysisEvidence(tx, row); await assertBrandEditor(tx, scope); } catch { fresh = false; }
       const changes = suggestions?.filter(s => business[s.field] !== s.value) ?? null;
@@ -53,9 +54,8 @@ export async function runOneBrandAnalysis(reasoner: typeof reason = reason) {
   } catch {
     await db.$transaction(async tx => {
       await lockBusiness(tx, scope);
-      const row = await tx.brandAnalysis.findUniqueOrThrow({ where: { id: claimed.id } });
-      if (!["RUNNING", "SUBMITTING", "NEEDS_RECONCILIATION"].includes(row.status)) return;
-      if (!submitted && row.leaseUntil?.getTime() !== claimed.leaseUntil?.getTime()) return;
+      const row = await ownedAnalysisClaim(tx, claimed, "BRAND", ["RUNNING", "SUBMITTING"], false);
+      if (!row) return; // A stale worker cannot settle or overwrite recovered/replaced work.
       const ambiguous = submitted || row.status !== "RUNNING";
       if (!ambiguous && row.reservationId) await finishReservationInTransaction(tx, scope.organizationId, row.reservationId, 0);
       await tx.brandAnalysis.update({ where: { id: row.id }, data: { status: ambiguous ? "NEEDS_RECONCILIATION" : "FAILED", leaseUntil: null, errorCode: ambiguous ? "PROVIDER_OUTCOME_UNKNOWN" : "PREFLIGHT_FAILED" } });

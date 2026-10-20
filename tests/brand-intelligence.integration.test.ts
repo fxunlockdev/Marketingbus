@@ -9,6 +9,8 @@ import { authorizeSupplier } from "../src/lib/production/budget";
 import { brandInput } from "../src/lib/brand";
 import { replaceBrandProfile } from "../src/lib/knowledge/profile";
 import { lockBusiness } from "../src/lib/production/service";
+import * as productionService from "../src/lib/production/service";
+import type { BrandAnalysis, Prisma } from "@prisma/client";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (process.env.TEST_DATABASE_URL && (process.env.DATABASE_URL !== process.env.TEST_DATABASE_URL || !["localhost", "127.0.0.1"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Local test DB required");
 suite("evidence-grounded brand intelligence", () => {
@@ -141,6 +143,67 @@ suite("evidence-grounded brand intelligence", () => {
     await recoverBrandAnalysisLeases(); await runOneBrandAnalysis(f.reasoner); expect(f.reasoner).not.toHaveBeenCalled();
     expect((await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).status).toBe("NEEDS_RECONCILIATION");
     await reconcileBrandAnalysis({ analysisId: id, supplierCostMicros: 0, evidence: "Fixture independently confirmed no supplier expense", operatorId: "fixture-operator" });
+  });
+  it.each(["lease", "route", "sources", "actor", "purpose", "recovered", "recovered-error"] as const)("preserves changed %s ownership when an old brand request returns", async change => {
+    const f = await setup(), id = await accepted(f);
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } });
+    let retained: BrandAnalysis | undefined;
+    const provider = vi.fn(async () => {
+      const row = await db.brandAnalysis.findUniqueOrThrow({ where: { id } });
+      if (change === "lease") await db.brandAnalysis.update({ where: { id }, data: { leaseUntil: new Date(row.leaseUntil!.getTime() + 1000) } });
+      if (change === "route") await db.brandAnalysis.update({ where: { id }, data: { route: { ...(row.route as Prisma.JsonObject), credits: row.credits + 1 } } });
+      if (change === "sources") await db.brandAnalysis.update({ where: { id }, data: { sources: [] } });
+      if (change === "actor") await db.brandAnalysis.update({ where: { id }, data: { actorId: "replacement-author" } });
+      if (change === "purpose") await db.brandAnalysis.update({ where: { id }, data: { purpose: "SKILL_REFLECTION" } });
+      if (change.startsWith("recovered")) {
+        await db.brandAnalysis.update({ where: { id }, data: { leaseUntil: new Date(0) } });
+        await recoverBrandAnalysisLeases();
+      }
+      retained = await db.brandAnalysis.findUniqueOrThrow({ where: { id } });
+      if (change === "recovered-error") throw Error("Synthetic late transport error");
+      return f.reasoner();
+    });
+    await runOneBrandAnalysis(provider); await runOneBrandAnalysis(provider);
+    expect(provider).toHaveBeenCalledTimes(1);
+    expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).toEqual(retained);
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } })).toEqual(wallet);
+    expect(await db.auditEvent.count({ where: { businessId: f.scope.businessId, action: { in: ["BRAND_ANALYSIS_READY", "BRAND_ANALYSIS_FAILED", "BRAND_ANALYSIS_STOPPED"] } } })).toBe(0);
+  });
+  it.each(["before", "after"] as const)("refuses an elapsed brand claim %s submission and preserves the correct credit disposition", async boundary => {
+    const f = await setup(), id = await accepted(f);
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } });
+    const original = productionService.lockBusiness;
+    let restoreClock = () => {};
+    const expireClock = async () => {
+      const row = await db.brandAnalysis.findUniqueOrThrow({ where: { id } });
+      const clock = vi.spyOn(Date, "now").mockReturnValue(row.leaseUntil!.getTime() + 1);
+      restoreClock = () => clock.mockRestore();
+    };
+    const spy = vi.spyOn(productionService, "lockBusiness").mockImplementationOnce(async (tx, scope) => {
+      if (boundary === "before") await expireClock();
+      return original(tx, scope);
+    });
+    const provider = vi.fn(async () => { await expireClock(); return f.reasoner(); });
+    try { await runOneBrandAnalysis(provider); } finally { spy.mockRestore(); restoreClock(); }
+    expect(provider).toHaveBeenCalledTimes(boundary === "before" ? 0 : 1);
+    expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: boundary === "before" ? "FAILED" : "NEEDS_RECONCILIATION", suggestions: null, supplierCostMicros: null, leaseUntil: null });
+    const after = await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } });
+    if (boundary === "before") expect(after).toMatchObject({ available: 1000, held: 0 });
+    else expect(after).toEqual(wallet);
+  });
+  it("cannot submit a changed author claim or release its hold", async () => {
+    const f = await setup(), id = await accepted(f);
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } });
+    const original = productionService.lockBusiness;
+    const spy = vi.spyOn(productionService, "lockBusiness").mockImplementationOnce(async (tx, scope) => {
+      await db.brandAnalysis.update({ where: { id }, data: { actorId: "replacement-author" } });
+      return original(tx, scope);
+    });
+    try { await runOneBrandAnalysis(f.reasoner); } finally { spy.mockRestore(); }
+    expect(f.reasoner).not.toHaveBeenCalled();
+    expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "RUNNING", submittedAt: null, errorCode: null });
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } })).toEqual(wallet);
+    await db.brandAnalysis.update({ where: { id }, data: { status: "CANCELLED", leaseUntil: null } });
   });
   it("detects source text mutation even if its stored hash was not updated", async () => {
     const f = await setup(), id = await quote(f);

@@ -1,5 +1,15 @@
 # Acceptance ledger — 19 October 2026
 
+## 20 October — brand-analysis claim ownership
+
+Runtime `studio-v70-analysis-lease-fence` extends exact-claim fencing to source-backed brand intelligence. A shared helper now protects both brand analysis and creative reflection while keeping their job purposes distinct. Submission and delivery require the same tenant, author, evidence references, route, accepted authorization, reservation, configuration, ceiling and live lease. Failure cleanup cannot settle or overwrite a replaced/recovered claim. Pre-submission same-owner expiry releases its unused hold; submitted uncertainty retains its hold and supplier exposure for reconciliation without another provider attempt.
+
+Nine newly added cases first failed against the earlier brand worker. **63 focused brand/grounding/reflection tests**, then **2,277 tests across 93 suites with no skips**, production build, type checking and dependency audit (zero reported vulnerabilities) pass. Ten added database cases cover changed lease, route, sources, author and purpose; late recovery responses/errors; and expiry before/after submission. Existing source-deletion, role-revocation, tenant isolation, selective application and settlement tests remain intact.
+
+**Four browser journeys pass** with isolated real private storage: source-backed proposal inspection/rejection/selective draft application and the three pilot onboarding/review/procedure-recall journeys. Both dedicated test databases were removed; the storage harness removed its container, objects and temporary TLS files. No schema change, production fixture, paid/provider call, real post/email/payment or infrastructure/configuration change occurred.
+
+This increment is **source-only pending independent CI and deployment**. Prior v69 independent CI `39404808401` was still running when checked; no success or deployment is inferred. Production remains `35a859f` / `studio-v64-supplier-exposure`. The tests establish local ownership and credit-preservation behavior—not semantic source truth, distributed-host recovery, live scraper/provider acceptance or full-product completion.
+
 ## 20 October — semantic reflection ownership and late-result fencing
 
 Runtime `studio-v69-reflection-lease-fence` binds reflection submission, delivery and failure cleanup to the exact scoped claim, accepted authorization, reservation, author, evidence, route, configuration, ceiling and lease. Short row locks protect persistence without spanning a provider request. An expired or replaced worker cannot create proposals or settle another claim's credits. Late results and transport failures preserve recovery decisions and their original reason. Same-owner expiry before submission releases unused credits; after submission the hold remains for operator reconciliation without automatic retry.
