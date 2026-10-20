@@ -1,5 +1,15 @@
 # Acceptance ledger — 19 October 2026
 
+## 20 October — verified recovery, grounding and supplier-inventory release deployed
+
+Exact source `35a859f20e98038e14ac1d6f98ff1aca19f96a6d`, runtime `studio-v64-supplier-exposure`, passed independent [CI 39377967199](https://github.com/fxunlockdev/Marketingbus/actions/runs/39377967199): **2,206 tests across 93 suites**, **54 browser journeys**, isolated database recovery, built web/worker recovery quarantine, production build and dependency audit with zero reported vulnerabilities. A tracked-only archive of that exact commit was uploaded to the two existing production services; local environment files and uncommitted content were not included.
+
+Web deployment `d0fcacd3-75fa-45d2-9bd4-7f8800761517` and worker deployment `69ee2af3-8d06-49cd-9d57-2131c1e739b7` both independently report **SUCCESS**. Their deployment health checks pass. Startup logs show 60 migrations with none pending, web ready and the worker started; the bounded startup-log samples contain no error/failure lines. No new migration or service configuration was introduced.
+
+Post-deployment read-only hosted checks pass: health **200/no-store**; signed-out studio **307 to login**; anonymous connections, procedures and knowledge-graph requests **401/no-store** using a nonexistent business identifier; denied Facebook, Instagram and LinkedIn callbacks **303 to the fixed local failure page**, with **no-store/no-referrer**. These checks neither create production fixtures nor authenticate as a customer.
+
+This supersedes the source-only/pending-CI and deployment notes below for the accumulated media-retention inventory, ISO grounding, procedure-evidence completeness, website-import authority, hard-stop recovery, copy-authority/lease fencing and supplier-exposure changes. It establishes verified source delivery and hosted startup/access behavior—not live-provider quality, a complete customer journey, invoice reconciliation, hosted disaster recovery or the infrastructure cost target. Remaining internal module criteria and external acceptance gates stay open. Credentials, capability switches, spending limits and infrastructure resources were unchanged; no paid generation, real social post, email, payment or refund was initiated.
+
 ## 20 October — supplier authorization exposure inventory
 
 Runtime `studio-v64-supplier-exposure` shares one integer-safe exposure calculation between paid-work admission and a new privileged read-only `ops:suppliers -- --all` report. It distinguishes lifetime authorization, today's new authorizations and older unresolved/provisional carry across copy, brand/learning, image and video. Overlapping conditions count once; retained reconciliation overruns remain included. Admission still uses the same global lock and unchanged operator limits. The report requires explicit global scope, works with execution paused, marks missing limits unknown, clamps exhausted remaining authority to zero, and supplies monitoring exit codes without exposing individual jobs or customer content.
