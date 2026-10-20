@@ -36,6 +36,59 @@ suite("read-only operator queue inventory", () => {
   async function job(scope: Awaited<ReturnType<typeof setup>>, status: string, extra = {}) {
     return db.job.create({ data: { ...scope, kind: "STATIC_COPY", key: crypto.randomUUID(), status, payload: { secret: "do-not-output-prompt" }, errorCode: "do-not-output-error-secret", createdAt: old, availableAt: old, ...extra } });
   }
+  async function pausedPolicy(scope: Awaited<ReturnType<typeof setup>>, pauseReason: string | null = "CONTEXT_INVALID") {
+    return db.weeklyPolicy.create({ data: { ...scope, enabled: false, pauseReason, nextRunAt: old, brandVersion: 1, actorId: "never-output-author" } });
+  }
+  async function pauseEvent(scope: Awaited<ReturnType<typeof setup>>, extra = {}) {
+    return db.auditEvent.create({ data: { ...scope, actorId: "never-output-author", action: "WEEKLY_POLICY_PAUSED",
+      detail: "never-output-context-or-preferences", createdAt: old, ...extra } });
+  }
+  it.each(["CONTEXT_INVALID", "BRAND_CHANGED", "AUTHORIZER_CHANGED"])("reports a %s policy pause even when no cycle exists, without mutation or network access", async reason => {
+    const scope = await setup(), policy = await pausedPolicy(scope, reason), audit = await pauseEvent(scope);
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } });
+    const network = vi.fn(() => { throw Error("No provider request allowed"); }); vi.stubGlobal("fetch", network);
+    const result = await report(scope, { overdueMinutes: 10080 });
+    expect(result.items).toEqual([expect.objectContaining({ queue: "weekly-policy-pauses", id: audit.id, status: "PAUSED",
+      reason: `WEEKLY_${reason}`, createdAt: old.toISOString(), ageSinceCreationMinutes: 60, leaseActiveAtReportTime: false })]);
+    expect(await db.weeklyCycle.count({ where: scope })).toBe(0);
+    expect(await db.weeklyPolicy.findUniqueOrThrow({ where: { businessId: scope.businessId } })).toEqual(policy);
+    expect(await db.auditEvent.findUniqueOrThrow({ where: { id: audit.id } })).toEqual(audit);
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } })).toEqual(wallet);
+    expect(JSON.stringify(result)).not.toMatch(/never-output|actorId|detail|creditsPerWeek/);
+    expect((await report(await setup())).items).toEqual([]);
+    expect(network).not.toHaveBeenCalled();
+  });
+  it.each(["manual", "enabled", "no-audit", "wrong-action", "future-audit", "foreign-audit", "sibling-audit"])("omits %s policies without inventing historical failure evidence", async state => {
+    const scope = await setup(); await pausedPolicy(scope, state === "manual" ? null : "CONTEXT_INVALID");
+    if (state === "enabled") await db.weeklyPolicy.update({ where: { businessId: scope.businessId }, data: { enabled: true } });
+    const sibling = state === "sibling-audit" ? await db.business.create({ data: { organizationId: scope.organizationId, name: "Sibling" } }) : null;
+    if (state !== "no-audit") await pauseEvent(state === "foreign-audit" ? await setup() : sibling ? { ...scope, businessId: sibling.id } : scope,
+      { action: state === "wrong-action" ? "WEEKLY_POLICY_UPDATED" : "WEEKLY_POLICY_PAUSED", createdAt: state === "future-audit" ? future : old });
+    expect((await report(scope)).items).toEqual([]);
+  });
+  it("uses only the latest scoped pause event at the cutoff, with deterministic equal-time ordering", async () => {
+    const scope = await setup(); await pausedPolicy(scope, "BRAND_CHANGED");
+    await pauseEvent(scope, { createdAt: new Date(old.getTime() - 1) });
+    const first = await pauseEvent(scope), second = await pauseEvent(scope);
+    await pauseEvent(scope, { createdAt: now, action: "WEEKLY_POLICY_UPDATED" });
+    await pauseEvent(scope, { createdAt: future });
+    const result = await report(scope);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({ id: [first.id, second.id].sort().at(-1), reason: "WEEKLY_BRAND_CHANGED" });
+    await db.weeklyPolicy.update({ where: { businessId: scope.businessId }, data: { enabled: true, pauseReason: null } });
+    expect((await report(scope)).items).toEqual([]);
+  });
+  it("paginates paused businesses within one organization and refuses a sibling-scoped cursor", async () => {
+    const scope = await setup(), sibling = await db.business.create({ data: { organizationId: scope.organizationId, name: "Sibling" } });
+    const other = { ...scope, businessId: sibling.id };
+    await pausedPolicy(scope); await pausedPolicy(other); await pauseEvent(scope); await pauseEvent(other);
+    const first = await report(scope, { scope: { kind: "organization", organizationId: scope.organizationId }, limit: 1 });
+    const second = await readQueueReport(db, { scope: first.scope, limit: 1, cursor: first.nextCursor! }, future);
+    expect(first.hasMore).toBe(true); expect(second.hasMore).toBe(false);
+    expect(new Set([...first.items, ...second.items].map(row => row.businessId))).toEqual(new Set([scope.businessId, sibling.id]));
+    expect((await report(scope)).items).toHaveLength(1);
+    await expect(report(other, { cursor: first.nextCursor! })).rejects.toThrow("scope");
+  });
   async function asset(scope: Awaited<ReturnType<typeof setup>>, extra: Prisma.BrandAssetUncheckedUpdateInput = {}) {
     const row = await db.brandAsset.create({ data: { ...scope, objectKey: `never-output-object-${crypto.randomUUID()}`,
       label: "never-output-private-label", purpose: "reference", sha256: "never-output-hash", bytes: 1024, width: 100, height: 100,
@@ -422,6 +475,12 @@ suite("read-only operator queue inventory", () => {
     expect(metricAttention.code).toBe(2);
     expect(JSON.parse(metricAttention.stdout).items).toEqual([expect.objectContaining({ id: stopped.id, queue: "social-metrics", reason: "METRICS_STOPPED" })]);
     await db.socialPublication.update({ where: { id: stopped.id }, data: { metricsFailures: 0 } });
+    await pausedPolicy(scope);
+    const pause = await pauseEvent(scope, { createdAt: new Date(Date.now() - 1000) });
+    const paused = await run("--organization", scope.organizationId, "--check");
+    expect(paused.code).toBe(2);
+    expect(JSON.parse(paused.stdout).items).toEqual([expect.objectContaining({ id: pause.id, queue: "weekly-policy-pauses", reason: "WEEKLY_CONTEXT_INVALID" })]);
+    await db.weeklyPolicy.update({ where: { businessId: scope.businessId }, data: { enabled: true, pauseReason: null } });
     const failed = await job(scope, "FAILED", { createdAt: new Date("2026-10-01T00:00:00Z") });
     const attention = await run("--organization", scope.organizationId, "--check");
     expect(attention.code).toBe(2); expect(JSON.parse(attention.stdout).items[0].id).toBe(failed.id);

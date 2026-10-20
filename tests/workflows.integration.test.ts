@@ -6,6 +6,7 @@ import { savePlanning, createDuePlan, runOneWeeklyDraft, nextWeekly, weekKey, ca
 import { heartbeat } from "../src/lib/production/readiness";
 import * as knowledge from "../src/lib/harness/knowledge-graph";
 import { AppError } from "../src/lib/http";
+import { readQueueReport } from "../scripts/operations/queue-report";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (process.env.TEST_DATABASE_URL && (process.env.TEST_DATABASE_URL !== process.env.DATABASE_URL || !["localhost", "127.0.0.1"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Local fixture database required");
 suite("approval policy, comments and bounded recurring work", () => {
@@ -95,6 +96,10 @@ suite("approval policy, comments and bounded recurring work", () => {
     expect(await db.productionPlan.count({ where: { businessId: blocked.scope.businessId } })).toBe(1);
     const audit = await db.auditEvent.findMany({ where: { businessId: blocked.scope.businessId, action: "WEEKLY_POLICY_PAUSED" } });
     expect(audit).toHaveLength(1); expect(audit[0].detail).not.toContain("PRIVATE-CONTEXT");
+    const reportScope = { kind: "organization" as const, organizationId: blocked.scope.organizationId, businessId: blocked.scope.businessId };
+    expect((await readQueueReport(db, { scope: reportScope })).items).toEqual([
+      expect.objectContaining({ id: audit[0].id, queue: "weekly-policy-pauses", reason: "WEEKLY_CONTEXT_INVALID" }),
+    ]);
     expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: blocked.scope.organizationId } })).toEqual(wallet);
     expect(await db.generationQuote.count({ where: { businessId: blocked.scope.businessId } })).toBe(0);
     expect(await db.job.count({ where: { businessId: blocked.scope.businessId } })).toBe(0);
@@ -107,7 +112,9 @@ suite("approval policy, comments and bounded recurring work", () => {
     await db.business.update({ where: { id: blocked.scope.businessId }, data: { offering: "Design consultations" } });
     expect(await createDuePlan()).toBe(false);
     await expect(savePlanning(blocked.editor, { ...policy, version: 1 })).rejects.toThrow("administrators");
+    expect((await readQueueReport(db, { scope: reportScope })).items).toHaveLength(1);
     await savePlanning(blocked.admin, { ...policy, version: 1 });
+    expect((await readQueueReport(db, { scope: reportScope })).items).toEqual([]);
     expect((await readPlanning(blocked.scope)).pauseNotice).toBeNull();
     expect((await db.weeklyPolicy.findUniqueOrThrow({ where: { businessId: blocked.scope.businessId } })).pauseReason).toBeNull();
     await due(blocked.scope.businessId); await createDuePlan();

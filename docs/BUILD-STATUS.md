@@ -1,5 +1,15 @@
 # Acceptance ledger — 19 October 2026
 
+## 20 October — operator visibility for automatically paused recurring work
+
+Runtime `studio-v67-weekly-pause-inventory` adds a read-only `weekly-policy-pauses` lane to the privileged queue report. It exposes automatically paused business policies even when no weekly cycle was created. Current constrained policy state supplies one of three fixed recovery explanations; the latest scoped pause audit event supplies the record identity and age. Audit text, author identity, preferences and brand content are not selected. Manual/legacy pauses, resumed policies and absent/future/wrong-action/foreign audit evidence are excluded. No new schema, provider, recovery action or automatic reauthorization is introduced.
+
+Verification passes **140 focused operator/planning/image/video tests**, followed by **2,229 tests across 93 suites with no skips**, production build, type checking and dependency audit (zero reported vulnerabilities). Twelve new cases cover all reasons, non-mutation/network denial, no-cycle visibility, evidence exclusions, equal-time tie-breaking, scoped pagination and cursor rejection. Existing CLI checks now prove pause attention exits 2. The actual worker's four invalid-context paths are checked through report visibility, rejected editor reauthorization and successful administrator save; fixing context alone leaves the pause visible.
+
+**Four weekly-workflow browser journeys pass** against separate isolated real private storage. The local recovery rehearsal passes **61 migrations, 53 tables and 155 synthetic rows**, tenant/accounting invariants and identity quarantine. Both dedicated test databases and the rehearsal databases were removed; the storage harness removed its own container, objects and temporary TLS files.
+
+This increment is **source-only pending independent CI and deployment**. Prior source `38de58826e437b17c0637d17505fea4a8a7a234e` passed [CI 39395997669](https://github.com/fxunlockdev/Marketingbus/actions/runs/39395997669), superseding its pending-CI note below; production remains `35a859f` / `studio-v64-supplier-exposure`. No paid/provider call, real post/email/payment, production fixture or infrastructure/configuration change occurred. This closes an operator inspection gap, not alert delivery, missing-audit corruption detection, an operator dashboard, live acceptance or full-product completion.
+
 ## 20 October — persistent weekly pause guidance
 
 Runtime `studio-v66-weekly-pause-guidance` adds a nullable, database-constrained pause reason and fixed customer explanations for changed brand, changed authorizing access and invalid planning context. Workflows shows persistent, politely announced recovery guidance beside the resume checkbox, including administrator-specific instructions. Editing a checkbox without saving cannot dismiss the notice. Successful administrator settings saves clear the reason; stale, unauthorized or malformed saves do not. Legacy/manual disabled policies receive neutral guidance without inferring an old audit reason. Raw audit details, brand preferences and internal reason codes are not exposed in editable settings.

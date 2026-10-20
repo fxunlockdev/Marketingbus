@@ -15,6 +15,7 @@ const definitions = [
   { name: "social-metrics", table: "SocialPublication", scope: "business", lease: true, leaseColumn: "metricsLeaseUntil", due: "nextMetricsAt", waiting: ["PUBLISHED"], active: ["PUBLISHED"] },
   { name: "social-access", table: "SocialConnection", scope: "business", due: "expiresAt", waiting: ["CONNECTED"], active: [] },
   { name: "weekly", table: "WeeklyCycle", scope: "business", lease: true, waiting: ["OPEN"], active: ["RUNNING"] },
+  { name: "weekly-policy-pauses", table: "WeeklyPolicy", scope: "business", waiting: [], active: [] },
   { name: "weekly-images", table: "WeeklyCycle", scope: "business", lease: true, statusColumn: "mediaStatus", leaseColumn: "mediaLeaseUntil", due: "nextMediaAt", waiting: ["OPEN"], active: ["OPEN"] },
   { name: "weekly-video", table: "WeeklyCycle", scope: "business", lease: true, statusColumn: "videoStatus", leaseColumn: "videoLeaseUntil", due: "nextVideoAt", waiting: ["OPEN"], active: ["OPEN"] },
   { name: "checkout", table: "BillingCheckout", scope: "organization", waiting: [], active: [] },
@@ -34,8 +35,11 @@ export type QueueReportOptions = z.input<typeof optionsSchema>;
 const cursorSchema = z.object({ version: z.literal(1), scope: scopeSchema, overdueMinutes: z.number().int(), asOf: z.iso.datetime(), createdAt: z.iso.datetime(), queue: z.string().max(30), id: identifier }).strict();
 const attentionStatuses = ["NEEDS_RECONCILIATION", "NEEDS_REVIEW", "REQUIRES_ACTION", "UNKNOWN", "RECONCILE"];
 const failureStatuses = ["FAILED", "DELETE_FAILED", "PURGE_FAILED", "BLOCKED"];
-const knownStatuses = new Set(["READY", "APPROVED", "REJECTED", "RECONNECT_REQUIRED", ...attentionStatuses, ...failureStatuses, ...definitions.flatMap(d => [...d.waiting, ...d.active])]);
+const knownStatuses = new Set(["READY", "APPROVED", "REJECTED", "RECONNECT_REQUIRED", "PAUSED", ...attentionStatuses, ...failureStatuses, ...definitions.flatMap(d => [...d.waiting, ...d.active])]);
 const guidance = {
+  WEEKLY_CONTEXT_INVALID: "Recurring work paused before planning because retained business context is invalid or too large. Ask an owner/admin to review Brand and Memory, then explicitly save recurring authorization. Do not restart work or alter existing credit holds from this report.",
+  WEEKLY_BRAND_CHANGED: "Recurring work paused because the confirmed brand changed. Ask an owner/admin to review and confirm the current Brand, then explicitly save recurring authorization. Do not resume an old authorization.",
+  WEEKLY_AUTHORIZER_CHANGED: "Recurring work paused because its authorizer no longer has the required access. A current owner/admin must review and explicitly save recurring authorization. Do not restore former access or substitute an author automatically.",
   RETENTION_STATE_INVALID: "Media pending deletion has incomplete retention metadata. Preserve its private tombstone and quota; investigate the lifecycle record before any authorized repair. This report cannot authorize deletion or restoration.",
   RETENTION_OVERDUE: "Check retention-worker readiness and private storage access. Confirm deletion through the existing retention lifecycle before releasing quota; do not restore expired media or remove its tombstone.",
   RETENTION_PUBLICATION_HOLD: "Expired export is intentionally retained for an in-flight or uncertain publication. Resolve the publication through read-back reconciliation before cleanup; do not delete media, release quota or resubmit the post from this report.",
@@ -69,6 +73,27 @@ export async function readQueueReport(client: PrismaClient, raw: QueueReportOpti
   const overdue = new Date(asOf.getTime() - options.overdueMinutes * 60000);
   const eligible = definitions.filter(d => options.scope.kind === "all" || (d.scope !== "global" && (!options.scope.businessId || d.scope === "business")));
   const parts = eligible.map((d: Definition) => {
+    if (d.name === "weekly-policy-pauses") {
+      // Policies have no creation timestamp. Use one durable pause audit event
+      // for identity/age, and current constrained policy state for classification.
+      // Never infer consent or a reason from arbitrary audit text.
+      const scope = options.scope.kind === "all" ? Prisma.sql`TRUE`
+        : Prisma.sql`p."organizationId" = ${options.scope.organizationId} ${options.scope.businessId ? Prisma.sql`AND p."businessId" = ${options.scope.businessId}` : Prisma.empty}`;
+      return Prisma.sql`SELECT ${d.name}::text AS queue, a."id", p."organizationId", p."businessId",
+        'PAUSED'::text AS status, a."createdAt", NULL::timestamp AS "leaseUntil",
+        CASE p."pauseReason" WHEN 'CONTEXT_INVALID' THEN 'WEEKLY_CONTEXT_INVALID'
+          WHEN 'BRAND_CHANGED' THEN 'WEEKLY_BRAND_CHANGED'
+          WHEN 'AUTHORIZER_CHANGED' THEN 'WEEKLY_AUTHORIZER_CHANGED' END AS reason
+        FROM "WeeklyPolicy" p
+        JOIN LATERAL (
+          SELECT e."id", e."createdAt" FROM "AuditEvent" e
+          WHERE e."organizationId" = p."organizationId" AND e."businessId" = p."businessId"
+            AND e."action" = 'WEEKLY_POLICY_PAUSED' AND e."createdAt" <= ${asOf}
+          ORDER BY e."createdAt" DESC, e."id" DESC LIMIT 1
+        ) a ON TRUE
+        WHERE ${scope} AND p."enabled" = FALSE
+          AND p."pauseReason" IN ('CONTEXT_INVALID', 'BRAND_CHANGED', 'AUTHORIZER_CHANGED')`;
+    }
     const status = column(d.statusColumn ?? "status"), lease = d.lease ? column(d.leaseColumn ?? "leaseUntil") : Prisma.sql`NULL::timestamp`;
     const org = d.scope === "global" ? Prisma.sql`NULL::text` : column("organizationId");
     const business = d.scope === "business" ? column("businessId") : Prisma.sql`NULL::text`;
