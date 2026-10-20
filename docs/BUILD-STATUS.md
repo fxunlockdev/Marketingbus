@@ -1,5 +1,15 @@
 # Acceptance ledger — 19 October 2026
 
+## 20 October — semantic reflection ownership and late-result fencing
+
+Runtime `studio-v69-reflection-lease-fence` binds reflection submission, delivery and failure cleanup to the exact scoped claim, accepted authorization, reservation, author, evidence, route, configuration, ceiling and lease. Short row locks protect persistence without spanning a provider request. An expired or replaced worker cannot create proposals or settle another claim's credits. Late results and transport failures preserve recovery decisions and their original reason. Same-owner expiry before submission releases unused credits; after submission the hold remains for operator reconciliation without automatic retry.
+
+Six new cases first failed against the earlier implementation. **65 focused procedure/outcome/knowledge tests**, then **2,267 tests across 93 suites with no skips**, production build, type checking and dependency audit (zero reported vulnerabilities) pass. Ten added database cases cover changed leases, sources, routes and author identity; pre-submission elapsed/replaced claims; in-flight expiry; and recovery before a late response or exception. Existing tests retain tenant/role isolation, exact evidence, human activation, invalid-output settlement and audited uncertain-expense reconciliation.
+
+**Three pilot browser journeys pass** with isolated real private storage, including procedure activation, matching-task knowledge recall, reviewer invalidation and retirement. The first browser command used a nonexistent test filename and selected no tests; rerunning the correct existing `pilot-ux.spec.ts` passed. Both dedicated test databases were removed; both storage runs cleaned their own containers, objects and temporary TLS files. No schema change or production data was used.
+
+This increment is **source-only pending independent CI and deployment**. Prior source `2f2256d853cf5a9dc777e8549f369844bc28cee2` passed [CI 39399327381](https://github.com/fxunlockdev/Marketingbus/actions/runs/39399327381), superseding its pending-CI note below. Production remains `35a859f` / `studio-v64-supplier-exposure`. No paid/provider call, real post/email/payment or infrastructure/configuration change occurred. These are deterministic local failure tests, not distributed-host recovery, semantic/visual quality calibration, live-provider acceptance or full-product completion.
+
 ## 20 October — consistent hashtag corrections and learned-rule checks
 
 Runtime `studio-v68-shared-hashtag-rule` shares the finite hashtag predicate between corrected-example eligibility, active skill revalidation, generated-copy validation and explicit hashtag-removal feedback. Quoted/punctuation-wrapped and full-width tags are checked across headline, caption and CTA. HTTP(S)/`www.` URL fragments and word-internal hashes remain distinct from standalone tags. Compatibility normalization is comparison-only; retained creative content is unchanged. Revision feedback now uses the bounded whole-clause grammar, preventing negated/embedded commands from accidentally selecting a removal rule. The quality receipt version is `grounding-2026-10-20.4`.

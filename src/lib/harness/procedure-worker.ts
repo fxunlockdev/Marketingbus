@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, type BrandAnalysis } from "@prisma/client";
 import { db } from "../db";
 import { lockBusiness } from "../production/service";
 import { actualCostMicros, assertExecutionEnabled, keyFor, routeSchema } from "../production/router";
@@ -7,6 +7,24 @@ import { finishReservationInTransaction } from "../billing/wallet";
 import { assertBrandEditor } from "../knowledge/analysis";
 import { reflectionConfigurationHash } from "./procedures";
 import { currentProcedureEpisodes, episodeRefs, hashProcedure, procedureEvidence, procedurePrompt, procedureSchema, procedureSystem, procedureText, validateProcedures, type ProcedureCandidate } from "./procedure-evidence";
+
+async function ownedReflection(tx: Prisma.TransactionClient, claimed: BrandAnalysis, statuses: string[], requireLive: boolean) {
+  // Serialize only the submission/delivery boundary, never the provider call.
+  // A recovered or replaced SUBMITTING row is not this worker's authorization.
+  await tx.$queryRaw`SELECT id FROM "BrandAnalysis" WHERE id=${claimed.id} FOR UPDATE`;
+  const row = await tx.brandAnalysis.findFirst({ where: {
+    id: claimed.id, organizationId: claimed.organizationId, businessId: claimed.businessId,
+    purpose: "SKILL_REFLECTION", actorId: claimed.actorId, brandVersion: claimed.brandVersion,
+    reservationId: claimed.reservationId, configurationHash: claimed.configurationHash,
+    credits: claimed.credits, supplierCeilingMicros: claimed.supplierCeilingMicros,
+    acceptedAt: claimed.acceptedAt, leaseUntil: claimed.leaseUntil, status: { in: statuses },
+  } });
+  if (!row || !row.leaseUntil || !row.reservationId || !row.acceptedAt ||
+    hashProcedure(row.sources) !== hashProcedure(claimed.sources) ||
+    hashProcedure(row.route) !== hashProcedure(claimed.route) ||
+    requireLive && row.leaseUntil.getTime() <= Date.now()) return null;
+  return row;
+}
 
 // Uses the existing analysis lifecycle for supplier accounting, recovery,
 // deletion fences and operator reconciliation; purpose prevents cross-routing.
@@ -21,8 +39,8 @@ export async function runOneProcedureReflection(reasoner: typeof reason = reason
   try {
     const request = await db.$transaction(async tx => {
       const business = await lockBusiness(tx, scope); await assertBrandEditor(tx, scope); assertExecutionEnabled();
-      const row = await tx.brandAnalysis.findUniqueOrThrow({ where: { id: claimed.id } });
-      if (!business.confirmedAt || row.status !== "RUNNING" || row.leaseUntil?.getTime() !== claimed.leaseUntil?.getTime() || row.leaseUntil!.getTime() <= Date.now() || row.brandVersion !== business.version || row.configurationHash !== reflectionConfigurationHash()) throw Error("Reflection preflight changed");
+      const row = await ownedReflection(tx, claimed, ["RUNNING"], true);
+      if (!row || !business.confirmedAt || row.brandVersion !== business.version || row.configurationHash !== reflectionConfigurationHash()) throw Error("Reflection preflight changed");
       const episodes = await currentProcedureEpisodes(tx, scope, business.version, row.sources), route = routeSchema.parse(row.route), key = keyFor(route.model.provider);
       if (!key || new Date(route.model.verifiedUntil).getTime() <= Date.now()) throw Error("Provider unavailable");
       await tx.brandAnalysis.update({ where: { id: row.id }, data: { status: "SUBMITTING", submittedAt: new Date() } });
@@ -34,8 +52,8 @@ export async function runOneProcedureReflection(reasoner: typeof reason = reason
     let proposals: ProcedureCandidate[] | null = null;
     try { proposals = validateProcedures(JSON.parse(result.text), request.episodes); } catch { /* No delivery from malformed or fabricated evidence. */ }
     await db.$transaction(async tx => {
-      const business = await lockBusiness(tx, scope), row = await tx.brandAnalysis.findUniqueOrThrow({ where: { id: claimed.id } });
-      if (row.status !== "SUBMITTING") throw Error("Reflection outcome needs reconciliation");
+      const business = await lockBusiness(tx, scope), row = await ownedReflection(tx, claimed, ["SUBMITTING"], true);
+      if (!row) throw Error("Reflection outcome needs reconciliation");
       let fresh = !!business.confirmedAt && row.brandVersion === business.version;
       try { await assertBrandEditor(tx, scope); await currentProcedureEpisodes(tx, scope, business.version, row.sources); } catch { fresh = false; }
       let created = 0;
@@ -58,8 +76,8 @@ export async function runOneProcedureReflection(reasoner: typeof reason = reason
   } catch {
     await db.$transaction(async tx => {
       await lockBusiness(tx, scope);
-      const row = await tx.brandAnalysis.findUniqueOrThrow({ where: { id: claimed.id } });
-      if (!["RUNNING", "SUBMITTING", "NEEDS_RECONCILIATION"].includes(row.status) || !submitted && row.leaseUntil?.getTime() !== claimed.leaseUntil?.getTime()) return;
+      const row = await ownedReflection(tx, claimed, ["RUNNING", "SUBMITTING"], false);
+      if (!row) return; // Preserve recovery/replacement decisions and their holds.
       const ambiguous = submitted || row.status !== "RUNNING";
       if (!ambiguous && row.reservationId) await finishReservationInTransaction(tx, scope.organizationId, row.reservationId, 0);
       await tx.brandAnalysis.update({ where: { id: row.id }, data: { status: ambiguous ? "NEEDS_RECONCILIATION" : "FAILED", leaseUntil: null, errorCode: ambiguous ? "PROVIDER_OUTCOME_UNKNOWN" : "PREFLIGHT_FAILED" } });

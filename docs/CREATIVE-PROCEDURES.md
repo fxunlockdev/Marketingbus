@@ -15,6 +15,12 @@ The existing `BrandAnalysis` job ledger now distinguishes `BRAND` from `SKILL_RE
 - Recall and listing share one fresh correction-history read within that operation (at most 100 items, eight revisions each). Each procedure still validates its own evidence and memory binding. Nothing is cached across requests, businesses, brand versions or worker authorization/delivery boundaries. More than twelve active procedures fails closed before reading source history. This is a database-efficiency measure, not evidence of lower model cost or a guaranteed per-customer infrastructure price.
 - Identical proposals on unchanged evidence are deduplicated, including retired proposals. No new proposals means no customer charge; actual supplier costs are still recorded. Unknown provider outcomes retain their hold and cannot auto-retry; use the existing `reconcile-brand-analysis` operator procedure after verifying expense.
 
+## Reflection ownership and late results
+
+Submission and delivery require the exact scoped reflection claim: purpose, author, brand version, source references, route, configuration, accepted authorization, reservation, price ceiling and live lease. Short row locks protect these boundaries; no database lock spans the provider request. A changed claim cannot submit, create proposals or settle another claim's credits.
+
+If the original lease expires before submission, the still-owning worker stops and releases its unused hold. If it expires after submission, the result is withheld and the hold remains for operator reconciliation. Recovery or replacement decisions—including the original recovery reason—cannot be overwritten by a late result or transport error. Changed ownership is left untouched for its current owner or normal recovery; it is not silently repaired or retried. Retained supplier authorization continues to count toward exposure until reconciliation. These deterministic database tests do not establish live supplier billing or distributed-host failure recovery.
+
 ## Use and review outcomes
 
 The Memory panel shows retained delivered outputs whose saved generation knowledge snapshot contains the exact procedure text and evidence link. Attribution checks the snapshot fingerprint, organization, business, brand version, task, destination and proposal creation time. Source creatives used to derive the procedure are excluded from these independent-use counts. Manual edits, quotes and jobs without a delivered-provider receipt do not add AI outputs.

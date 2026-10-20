@@ -12,6 +12,7 @@ import { reconcileBrandAnalysis } from "../src/lib/knowledge/reconcile";
 import { applyPilotCredit } from "../src/lib/billing/pilot-credit";
 import { actOnProduction } from "../src/lib/production/service";
 import { runOneJob } from "../src/lib/production/worker";
+import * as productionService from "../src/lib/production/service";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (process.env.TEST_DATABASE_URL && (process.env.TEST_DATABASE_URL !== process.env.DATABASE_URL || !["localhost", "127.0.0.1"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Local fixtures only");
 suite("semantic creative reflection lifecycle", () => {
@@ -205,6 +206,82 @@ suite("semantic creative reflection lifecycle", () => {
   const a = await setup(), id = await quote(a.scope), c = await candidate(a.scope); await manageProcedures(a.scope, { action: "accept", analysisId: id });
   await runOneProcedureReflection(async () => { await db.creativeRevision.update({ where: { id: c.examples[0].id }, data: { status: "REJECTED" } }); return { id: "fixture-stale", text: JSON.stringify({ procedures: [c] }), usage: { input_tokens: 100, output_tokens: 100 } }; });
   expect((await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).status).toBe("STALE"); expect((await readProcedures(a.scope)).procedures).toEqual([]);
+ });
+ it.each(["lease", "sources", "route", "actor", "recovered"] as const)("does not deliver or settle a reflection after its %s ownership changes", async change => {
+  const a = await setup(), id = await quote(a.scope), c = await candidate(a.scope);
+  await manageProcedures(a.scope, { action: "accept", analysisId: id });
+  const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } });
+  let retained: Awaited<ReturnType<typeof db.brandAnalysis.findUniqueOrThrow>> | undefined;
+  const provider = vi.fn(async () => {
+   const row = await db.brandAnalysis.findUniqueOrThrow({ where: { id } });
+   if (change === "lease") await db.brandAnalysis.update({ where: { id }, data: { leaseUntil: new Date(row.leaseUntil!.getTime() + 1000) } });
+   if (change === "sources") await db.brandAnalysis.update({ where: { id }, data: { sources: [...(row.sources as Prisma.JsonArray)].reverse() } });
+   if (change === "route") await db.brandAnalysis.update({ where: { id }, data: { route: { ...(row.route as Prisma.JsonObject), credits: row.credits + 1 } } });
+   if (change === "actor") await db.brandAnalysis.update({ where: { id }, data: { actorId: "different-author" } });
+   if (change === "recovered") {
+    await db.brandAnalysis.update({ where: { id }, data: { leaseUntil: new Date(0) } });
+    await recoverBrandAnalysisLeases();
+   }
+   retained = await db.brandAnalysis.findUniqueOrThrow({ where: { id } });
+   return { id: "fixture-late", text: JSON.stringify({ procedures: [c] }), usage: { input_tokens: 100, output_tokens: 100 } };
+  });
+  await runOneProcedureReflection(provider); await runOneProcedureReflection(provider);
+  expect(provider).toHaveBeenCalledTimes(1);
+  expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).toEqual(retained);
+  expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } })).toEqual(wallet);
+  expect(await db.learningProposal.count({ where: { businessId: a.scope.businessId } })).toBe(0);
+ });
+ it.each(["lease", "sources", "elapsed"] as const)("checks reflection %s ownership before provider submission", async change => {
+  const a = await setup(), id = await quote(a.scope);
+  await manageProcedures(a.scope, { action: "accept", analysisId: id });
+  const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } });
+  const original = productionService.lockBusiness;
+  let restoreClock = () => {};
+  const spy = vi.spyOn(productionService, "lockBusiness").mockImplementationOnce(async (tx, scope) => {
+   const row = await db.brandAnalysis.findUniqueOrThrow({ where: { id } });
+   if (change === "elapsed") {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(row.leaseUntil!.getTime() + 1);
+    restoreClock = () => clock.mockRestore();
+   } else await db.brandAnalysis.update({ where: { id }, data: change === "lease" ? { leaseUntil: new Date(row.leaseUntil!.getTime() + 1000) } : { sources: [...(row.sources as Prisma.JsonArray)].reverse() } });
+   return original(tx, scope);
+  });
+  const provider = vi.fn();
+  try { await runOneProcedureReflection(provider); } finally { spy.mockRestore(); restoreClock(); }
+  expect(provider).not.toHaveBeenCalled();
+  expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: change === "elapsed" ? "FAILED" : "RUNNING", submittedAt: null });
+  const after = await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } });
+  if (change === "elapsed") expect(after).toMatchObject({ available: 500, held: 0 });
+  else expect(after).toEqual(wallet);
+  // Prevent a later recovery fixture from requeueing this synthetic replacement.
+  await db.brandAnalysis.update({ where: { id }, data: { status: "CANCELLED", leaseUntil: null } });
+ });
+ it("does not overwrite a recovered reflection when the old provider call throws", async () => {
+  const a = await setup(), id = await quote(a.scope);
+  await manageProcedures(a.scope, { action: "accept", analysisId: id });
+  const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } });
+  await runOneProcedureReflection(async () => {
+   await db.brandAnalysis.update({ where: { id }, data: { leaseUntil: new Date(0) } });
+   await recoverBrandAnalysisLeases();
+   throw Error("Synthetic old transport failure");
+  });
+  expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", errorCode: "LEASE_EXPIRED_AFTER_SUBMISSION" });
+  expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } })).toEqual(wallet);
+ });
+ it("fences elapsed reflection leases even before recovery runs", async () => {
+  const a = await setup(), id = await quote(a.scope), c = await candidate(a.scope);
+  await manageProcedures(a.scope, { action: "accept", analysisId: id });
+  const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } });
+  const clock = vi.spyOn(Date, "now");
+  try {
+   await runOneProcedureReflection(async () => {
+    const row = await db.brandAnalysis.findUniqueOrThrow({ where: { id } });
+    clock.mockReturnValue(row.leaseUntil!.getTime() + 1);
+    return { id: "fixture-expired", text: JSON.stringify({ procedures: [c] }), usage: { input_tokens: 100, output_tokens: 100 } };
+   });
+  } finally { clock.mockRestore(); }
+  expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "NEEDS_RECONCILIATION", errorCode: "PROVIDER_OUTCOME_UNKNOWN", supplierCostMicros: null, leaseUntil: null });
+  expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } })).toEqual(wallet);
+  expect(await db.learningProposal.count({ where: { businessId: a.scope.businessId } })).toBe(0);
  });
  it("holds uncertain provider calls without retry and permits audited reconciliation", async () => {
   const a = await setup(), id = await quote(a.scope); await manageProcedures(a.scope, { action: "accept", analysisId: id });
