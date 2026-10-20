@@ -4,6 +4,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { db } from "../src/lib/db";
 import { readQueueReport, type QueueReportOptions } from "../scripts/operations/queue-report";
+import { purgeExpiredAssets } from "../src/lib/assets/service";
+import type { AssetStore } from "../src/lib/assets/storage";
 
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (process.env.TEST_DATABASE_URL && (process.env.TEST_DATABASE_URL !== process.env.DATABASE_URL || !["localhost", "127.0.0.1"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Local fixture database required");
@@ -12,6 +14,7 @@ suite("read-only operator queue inventory", () => {
   const orgs: string[] = [], users: string[] = [], events: string[] = [];
   afterEach(() => vi.unstubAllGlobals());
   afterAll(async () => {
+    await db.brandAsset.deleteMany({ where: { organizationId: { in: orgs } } });
     await db.videoGeneration.deleteMany({ where: { organizationId: { in: orgs } } });
     await db.billingRefundOperation.deleteMany({ where: { organizationId: { in: orgs } } });
     await db.billingPayment.deleteMany({ where: { organizationId: { in: orgs } } });
@@ -28,6 +31,67 @@ suite("read-only operator queue inventory", () => {
   async function job(scope: Awaited<ReturnType<typeof setup>>, status: string, extra = {}) {
     return db.job.create({ data: { ...scope, kind: "STATIC_COPY", key: crypto.randomUUID(), status, payload: { secret: "do-not-output-prompt" }, errorCode: "do-not-output-error-secret", createdAt: old, availableAt: old, ...extra } });
   }
+  async function asset(scope: Awaited<ReturnType<typeof setup>>, extra: Prisma.BrandAssetUncheckedUpdateInput = {}) {
+    const row = await db.brandAsset.create({ data: { ...scope, objectKey: `never-output-object-${crypto.randomUUID()}`,
+      label: "never-output-private-label", purpose: "reference", sha256: "never-output-hash", bytes: 1024, width: 100, height: 100,
+      uploadedBy: "never-output-uploader", rightsConfirmedAt: old, createdAt: old, status: "ARCHIVED", purgeAfter: old } });
+    return db.brandAsset.update({ where: { id: row.id }, data: extra });
+  }
+  it.each([
+    [{}, "RETENTION_OVERDUE"],
+    [{ status: "DELETING", purgeLeaseUntil: old }, "EXPIRED_LEASE"],
+    [{ purgeAfter: null }, "RETENTION_STATE_INVALID"],
+    [{ status: "DELETING", purgeLeaseUntil: null }, "RETENTION_STATE_INVALID"],
+  ] as const)("reports archived asset retention attention %j without exposing or deleting media", async (state, reason) => {
+    const scope = await setup(), row = await asset(scope, state);
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } });
+    const network = vi.fn(() => { throw Error("No storage request allowed"); }); vi.stubGlobal("fetch", network);
+    const result = await report(scope);
+    expect(result.items).toEqual([expect.objectContaining({ queue: "asset-retention", id: row.id, reason })]);
+    expect(JSON.stringify(result)).not.toMatch(/never-output|objectKey|sha256|uploadedBy|rightsConfirmedAt/);
+    expect(await db.brandAsset.findUniqueOrThrow({ where: { id: row.id } })).toEqual(row);
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } })).toEqual(wallet);
+    expect((await report(await setup())).items).toEqual([]);
+    expect(network).not.toHaveBeenCalled();
+  });
+  it.each([
+    { status: "READY", purgeAfter: null }, { status: "PENDING", purgeAfter: null },
+    { status: "DELETED", bytes: 0 }, { purgeAfter: future }, { purgeAfter: now },
+    { status: "DELETING", purgeLeaseUntil: future },
+  ])("does not flag ordinary, restored, removed or actively deleting asset state %j", async state => {
+    const scope = await setup(); await asset(scope, state);
+    expect((await report(scope)).items).toEqual([]);
+  });
+  it("uses exact purge time, configurable grace and the purge-specific lease", async () => {
+    const scope = await setup(), row = await asset(scope, { purgeAfter: new Date(now.getTime() - 15 * 60000) });
+    expect((await report(scope)).items[0].reason).toBe("RETENTION_OVERDUE");
+    expect((await report(scope, { overdueMinutes: 16 })).items).toEqual([]);
+    await db.brandAsset.update({ where: { id: row.id }, data: { status: "DELETING", purgeLeaseUntil: now } });
+    expect((await report(scope)).items[0]).toMatchObject({ reason: "EXPIRED_LEASE", leaseActiveAtReportTime: false });
+  });
+  it("tracks a failed physical purge through its bounded retry lease and confirmed tombstone", async () => {
+    const scope = await setup(), row = await asset(scope);
+    const remove = vi.fn(async (_key: string): Promise<void> => { throw Error("Synthetic storage failure"); });
+    const store = { remove } as unknown as AssetStore;
+    // The actual cleanup worker claims globally; use a cutoff before every other
+    // fixture so it can touch only this test's explicitly identified object.
+    const isolatedTime = new Date("2025-01-01T00:00:00Z");
+    await db.brandAsset.update({ where: { id: row.id }, data: { purgeAfter: isolatedTime, createdAt: isolatedTime } });
+    await purgeExpiredAssets(store, isolatedTime);
+    expect(remove).toHaveBeenCalledExactlyOnceWith(row.objectKey);
+    const failed = await db.brandAsset.findUniqueOrThrow({ where: { id: row.id } });
+    expect(failed).toMatchObject({ status: "DELETING", bytes: 1024 });
+    expect((await readQueueReport(db, { scope: { kind: "organization", ...scope } }, new Date(failed.purgeLeaseUntil!.getTime() - 1))).items).toEqual([]);
+    const retryAt = new Date(failed.purgeLeaseUntil!.getTime() + 1);
+    expect((await readQueueReport(db, { scope: { kind: "organization", ...scope } }, retryAt)).items[0].reason).toBe("EXPIRED_LEASE");
+    // Restore a past lease solely in this fixture, keeping the global purge
+    // cutoff isolated from unrelated synthetic records.
+    await db.brandAsset.update({ where: { id: row.id }, data: { purgeLeaseUntil: new Date(isolatedTime.getTime() - 1) } });
+    remove.mockImplementation(async () => undefined);
+    await purgeExpiredAssets(store, isolatedTime);
+    expect(await db.brandAsset.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({ status: "DELETED", bytes: 0, purgeLeaseUntil: null });
+    expect((await report(scope)).items).toEqual([]);
+  });
   async function publication(scope: Awaited<ReturnType<typeof setup>>, extra: Prisma.SocialPublicationUncheckedUpdateInput = {}) {
     const connection = await db.socialConnection.findFirst({ where: { ...scope, provider: "LinkedIn" } })
       ?? await db.socialConnection.create({ data: { ...scope, provider: "LinkedIn", externalAccountId: crypto.randomUUID(), label: "Private account label", encryptedToken: "never-output-social-secret", permissions: ["private-permission"], createdAt: old } });

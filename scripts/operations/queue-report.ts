@@ -10,6 +10,7 @@ const definitions = [
   { name: "clips", table: "VideoClip", scope: "business", lease: true, waiting: ["QUEUED"], active: ["UPLOADING", "RUNNING", "STORING", "DELETING"] },
   { name: "motion", table: "MotionRender", scope: "business", lease: true, waiting: ["QUEUED"], active: ["RUNNING", "STORING", "DELETING"] },
   { name: "exports", table: "CompositionExport", scope: "business", lease: true, waiting: [], active: ["STORING", "DELETING"] },
+  { name: "asset-retention", table: "BrandAsset", scope: "business", lease: true, leaseColumn: "purgeLeaseUntil", due: "purgeAfter", waiting: ["ARCHIVED"], active: ["DELETING"] },
   { name: "social", table: "SocialPublication", scope: "business", lease: true, due: "scheduledFor", waiting: ["SCHEDULED"], active: ["SUBMITTING"] },
   { name: "social-metrics", table: "SocialPublication", scope: "business", lease: true, leaseColumn: "metricsLeaseUntil", due: "nextMetricsAt", waiting: ["PUBLISHED"], active: ["PUBLISHED"] },
   { name: "social-access", table: "SocialConnection", scope: "business", due: "expiresAt", waiting: ["CONNECTED"], active: [] },
@@ -35,6 +36,8 @@ const attentionStatuses = ["NEEDS_RECONCILIATION", "NEEDS_REVIEW", "REQUIRES_ACT
 const failureStatuses = ["FAILED", "DELETE_FAILED", "PURGE_FAILED", "BLOCKED"];
 const knownStatuses = new Set(["READY", "RECONNECT_REQUIRED", ...attentionStatuses, ...failureStatuses, ...definitions.flatMap(d => [...d.waiting, ...d.active])]);
 const guidance = {
+  RETENTION_STATE_INVALID: "Archived media has incomplete retention metadata. Preserve its private tombstone and quota; investigate the lifecycle record before any authorized repair. This report cannot authorize deletion or restoration.",
+  RETENTION_OVERDUE: "Check retention-worker readiness and private storage access. Confirm deletion through the existing retention lifecycle before releasing quota; do not restore expired media or remove its tombstone.",
   METRICS_STOPPED: "Inspect metric capability, connection authority and failure history. An owner/admin may use the existing bounded metric-recovery action after verification; do not republish, bypass backoff or fabricate missing observations.",
   METRIC_SOURCE_INVALIDATED: "The network source was marked changed. Its observations cannot be re-approved or resumed. Review source provenance and exclude invalid evidence from learning; do not clear the invalidation marker.",
   ACCESS_RENEWAL_REQUIRED: "Ask a workspace owner/admin to reconnect the destination. Do not restore old credentials, restart cancelled posts or resume uncertain lookups automatically.",
@@ -68,7 +71,7 @@ export async function readQueueReport(client: PrismaClient, raw: QueueReportOpti
     const status = column(d.statusColumn ?? "status"), lease = d.lease ? column(d.leaseColumn ?? "leaseUntil") : Prisma.sql`NULL::timestamp`;
     const org = d.scope === "global" ? Prisma.sql`NULL::text` : column("organizationId");
     const business = d.scope === "business" ? column("businessId") : Prisma.sql`NULL::text`;
-    const due = d.name === "social-access" ? column("expiresAt") : d.name === "social-metrics" ? column("nextMetricsAt") : d.name === "video" ? Prisma.sql`COALESCE("nextPollAt", "acceptedAt", "createdAt")`
+    const due = d.name === "asset-retention" ? column("purgeAfter") : d.name === "social-access" ? column("expiresAt") : d.name === "social-metrics" ? column("nextMetricsAt") : d.name === "video" ? Prisma.sql`COALESCE("nextPollAt", "acceptedAt", "createdAt")`
       : d.due ? Prisma.sql`COALESCE(${column(d.due)}, "createdAt")` : column("createdAt");
     const scope = options.scope.kind === "all" ? Prisma.sql`TRUE` : Prisma.sql`${org} = ${options.scope.organizationId} ${options.scope.businessId ? Prisma.sql`AND ${business} = ${options.scope.businessId}` : Prisma.empty}`;
     const provisional = d.name === "video" ? Prisma.sql`"expenseBasis" = 'ACCOUNT_QUOTE_V1' AND "supplierCostMicros" IS NULL AND "status" IN ('READY', 'FAILED')` : Prisma.sql`FALSE`;
@@ -81,18 +84,23 @@ export async function readQueueReport(client: PrismaClient, raw: QueueReportOpti
     const stoppedMetrics = d.name === "social-metrics" ? Prisma.sql`"nextMetricsAt" IS NULL
       AND ("metricsLeaseUntil" IS NULL OR "metricsLeaseUntil" <= ${asOf})
       AND ("metricsFailures" >= 5 OR "errorCode" IN ('METRICS_NOT_ENABLED', 'METRICS_CONTEXT_CHANGED'))` : Prisma.sql`FALSE`;
+    const retentionWindow = d.name === "asset-retention" ? Prisma.sql`"status" IN ('ARCHIVED', 'DELETING')` : Prisma.sql`TRUE`;
+    const invalidRetention = d.name === "asset-retention" ? Prisma.sql`"purgeAfter" IS NULL OR ("status" = 'DELETING' AND "purgeLeaseUntil" IS NULL)` : Prisma.sql`FALSE`;
+    const overdueRetention = d.name === "asset-retention" ? Prisma.sql`"purgeAfter" <= ${overdue} AND ("purgeLeaseUntil" IS NULL OR "purgeLeaseUntil" <= ${asOf})` : Prisma.sql`FALSE`;
     return Prisma.sql`SELECT ${d.name}::text AS queue, "id", ${org} AS "organizationId", ${business} AS "businessId", ${status} AS "status", "createdAt", ${lease} AS "leaseUntil",
-      CASE WHEN ${invalidMetricSource} THEN 'METRIC_SOURCE_INVALIDATED'
+      CASE WHEN ${invalidRetention} THEN 'RETENTION_STATE_INVALID'
+        WHEN ${invalidMetricSource} THEN 'METRIC_SOURCE_INVALIDATED'
         WHEN ${stoppedMetrics} THEN 'METRICS_STOPPED'
         WHEN ${d.name === "social-access"} AND ${status} = 'RECONNECT_REQUIRED' THEN 'ACCESS_RENEWAL_REQUIRED'
         WHEN ${inValues(status, attentionStatuses)} THEN 'UNCERTAIN_OUTCOME'
         WHEN ${provisional} THEN 'SUPPLIER_INVOICE_DUE'
         WHEN ${inValues(status, failureStatuses)} THEN 'FAILED'
         WHEN ${inValues(status, d.active)} AND ${lease} <= ${asOf} THEN 'EXPIRED_LEASE'
+        WHEN ${overdueRetention} THEN 'RETENTION_OVERDUE'
         WHEN (${inValues(status, d.waiting)} OR (${inValues(status, d.active)} AND ${lease} IS NULL))
           AND ${due} <= ${overdue} AND (${lease} IS NULL OR ${lease} <= ${asOf}) THEN 'OVERDUE'
         ELSE NULL END AS reason
-      FROM ${column(d.table)} WHERE ${scope} AND "createdAt" <= ${asOf} AND ${metricWindow}`;
+      FROM ${column(d.table)} WHERE ${scope} AND "createdAt" <= ${asOf} AND ${metricWindow} AND ${retentionWindow}`;
   });
   const rows = await client.$transaction(async tx => {
     await tx.$executeRaw`SET TRANSACTION READ ONLY`;
