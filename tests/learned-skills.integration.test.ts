@@ -165,6 +165,37 @@ suite("feedback to versioned business copy skills", () => {
   const b = await setup(); expect(await manageLearnedSkills(b.scope, { action: "reflect-skills" })).toMatchObject({ created: 1 });
   expect(await manageLearnedSkills(b.scope, { action: "reflect-skills" })).toMatchObject({ created: 0 }); expect(await memories(b.scope)).toEqual([]);
  });
+ it.each([null, "", "   "])("does not propose a skill from missing reviewer identity (%s)", async approvedBy => {
+  const a = await setup();
+  await db.creativeRevision.update({ where: { id: a.revisions[0] }, data: { approvedBy } });
+  expect(await manageLearnedSkills(a.scope, { action: "reflect-skills" })).toMatchObject({ created: 0 });
+  expect(await memories(a.scope)).toEqual([]);
+ });
+ it.each([null, "", "   ", "different-reviewer"])("invalidates active and proposed evidence when reviewer becomes %s", async approvedBy => {
+  const a = await setup(), { previous, proposed } = await replacement(a.scope);
+  await db.creativeRevision.update({ where: { id: a.revisions[0] }, data: { approvedBy } });
+  expect(await memories(a.scope)).toEqual([]);
+  expect((await readLearnedSkills(a.scope)).skills.every(s => !s.valid)).toBe(true);
+  await expect(manageLearnedSkills(a.scope, { action: "activate-skill", proposalId: proposed.id })).rejects.toThrow("examples changed");
+  await manageLearnedSkills(a.scope, { action: "reflect-skills" });
+  expect(await db.learningProposal.findUniqueOrThrow({ where: { id: previous.id } })).toMatchObject({ status: "SKILL_EXPIRED", memoryId: null });
+  expect(await db.memory.findUnique({ where: { id: previous.memoryId! } })).toBeNull();
+  // Changed valid evidence may propose a replacement, never activate it silently.
+  expect(await memories(a.scope)).toEqual([]);
+ });
+ it("rechecks source reviewer before worker submission and releases the unused reservation", async () => {
+  const a = await setup(); await activate(a.scope);
+  const q = await actOnProduction(a.scope, { action: "quote", itemId: a.itemId, mode: "initial", direction: "Show thoughtful architecture for homeowners." });
+  const quote = (q as { quote: { id: string } }).quote;
+  await actOnProduction(a.scope, { action: "accept", quoteId: quote.id });
+  await db.job.updateMany({ where: { quoteId: quote.id }, data: { availableAt: new Date(0) } });
+  await db.creativeRevision.update({ where: { id: a.revisions[0] }, data: { approvedBy: null } });
+  const transport = vi.fn(async () => ({ id: "must-not-submit", text: JSON.stringify(copy), usage: { input_tokens: 100, output_tokens: 100 } }));
+  await runOneJob(transport);
+  expect(transport).not.toHaveBeenCalled();
+  expect(await db.creativeRevision.count({ where: { itemId: a.itemId } })).toBe(0);
+  expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } })).toMatchObject({ available: 500, held: 0 });
+ });
  it("automatically proposes a rule on approval and prunes it when evidence expires", async () => {
   const a = await setup();
   const revision = await db.creativeRevision.update({ where: { id: a.revisions[0] }, data: { status: "READY", approvedAt: null } });

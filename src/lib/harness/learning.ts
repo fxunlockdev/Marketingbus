@@ -20,7 +20,7 @@ async function episodes(tx: Prisma.TransactionClient, scope: Scope, brandVersion
   const groups = new Map<string, { rule: z.infer<typeof learnedRule>; episodes: Episode[] }>();
   for (const item of items) {
     const after = item.revisions[0], current = creativeSchema.safeParse(after?.content);
-    if (!after || after.status !== "APPROVED" || !current.success || !after.approvedAt || after.approvedAt.getTime() > now || now - after.approvedAt.getTime() > 90 * DAY) continue;
+    if (!after || after.status !== "APPROVED" || !current.success || !after.approvedBy?.trim() || !after.approvedAt || after.approvedAt.getTime() > now || now - after.approvedAt.getTime() > 90 * DAY) continue;
     const before = item.revisions.find(r => r.version < after.version && r.feedback.trim());
     const original = creativeSchema.safeParse(before?.content);
     if (!before || !original.success) continue;
@@ -29,7 +29,9 @@ async function episodes(tx: Prisma.TransactionClient, scope: Scope, brandVersion
       if (!rule.success || followsRule(id, original.data) || !followsRule(id, current.data)) continue;
       const key = `${item.channel}:${id}`, group = groups.get(key) ?? { rule: rule.data, episodes: [] };
       if (group.episodes.length < 10) group.episodes.push({ itemId: item.id, beforeId: before.id, afterId: after.id,
-        fingerprint: hash({ feedback: before.feedback, before: original.data, after: current.data, approvedAt: after.approvedAt.toISOString() }) });
+        // Bind the retained decision, not just its status/time. Earlier hashes
+        // without a reviewer must be reflected and explicitly activated again.
+        fingerprint: hash({ feedback: before.feedback, before: original.data, after: current.data, approvedAt: after.approvedAt.toISOString(), approvedBy: after.approvedBy }) });
       groups.set(key, group);
     }
   }

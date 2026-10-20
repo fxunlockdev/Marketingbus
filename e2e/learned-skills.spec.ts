@@ -12,12 +12,13 @@ test("feedback skills can be reviewed, activated and retired without a model cal
   const created = await page.request.post("/api/businesses", { headers, data: { name: "Design Studio", offering: "Architecture consultations", audience: "Homeowners", goal: "Book consultations", channels: ["LinkedIn"] } });
   expect(created.ok()).toBe(true); const { id } = await created.json();
   const business = await db.business.findUniqueOrThrow({ where: { id } }); organizationId = business.organizationId;
+  const reviewer = await db.user.findUniqueOrThrow({ where: { email } });
   expect((await page.request.post(`/api/businesses/${id}`, { headers, data: { action: "confirm", version: 1 } })).ok()).toBe(true);
   const plan = await db.productionPlan.create({ data: { businessId: id, organizationId, brandVersion: 1, title: "Synthetic corrections", creditCeiling: 100 } });
   const content = { headline: "Considered spaces", caption: "Architecture for your home.", cta: "Meet us", visualDirection: "Editorial layout with approved brand colors.", rationale: "Show the business offering clearly.", evidenceUsed: [] };
   for (let i = 0; i < 2; i++) await db.productionItem.create({ data: { organizationId, planId: plan.id, title: "Corrected creative", format: "static", channel: "LinkedIn", brief: {}, revisions: { create: [
    { version: 1, content: { ...content, caption: `${content.caption} #Design` }, status: "SUPERSEDED", feedback: "No hashtags." },
-   { version: 2, content, status: "APPROVED", approvedAt: new Date() },
+   { version: 2, content, status: "APPROVED", approvedAt: new Date(), approvedBy: reviewer.id },
   ] } } });
   await page.goto("/studio"); await page.getByRole("button", { name: "Memory", exact: true }).click();
   const panel = page.locator("section").filter({ has: page.getByRole("heading", { name: "Skills learned from your corrections", exact: true }) });
@@ -47,6 +48,13 @@ test("feedback skills can be reviewed, activated and retired without a model cal
   expect(graphResponse.ok()).toBe(true); expect(graphResponse.headers()["cache-control"]).toContain("no-store");
   const graph = await graphResponse.json(); expect(graph.businessId).toBe(id);
   expect(graph.edges.some((e: { relation: string }) => e.relation === "SUPPORTED_BY")).toBe(true);
+  const source = await db.creativeRevision.findFirstOrThrow({ where: { organizationId, version: 2 } });
+  await db.creativeRevision.update({ where: { id: source.id }, data: { approvedBy: null } });
+  const invalidated = await (await page.request.get(`/api/businesses/${id}/knowledge-graph?task=copy&channel=LinkedIn`)).json();
+  expect(invalidated.nodes.some((n: { kind: string }) => n.kind === "skill")).toBe(false);
+  expect(invalidated.fingerprint).not.toBe(graph.fingerprint);
+  // Restore the exact synthetic decision for the remaining retirement journey.
+  await db.creativeRevision.update({ where: { id: source.id }, data: { approvedBy: reviewer.id } });
   expect((await page.request.get(`/api/businesses/${id}/knowledge-graph?channel=unconfigured`)).status()).toBe(400);
   const anonymous = await page.context().browser()!.newContext();
   try { expect((await anonymous.request.get(`http://127.0.0.1:3000/api/businesses/${id}/knowledge-graph`)).status()).toBe(401); } finally { await anonymous.close(); }

@@ -32,4 +32,10 @@ Legacy quotes without a preference fingerprint require a fresh quote; already qu
 
 ## Acceptance boundary
 
+### Corrected-copy skill reviewer binding
+
+Runtime `studio-v57-skill-reviewer` requires a nonblank retained reviewer identity before a corrected creative can support a deterministic copy rule. The evidence fingerprint includes that identity alongside the before/after content, feedback and approval time. Clearing or changing the reviewer invalidates pending activation, active recall and the business knowledge graph; the existing worker context check stops stale queued work before provider submission and releases its unused customer reservation. Reflection expires stale proposals and removes only their scoped skill memories. It can propose new evidence but never activates it automatically.
+
+Earlier deterministic-skill fingerprints omitted the reviewer and therefore no longer validate. Use “Find lessons in approved corrections,” then explicitly review/activate the replacement rule. Historical proposals and delivered work remain; no migration, automatic evidence rewrite or new provider call occurs. Deploy matching web and worker runtimes. This binds the stored historical decision, not a cryptographic reviewer attestation or a check of that person's current membership. It does not infer media quality, semantic correctness or performance improvement from approval.
+
 Automated tests use synthetic metrics in an explicitly local database and injected reasoning responses. The application has no fake production social adapter. Actual platform ingestion, paid/organic metric mappings, randomized outcome trials, mixed-media autopilot and professional creative-quality acceptance remain separate unfinished work.
