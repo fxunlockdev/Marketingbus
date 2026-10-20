@@ -30,4 +30,18 @@ describe("simple onboarding", () => {
     expect(result).toContain("Actual &lt;b&gt;offering&lt;/b&gt;");
     expect(result).not.toContain("Approved supporting facts");
   });
+  it("provides usable writing and channel guidance without inventing brand assets or proof", () => {
+    const result = brandBookHtml(brandInput.parse({
+      name: "Example Studio", offering: "Architecture consultations", audience: "Homeowners",
+      goal: "Get enquiries", tone: "Calm, clear and considered", channels: ["LinkedIn"],
+    }), true);
+    expect(result).toContain("Use short sentences");
+    expect(result).toContain("Avoid exaggerated adjectives");
+    expect(result).toContain("Open with a useful business insight");
+    expect(result).not.toContain("Lead with one strong, relevant image");
+    expect(result).toContain("Add verified supporting facts");
+    expect(result).toContain("not a verified colour extracted from your website");
+    expect(result).not.toContain("Typography: Figtree");
+    expect(result).toContain("Before anything is published");
+  });
 });
