@@ -1,6 +1,8 @@
 // Fixed, customer-safe messages only. Never expose upstream bodies, URLs or credentials.
 const messages: Record<string, string> = {
   IMPORT_INTERRUPTED: "The website import was interrupted. It was not retried automatically.",
+  SOURCE_AUTHORITY_CHANGED: "The person who requested this import no longer has editing permission. An authorized editor can submit a new import.",
+  SOURCE_CONTEXT_CHANGED: "The saved website request changed. Review the address and submit a new import.",
   SCRAPER_AUTH_REQUIRED: "Website import needs an administrator to check the scraper connection. Your business details are saved.",
   SCRAPER_BUSY: "The website importer is busy. Please try again later.",
   SCRAPER_UNAVAILABLE: "The website importer is temporarily unavailable. Your business details are saved.",

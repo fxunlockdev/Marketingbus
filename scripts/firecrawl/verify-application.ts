@@ -23,7 +23,9 @@ async function main() {
     const a = await db.organization.create({ data: { name: "Disposable import acceptance A" } });
     const b = await db.organization.create({ data: { name: "Disposable import acceptance B" } });
     const business = await db.business.create({ data: { organizationId: a.id, name: "Website intake acceptance" } });
-    const scope = { organizationId: a.id, businessId: business.id, actorId: "local-acceptance" };
+    const actor = await db.user.create({ data: { email: "scraper-acceptance@example.test", name: "Disposable scraper reviewer",
+      passwordHash: "not-a-login", memberships: { create: { organizationId: a.id, role: "OWNER" } } } });
+    const scope = { organizationId: a.id, businessId: business.id, actorId: actor.id };
     const request = { action: "website", url: "https://firecrawl-test-site.vercel.app/", rightsConfirmed: true };
     const first = await manageSource(scope, request);
     assert.ok(first.sourceId);
