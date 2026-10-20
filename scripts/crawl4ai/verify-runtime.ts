@@ -1,5 +1,6 @@
 // Disposable, real-engine acceptance. No application/provider credentials or user data.
-// Pull the pinned image first; this script never installs or creates hosted services.
+// Pull the pinned base first; build the exact dedicated gateway, never the upstream API.
+// This script never installs or creates hosted services.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -8,25 +9,25 @@ import { readWebsite } from "../../src/lib/knowledge/scraper-client";
 
 const image = "unclecode/crawl4ai@sha256:636a6f9e5127f54771f14f709bf1b95693aacc30512426b26d09768b0269f1f4";
 const name = `marketingbus-crawl4ai-check-${randomBytes(4).toString("hex")}`;
+const gatewayImage = `${name}:local`;
 const token = randomBytes(32).toString("hex");
 const docker = (args: string[]) => execFileSync("docker", args, {
   encoding: "utf8", timeout: 60000, stdio: ["ignore", "pipe", "pipe"],
 }).trim();
 const check = (label: string) => console.log(`PASS ${label}`);
-let created = false;
+let created = false, built = false;
 
 async function main() {
   assert.equal(process.argv.length, 2, "This local check accepts no targets or credentials");
   docker(["image", "inspect", image]);
+  docker(["build", "--platform", "linux/amd64", "--pull=false", "-t", gatewayImage,
+    fileURLToPath(new URL(".", import.meta.url))]);
+  built = true;
   docker(["create", "--name", name, "--platform", "linux/amd64",
-    "--cap-drop=ALL", "--security-opt=no-new-privileges", "--security-opt",
-    `seccomp=${fileURLToPath(new URL("../firecrawl/seccomp_profile.json", import.meta.url))}`,
-    "--memory=2g", "--cpus=1", "--pids-limit=256", "--shm-size=256m",
+    "--cap-drop=ALL", "--security-opt=no-new-privileges",
+    "--memory=1g", "--cpus=1", "--pids-limit=256",
     "--ulimit", "core=0", "-p", "127.0.0.1::11235",
-    "-e", `CRAWL4AI_API_TOKEN=${token}`, "-e", "CRAWL4AI_CHROMIUM_SANDBOX=true",
-    "-e", "CRAWL4AI_HOOKS_ENABLED=false", "-e", "CRAWL4AI_EXECUTE_JS_ENABLED=false",
-    "-e", "CRAWL4AI_ALLOW_INTERNAL_URLS=false", "-e", "CRAWL4AI_ALLOW_INSECURE_TLS=false",
-    image]);
+    "-e", `CRAWL4AI_API_TOKEN=${token}`, gatewayImage]);
   created = true;
   docker(["start", name]);
   const address = docker(["port", name, "11235/tcp"]);
@@ -37,8 +38,12 @@ async function main() {
   for (let attempt = 0; attempt < 60; attempt++) {
     try {
       const response = await fetch(new URL("health", base), { headers, signal: AbortSignal.timeout(1000) });
-      await response.body?.cancel();
-      if (response.ok) { ready = true; break; }
+      if (response.ok) {
+        const state = await response.json();
+        assert.equal(state.mode, "html-only", "Acceptance must target the deployed HTML reader");
+        ready = state.status === "ready";
+        if (ready) break;
+      } else await response.body?.cancel();
     } catch { /* bounded startup polling */ }
     await new Promise(resolve => setTimeout(resolve, 500));
   }
@@ -48,14 +53,21 @@ async function main() {
     console.error(`${logs.stdout ?? ""}\n${logs.stderr ?? ""}`.replaceAll(token, "[redacted]").slice(-6000));
     throw Error("Crawl4AI did not become ready within the local startup deadline");
   }
-  check("pinned engine starts with authenticated loopback-only host access");
+  check("dedicated HTML gateway starts with loopback-only host access at the hosted resource limit");
   const denied = await fetch(new URL("crawl", base), {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ urls: ["https://example.com/"] }), signal: AbortSignal.timeout(5000),
   });
   await denied.body?.cancel();
   assert.ok([401, 403].includes(denied.status), "Unauthenticated crawl must be rejected");
-  check("anonymous requests cannot start a browser");
+  check("anonymous requests cannot start extraction");
+  const hooks = await fetch(new URL("execute_js", base), {
+    method: "POST", headers, body: JSON.stringify({ url: "https://example.com/", script: "1" }),
+    signal: AbortSignal.timeout(5000),
+  });
+  await hooks.body?.cancel();
+  assert.equal(hooks.status, 404);
+  check("general-purpose JavaScript API is absent");
 
   const page = await readWebsite(base, "https://example.com/", headers, fetch, "crawl4ai");
   assert.ok(page.markdown.includes("Example Domain"));
@@ -91,5 +103,9 @@ main().catch(error => {
   if (created) {
     try { docker(["rm", "-f", name]); }
     catch { console.error(`Local test container requires cleanup: ${name}`); process.exitCode = 1; }
+  }
+  if (built) {
+    try { docker(["image", "rm", gatewayImage]); }
+    catch { console.error(`Local test image requires cleanup: ${gatewayImage}`); process.exitCode = 1; }
   }
 });

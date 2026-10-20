@@ -37,3 +37,11 @@ it("pins the isolated image and excludes application secrets from the build cont
   expect(dockerfile).toContain("HEALTHCHECK NONE");
   expect(readFileSync("scripts/crawl4ai/.dockerignore", "utf8").trim().split("\n")).toEqual(["*", "!Dockerfile", "!config.yml", "!start.sh", "!html_worker.py", "!html_server.py"]);
 });
+it("accepts the same dedicated HTML gateway and resource limit as production", () => {
+  const acceptance = readFileSync("scripts/crawl4ai/verify-runtime.ts", "utf8");
+  expect(acceptance).toContain('docker(["build", "--platform", "linux/amd64", "--pull=false", "-t", gatewayImage');
+  expect(acceptance).toContain('"--memory=1g", "--cpus=1"');
+  expect(acceptance).toContain('assert.equal(state.mode, "html-only"');
+  expect(acceptance).toContain('docker(["image", "rm", gatewayImage])');
+  expect(acceptance).not.toContain("seccomp_profile.json");
+});
