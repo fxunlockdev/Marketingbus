@@ -4,6 +4,7 @@ import { actOnProduction, type Scope } from "../src/lib/production/service";
 import { runOneJob as processJob, recoverExpiredLeases } from "../src/lib/production/worker";
 import { reconcileFailedJob } from "../src/lib/production/reconcile";
 import { heartbeat, HEARTBEAT_TTL_MS } from "../src/lib/production/readiness";
+import { QUALITY_VERSION } from "../src/lib/production/quality";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (process.env.TEST_DATABASE_URL && (process.env.DATABASE_URL !== process.env.TEST_DATABASE_URL || !["localhost", "127.0.0.1"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Production tests require an explicitly local database.");
 const creative = { headline: "Room for your life", caption: "Considered architecture for the way you live. Book a consultation.", cta: "Meet the studio", visualDirection: "Editorial type, generous space, approved brand accent.", rationale: "Make the service tangible without unsupported performance claims.", evidenceUsed: [] };
@@ -250,6 +251,36 @@ suite("production authorization, review and worker integration", () => {
     await db.creativeRevision.create({ data: { itemId, organizationId: scope.organizationId, version: 1, status: "READY", content: { ...creative, caption: "Book this Saturday." } } });
     await expect(actOnProduction(scope, { action: "approve", itemId, version: 1 })).rejects.toThrow("unconfirmed");
     await expect(actOnProduction(scope, { action: "edit", itemId, version: 1, headline: creative.headline, caption: "This Saturday", cta: creative.cta })).rejects.toThrow("unconfirmed");
+  });
+  it.each([
+    ["Book for USD 100", "100 consultations delivered. USD payments accepted."],
+    ["January 12, 2028", "January 12, 2027. Separate plans for 2028."],
+    ["Saturday, January 12", "Saturday workshops. January 12 consultations."],
+  ])("withholds recombined specifics %s, preserves accounting and rechecks old/manual copy", async (caption, proof) => {
+    const a = await setup(), b = await setup();
+    await db.business.update({ where: { id: a.scope.businessId }, data: { proof } });
+    await db.business.update({ where: { id: b.scope.businessId }, data: { proof: caption } });
+    const q = await quote(a.scope, a.itemId);
+    await actOnProduction(a.scope, { action: "accept", quoteId: q.id });
+    const call = vi.fn(async () => ({ ...await fixtureReasoner(), text: JSON.stringify({ ...creative, caption }) }));
+    await runOneJob(call); await runOneJob(call);
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(await db.job.findFirstOrThrow({ where: { businessId: a.scope.businessId } })).toMatchObject({ status: "FAILED", errorCode: "QUALITY_CHECK_FAILED",
+      result: { creditsConsumed: 0, supplierCostMicros: 1000, quality: { version: QUALITY_VERSION, eligible: false } } });
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } })).toMatchObject({ available: 500, held: 0 });
+    expect(await db.creativeRevision.count({ where: { itemId: a.itemId } })).toBe(0);
+    // Simulate retained pre-upgrade copy; another tenant's exact evidence cannot authorize it.
+    await db.creativeRevision.create({ data: { itemId: a.itemId, organizationId: a.scope.organizationId, version: 1, status: "READY", content: { ...creative, caption } } });
+    await expect(actOnProduction(a.scope, { action: "approve", itemId: a.itemId, version: 1 })).rejects.toThrow("unconfirmed");
+    await expect(actOnProduction(a.scope, { action: "edit", itemId: a.itemId, version: 1, headline: creative.headline, caption, cta: creative.cta })).rejects.toThrow("unconfirmed");
+    expect(await db.creativeRevision.count({ where: { itemId: a.itemId } })).toBe(1);
+    expect(await db.calendarEntry.count({ where: { itemId: a.itemId } })).toBe(0);
+    // The same transport succeeds only in the business that actually confirmed the span.
+    const supported = await quote(b.scope, b.itemId);
+    await actOnProduction(b.scope, { action: "accept", quoteId: supported.id }); await runOneJob(call);
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(await db.creativeRevision.findFirstOrThrow({ where: { itemId: b.itemId } })).toMatchObject({ status: "READY", content: { caption } });
+    await actOnProduction(b.scope, { action: "approve", itemId: b.itemId, version: 1 });
   });
   it("checks brand freshness before submission and releases a stale queued job", async () => {
     const { scope, itemId } = await setup(); const q = await quote(scope, itemId);

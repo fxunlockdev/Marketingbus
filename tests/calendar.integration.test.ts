@@ -83,6 +83,24 @@ suite("cross-plan calendar, scope and optimistic reservation edits", () => {
     expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
     expect(await db.auditEvent.count({ where: { businessId: f.scope.businessId, action: "CALENDAR_PLANNED" } })).toBe(1);
   });
+  it.each([
+    ["Book for USD 100", "100 consultations delivered. USD payments accepted."],
+    ["January 12, 2028", "January 12, 2027. Separate plans for 2028."],
+  ])("blocks moving legacy approved %s without changing reservations or credits", async (caption, proof) => {
+    const f = await fixture(), plan = await f.plan("Legacy approval");
+    await db.business.update({ where: { id: f.scope.businessId }, data: { proof } });
+    await db.creativeRevision.update({ where: { id: plan.items[0].revisions[0].id }, data: { content: { ...content, caption } } });
+    const entry = (await readCalendar(f.scope, query)).entries[0];
+    const before = await db.calendarEntry.findUniqueOrThrow({ where: { id: entry.id } });
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } });
+    await expect(move(f.scope, entry)).rejects.toThrow("unconfirmed");
+    expect(await db.calendarEntry.findUniqueOrThrow({ where: { id: entry.id } })).toEqual(before);
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: f.scope.organizationId } })).toEqual(wallet);
+    expect(await db.auditEvent.count({ where: { businessId: f.scope.businessId, action: "CALENDAR_PLANNED" } })).toBe(0);
+    // Unsafe copy must not trap the owner into retaining an internal reservation.
+    await actOnProduction(f.scope, { action: "unschedule", itemId: entry.itemId, expectedCalendar: { id: entry.id, version: entry.version } });
+    expect(await db.calendarEntry.count({ where: { itemId: entry.itemId } })).toBe(0);
+  });
   it("denies viewers and stale approvals but permits removing an obsolete internal reservation", async () => {
     const f = await fixture(); const plan = await f.plan("Review"); const entry = (await readCalendar(f.scope, query)).entries[0];
     const memberKey = { organizationId: f.scope.organizationId, userId: f.scope.actorId };

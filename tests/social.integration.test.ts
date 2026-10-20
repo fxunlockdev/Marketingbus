@@ -187,6 +187,25 @@ suite("social publishing and analytics isolation", () => {
     const post = await queue(ctx, f.adapter);
     return { ctx, f, post };
   }
+  it.each([
+    ["Book for USD 100", "100 consultations delivered. USD payments accepted."],
+    ["January 12, 2028", "January 12, 2027. Separate plans for 2028."],
+  ])("refuses recombined specifics %s at scheduling and before any publication call", async (caption, partialFacts) => {
+    const ctx = await setup(), provider = adapter();
+    await db.creativeRevision.update({ where: { id: ctx.item.revisions[0].id }, data: { content: { ...creative, caption } } });
+    await db.business.update({ where: { id: ctx.scope.businessId }, data: { proof: partialFacts } });
+    await expect(manageSocial(ctx.scope, ctx.action, { Facebook: provider })).rejects.toThrow("factual checks");
+    expect(await db.socialPublication.count({ where: { businessId: ctx.scope.businessId } })).toBe(0);
+    await db.business.update({ where: { id: ctx.scope.businessId }, data: { proof: caption } });
+    const post = await queue(ctx, provider);
+    // Retained scheduled copy must pass today's guard even if its version/approval
+    // still match. Do not let a pre-upgrade lexical acceptance authorize a post.
+    await db.business.update({ where: { id: ctx.scope.businessId }, data: { proof: partialFacts } });
+    await runOnePublication({ Facebook: provider }); await runOnePublication({ Facebook: provider });
+    expect(provider.publish).not.toHaveBeenCalled();
+    expect(provider.reconcile).not.toHaveBeenCalled();
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "CANCELLED", errorCode: "FACT_CHECK_FAILED", externalPostId: null });
+  });
   it("publishes a verified Facebook text receipt without inventing metrics or resending", async () => {
     const { f, post } = await facebookQueue();
     await runOnePublication({ Facebook: f.adapter });

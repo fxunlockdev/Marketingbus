@@ -11,7 +11,7 @@ test("review, free editing, exact-version calendar and paid gates work in the br
   let organizationId: string | undefined;
   try {
     const registered = await page.request.post("/api/auth/register", { headers, data: { name: "Review Fixture", email, password: "Test-only-password-2026!" } }); expect(registered.ok()).toBe(true);
-    const created = await page.request.post("/api/businesses", { headers, data: { name: "Review Fixture Studio", offering: "Architecture consultations", audience: "Homeowners", goal: "Book consultations", channels: ["Instagram"] } }); expect(created.ok()).toBe(true);
+    const created = await page.request.post("/api/businesses", { headers, data: { name: "Review Fixture Studio", offering: "Architecture consultations", proof: "100 consultations delivered. USD payments accepted.", audience: "Homeowners", goal: "Book consultations", channels: ["Instagram"] } }); expect(created.ok()).toBe(true);
     const { id } = await created.json();
     organizationId = (await db.business.findUniqueOrThrow({ where: { id } })).organizationId;
     await page.request.post(`/api/businesses/${id}`, { headers, data: { action: "confirm", version: 1 } });
@@ -32,6 +32,12 @@ test("review, free editing, exact-version calendar and paid gates work in the br
     await expect(page.getByText("Instagram · approved version 1")).toBeVisible();
     await page.getByRole("button", { name: "Review inbox", exact: true }).click();
     await page.getByRole("button", { name: "Edit copy yourself · no credits" }).click();
+    await page.getByLabel("Caption", { exact: true }).fill("Book for USD 100");
+    await page.getByRole("button", { name: "Save new copy version" }).click();
+    await expect(page.getByRole("main").getByRole("alert")).toContainText("unconfirmed dates, numbers or claims");
+    expect(await db.creativeRevision.count({ where: { itemId: item.id } })).toBe(1);
+    expect(await db.calendarEntry.count({ where: { itemId: item.id } })).toBe(1);
+    await page.getByLabel("Caption", { exact: true }).fill("Fixture copy for testing. Book a design consultation.");
     await page.getByLabel("Headline", { exact: true }).fill("Made for your everyday");
     await page.getByRole("button", { name: "Save new copy version" }).click();
     await expect(page.getByRole("button", { name: "Approve version 2", exact: true })).toBeVisible();
