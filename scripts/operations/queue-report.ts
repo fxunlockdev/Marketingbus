@@ -7,9 +7,9 @@ const definitions = [
   { name: "brand", table: "BrandAnalysis", scope: "business", lease: true, due: "acceptedAt", waiting: ["QUEUED"], active: ["RUNNING", "SUBMITTING"] },
   { name: "images", table: "ImageGeneration", scope: "business", lease: true, due: "acceptedAt", waiting: ["QUEUED"], active: ["RUNNING", "SUBMITTING"] },
   { name: "video", table: "VideoGeneration", scope: "business", lease: true, due: "nextPollAt", waiting: ["QUEUED", "POLLING"], active: ["RUNNING", "SUBMITTING", "INGESTING", "POLLING"] },
-  { name: "clips", table: "VideoClip", scope: "business", lease: true, waiting: ["QUEUED"], active: ["UPLOADING", "RUNNING", "STORING", "DELETING"] },
-  { name: "motion", table: "MotionRender", scope: "business", lease: true, waiting: ["QUEUED"], active: ["RUNNING", "STORING", "DELETING"] },
-  { name: "exports", table: "CompositionExport", scope: "business", lease: true, waiting: [], active: ["STORING", "DELETING"] },
+  { name: "clips", table: "VideoClip", scope: "business", lease: true, retentionExcluded: ["DELETED", "UPLOADING", "RUNNING", "STORING"], waiting: ["QUEUED"], active: ["UPLOADING", "RUNNING", "STORING", "DELETING"] },
+  { name: "motion", table: "MotionRender", scope: "business", lease: true, retentionExcluded: ["DELETED", "CANCELLED", "QUEUED", "RUNNING", "STORING"], waiting: ["QUEUED"], active: ["RUNNING", "STORING", "DELETING"] },
+  { name: "exports", table: "CompositionExport", scope: "business", lease: true, retentionExcluded: ["DELETED"], waiting: [], active: ["STORING", "DELETING"] },
   { name: "asset-retention", table: "BrandAsset", scope: "business", lease: true, leaseColumn: "purgeLeaseUntil", due: "purgeAfter", waiting: ["ARCHIVED"], active: ["DELETING"] },
   { name: "social", table: "SocialPublication", scope: "business", lease: true, due: "scheduledFor", waiting: ["SCHEDULED"], active: ["SUBMITTING"] },
   { name: "social-metrics", table: "SocialPublication", scope: "business", lease: true, leaseColumn: "metricsLeaseUntil", due: "nextMetricsAt", waiting: ["PUBLISHED"], active: ["PUBLISHED"] },
@@ -23,7 +23,7 @@ const definitions = [
   { name: "payments", table: "BillingEvent", scope: "global", due: "availableAt", waiting: ["PENDING", "WAITING"], active: [] },
   { name: "email", table: "EmailOutbox", scope: "global", lease: true, due: "availableAt", waiting: ["QUEUED"], active: ["SENDING"] },
 ] as const;
-type Definition = { name: string; table: string; scope: string; lease?: boolean; statusColumn?: string; leaseColumn?: string; due?: string; waiting: readonly string[]; active: readonly string[] };
+type Definition = { name: string; table: string; scope: string; lease?: boolean; statusColumn?: string; leaseColumn?: string; due?: string; retentionExcluded?: readonly string[]; waiting: readonly string[]; active: readonly string[] };
 const identifier = z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/);
 const scopeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("all") }).strict(),
@@ -34,10 +34,11 @@ export type QueueReportOptions = z.input<typeof optionsSchema>;
 const cursorSchema = z.object({ version: z.literal(1), scope: scopeSchema, overdueMinutes: z.number().int(), asOf: z.iso.datetime(), createdAt: z.iso.datetime(), queue: z.string().max(30), id: identifier }).strict();
 const attentionStatuses = ["NEEDS_RECONCILIATION", "NEEDS_REVIEW", "REQUIRES_ACTION", "UNKNOWN", "RECONCILE"];
 const failureStatuses = ["FAILED", "DELETE_FAILED", "PURGE_FAILED", "BLOCKED"];
-const knownStatuses = new Set(["READY", "RECONNECT_REQUIRED", ...attentionStatuses, ...failureStatuses, ...definitions.flatMap(d => [...d.waiting, ...d.active])]);
+const knownStatuses = new Set(["READY", "APPROVED", "REJECTED", "RECONNECT_REQUIRED", ...attentionStatuses, ...failureStatuses, ...definitions.flatMap(d => [...d.waiting, ...d.active])]);
 const guidance = {
-  RETENTION_STATE_INVALID: "Archived media has incomplete retention metadata. Preserve its private tombstone and quota; investigate the lifecycle record before any authorized repair. This report cannot authorize deletion or restoration.",
+  RETENTION_STATE_INVALID: "Media pending deletion has incomplete retention metadata. Preserve its private tombstone and quota; investigate the lifecycle record before any authorized repair. This report cannot authorize deletion or restoration.",
   RETENTION_OVERDUE: "Check retention-worker readiness and private storage access. Confirm deletion through the existing retention lifecycle before releasing quota; do not restore expired media or remove its tombstone.",
+  RETENTION_PUBLICATION_HOLD: "Expired export is intentionally retained for an in-flight or uncertain publication. Resolve the publication through read-back reconciliation before cleanup; do not delete media, release quota or resubmit the post from this report.",
   METRICS_STOPPED: "Inspect metric capability, connection authority and failure history. An owner/admin may use the existing bounded metric-recovery action after verification; do not republish, bypass backoff or fabricate missing observations.",
   METRIC_SOURCE_INVALIDATED: "The network source was marked changed. Its observations cannot be re-approved or resumed. Review source provenance and exclude invalid evidence from learning; do not clear the invalidation marker.",
   ACCESS_RENEWAL_REQUIRED: "Ask a workspace owner/admin to reconnect the destination. Do not restore old credentials, restart cancelled posts or resume uncertain lookups automatically.",
@@ -85,8 +86,19 @@ export async function readQueueReport(client: PrismaClient, raw: QueueReportOpti
       AND ("metricsLeaseUntil" IS NULL OR "metricsLeaseUntil" <= ${asOf})
       AND ("metricsFailures" >= 5 OR "errorCode" IN ('METRICS_NOT_ENABLED', 'METRICS_CONTEXT_CHANGED'))` : Prisma.sql`FALSE`;
     const retentionWindow = d.name === "asset-retention" ? Prisma.sql`"status" IN ('ARCHIVED', 'DELETING')` : Prisma.sql`TRUE`;
-    const invalidRetention = d.name === "asset-retention" ? Prisma.sql`"purgeAfter" IS NULL OR ("status" = 'DELETING' AND "purgeLeaseUntil" IS NULL)` : Prisma.sql`FALSE`;
-    const overdueRetention = d.name === "asset-retention" ? Prisma.sql`"purgeAfter" <= ${overdue} AND ("purgeLeaseUntil" IS NULL OR "purgeLeaseUntil" <= ${asOf})` : Prisma.sql`FALSE`;
+    const invalidRetention = d.name === "asset-retention" ? Prisma.sql`"purgeAfter" IS NULL OR ("status" = 'DELETING' AND "purgeLeaseUntil" IS NULL)`
+      : d.retentionExcluded ? Prisma.sql`${status} = 'DELETING' AND ${lease} IS NULL` : Prisma.sql`FALSE`;
+    // Match each existing purge worker's eligibility, including audio in VideoClip.
+    // Processing attention is separate: an old creation time is not a retention deadline.
+    const overdueRetention = d.name === "asset-retention" || d.retentionExcluded
+      ? Prisma.sql`"purgeAfter" <= ${overdue} AND (${lease} IS NULL OR ${lease} <= ${asOf})
+        ${d.retentionExcluded ? Prisma.sql`AND NOT (${inValues(status, d.retentionExcluded)})` : Prisma.empty}` : Prisma.sql`FALSE`;
+    const publicationHold = d.name === "exports" ? Prisma.sql`${overdueRetention} AND EXISTS (
+      SELECT 1 FROM "SocialPublication" p WHERE p."organizationId" = "CompositionExport"."organizationId"
+        AND p."businessId" = "CompositionExport"."businessId"
+        AND p."payload"->>'mediaExportId' = "CompositionExport"."id"
+        AND p."status" IN ('SUBMITTING', 'NEEDS_RECONCILIATION')
+    )` : Prisma.sql`FALSE`;
     return Prisma.sql`SELECT ${d.name}::text AS queue, "id", ${org} AS "organizationId", ${business} AS "businessId", ${status} AS "status", "createdAt", ${lease} AS "leaseUntil",
       CASE WHEN ${invalidRetention} THEN 'RETENTION_STATE_INVALID'
         WHEN ${invalidMetricSource} THEN 'METRIC_SOURCE_INVALIDATED'
@@ -95,6 +107,7 @@ export async function readQueueReport(client: PrismaClient, raw: QueueReportOpti
         WHEN ${inValues(status, attentionStatuses)} THEN 'UNCERTAIN_OUTCOME'
         WHEN ${provisional} THEN 'SUPPLIER_INVOICE_DUE'
         WHEN ${inValues(status, failureStatuses)} THEN 'FAILED'
+        WHEN ${publicationHold} THEN 'RETENTION_PUBLICATION_HOLD'
         WHEN ${inValues(status, d.active)} AND ${lease} <= ${asOf} THEN 'EXPIRED_LEASE'
         WHEN ${overdueRetention} THEN 'RETENTION_OVERDUE'
         WHEN (${inValues(status, d.waiting)} OR (${inValues(status, d.active)} AND ${lease} IS NULL))

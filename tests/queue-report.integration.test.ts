@@ -6,6 +6,7 @@ import { db } from "../src/lib/db";
 import { readQueueReport, type QueueReportOptions } from "../scripts/operations/queue-report";
 import { purgeExpiredAssets } from "../src/lib/assets/service";
 import type { AssetStore } from "../src/lib/assets/storage";
+import { purgeCompositionExports } from "../src/lib/composition/exports";
 
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (process.env.TEST_DATABASE_URL && (process.env.TEST_DATABASE_URL !== process.env.DATABASE_URL || !["localhost", "127.0.0.1"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Local fixture database required");
@@ -14,6 +15,10 @@ suite("read-only operator queue inventory", () => {
   const orgs: string[] = [], users: string[] = [], events: string[] = [];
   afterEach(() => vi.unstubAllGlobals());
   afterAll(async () => {
+    await db.compositionExport.deleteMany({ where: { organizationId: { in: orgs } } });
+    await db.motionRender.deleteMany({ where: { organizationId: { in: orgs } } });
+    await db.videoStoryboard.deleteMany({ where: { organizationId: { in: orgs } } });
+    await db.videoClip.deleteMany({ where: { organizationId: { in: orgs } } });
     await db.brandAsset.deleteMany({ where: { organizationId: { in: orgs } } });
     await db.videoGeneration.deleteMany({ where: { organizationId: { in: orgs } } });
     await db.billingRefundOperation.deleteMany({ where: { organizationId: { in: orgs } } });
@@ -99,6 +104,122 @@ suite("read-only operator queue inventory", () => {
     const post = await db.socialPublication.create({ data: { ...scope, connectionId: connection.id, revisionId: plan.items[0].revisions[0].id, brandVersion: 1, status: "PUBLISHED", externalPostId: crypto.randomUUID(), publishedAt: old, scheduledFor: old, timezone: "UTC", payload: { secret: "never-output-private-payload" }, payloadHash: "fixture", createdAt: old } });
     return db.socialPublication.update({ where: { id: post.id }, data: extra });
   }
+  type MediaState = { status?: string; purgeAfter?: Date; leaseUntil?: Date | null; createdAt?: Date };
+  type MediaKind = "clip" | "audio" | "motion" | "export";
+  async function media(scope: Awaited<ReturnType<typeof setup>>, kind: MediaKind) {
+    const shared = { ...scope, status: "READY", objectKey: `never-output-object-${crypto.randomUUID()}`,
+      sha256: "never-output-hash", bytes: 1024, createdBy: "never-output-creator", createdAt: old, purgeAfter: old };
+    if (kind === "clip" || kind === "audio") {
+      const row = await db.videoClip.create({ data: { ...shared, brandVersion: 1, label: "never-output-label",
+        mediaKind: kind === "audio" ? "AUDIO" : "VIDEO", instrumentalConfirmedAt: kind === "audio" ? old : null,
+        rightsConfirmedAt: old, sourceKey: `never-output-source-${crypto.randomUUID()}`, sourceHash: "never-output-source-hash",
+        sourceBytes: 1024, processorVersion: kind === "audio" ? "instrumental-pcm-v1" : "fixture", durationMs: 1000 } });
+      return { row, queue: "clips", get: () => db.videoClip.findUniqueOrThrow({ where: { id: row.id } }),
+        update: (data: MediaState) => db.videoClip.update({ where: { id: row.id }, data }) };
+    }
+    if (kind === "motion") {
+      const plan = await db.productionPlan.create({ data: { ...scope, brandVersion: 1, title: "Private plan",
+        creditCeiling: 0, items: { create: { title: "Private item", channel: "Instagram", format: "video", brief: {} } } }, include: { items: true } });
+      const storyboard = await db.videoStoryboard.create({ data: { ...scope, itemId: plan.items[0].id, brandVersion: 1,
+        version: 1, document: {}, shotApprovals: {}, authorId: "fixture" } });
+      const row = await db.motionRender.create({ data: { ...shared, storyboardId: storyboard.id,
+        rendererVersion: "fixture", documentHash: "never-output-document-hash", durationMs: 1000 } });
+      return { row, queue: "motion", get: () => db.motionRender.findUniqueOrThrow({ where: { id: row.id } }),
+        update: (data: MediaState) => db.motionRender.update({ where: { id: row.id }, data }) };
+    }
+    const composition = await db.staticComposition.create({ data: { ...scope, itemId: crypto.randomUUID(),
+      revisionId: crypto.randomUUID(), brandVersion: 1, version: 1, document: {} } });
+    const row = await db.compositionExport.create({ data: { ...shared, compositionId: composition.id,
+      placement: "square", rendererVersion: "fixture", manifest: { private: "never-output-manifest" } } });
+    return { row, queue: "exports", get: () => db.compositionExport.findUniqueOrThrow({ where: { id: row.id } }),
+      update: (data: MediaState) => db.compositionExport.update({ where: { id: row.id }, data }) };
+  }
+  it.each(["clip", "audio", "motion", "export"] as const)("reports expired %s media without storage access, mutation or tenant disclosure", async kind => {
+    const scope = await setup(), fixture = await media(scope, kind);
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } });
+    const network = vi.fn(() => { throw Error("No external request allowed"); }); vi.stubGlobal("fetch", network);
+    const result = await report(scope);
+    expect(result.items).toEqual([expect.objectContaining({ queue: fixture.queue, id: fixture.row.id, status: "READY", reason: "RETENTION_OVERDUE" })]);
+    expect(JSON.stringify(result)).not.toMatch(/never-output|objectKey|sha256|manifest|sourceKey|createdBy/);
+    expect(await fixture.get()).toEqual(fixture.row);
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } })).toEqual(wallet);
+    expect((await report(await setup())).items).toEqual([]);
+    const sibling = await db.business.create({ data: { organizationId: scope.organizationId, name: "Sibling" } });
+    expect((await report({ ...scope, businessId: sibling.id })).items).toEqual([]);
+    expect(network).not.toHaveBeenCalled();
+  });
+  it.each(["clip", "audio", "motion", "export"] as const)("distinguishes %s retention, processing, failure, grace and deletion leases", async kind => {
+    const scope = await setup(), fixture = await media(scope, kind);
+    for (const status of ["READY", "APPROVED", "REJECTED", "ARCHIVED"]) {
+      await fixture.update({ status });
+      expect((await report(scope)).items[0]).toMatchObject({ status, reason: "RETENTION_OVERDUE" });
+    }
+    for (const state of [
+      { status: "DELETED" }, { status: "READY", purgeAfter: future }, { purgeAfter: now },
+      { purgeAfter: old, leaseUntil: future }, { status: "DELETING", leaseUntil: future },
+    ]) {
+      await fixture.update(state);
+      expect((await report(scope)).items).toEqual([]);
+    }
+    await fixture.update({ status: "READY", leaseUntil: null, purgeAfter: new Date(now.getTime() - 15 * 60000) });
+    expect((await report(scope)).items[0].reason).toBe("RETENTION_OVERDUE");
+    expect((await report(scope, { overdueMinutes: 16 })).items).toEqual([]);
+    await fixture.update({ status: "DELETING" });
+    expect((await report(scope)).items[0].reason).toBe("RETENTION_STATE_INVALID");
+    await fixture.update({ leaseUntil: now });
+    expect((await report(scope)).items[0].reason).toBe("EXPIRED_LEASE");
+    await fixture.update({ status: "FAILED" });
+    expect((await report(scope)).items[0].reason).toBe("FAILED");
+    await fixture.update({ status: "STORING", purgeAfter: future });
+    expect((await report(scope)).items[0].reason).toBe("EXPIRED_LEASE");
+    // An ancient creation time must not turn a future media deadline into retention attention.
+    await fixture.update({ status: "READY", leaseUntil: null });
+    expect((await report(scope)).items).toEqual([]);
+  });
+  it.each(["SUBMITTING", "NEEDS_RECONCILIATION"])("explains an export's %s publication hold without changing the post", async status => {
+    const scope = await setup(), fixture = await media(scope, "export");
+    const post = await publication(scope, { status, leaseUntil: future, payload: { mediaExportId: fixture.row.id } });
+    const result = await report(scope);
+    expect(result.items.find(r => r.queue === "exports")).toMatchObject({ id: fixture.row.id, reason: "RETENTION_PUBLICATION_HOLD" });
+    expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toEqual(post);
+    await fixture.update({ leaseUntil: future });
+    expect((await report(scope)).items.some(r => r.queue === "exports")).toBe(false);
+    await fixture.update({ leaseUntil: null });
+    for (const terminal of ["PUBLISHED", "CANCELLED", "FAILED", "SCHEDULED"]) {
+      await db.socialPublication.update({ where: { id: post.id }, data: { status: terminal } });
+      expect((await report(scope)).items.find(r => r.queue === "exports")?.reason).toBe("RETENTION_OVERDUE");
+    }
+  });
+  it.each(["organization", "business"])("does not infer a retention hold from another %s's untrusted payload", async boundary => {
+    const scope = await setup(), fixture = await media(scope, "export");
+    const other = boundary === "organization" ? await setup()
+      : { ...scope, businessId: (await db.business.create({ data: { organizationId: scope.organizationId, name: "Sibling" } })).id };
+    await publication(other, { status: "NEEDS_RECONCILIATION", payload: { mediaExportId: fixture.row.id } });
+    expect((await report(scope)).items).toEqual([expect.objectContaining({ queue: "exports", reason: "RETENTION_OVERDUE" })]);
+  });
+  it("matches the real export publication hold, failed storage retry and confirmed purge lifecycle", async () => {
+    const scope = await setup(), fixture = await media(scope, "export");
+    const isolatedTime = new Date("2025-01-01T00:00:00Z");
+    await fixture.update({ createdAt: isolatedTime, purgeAfter: isolatedTime });
+    const post = await publication(scope, { status: "NEEDS_RECONCILIATION", payload: { mediaExportId: fixture.row.id } });
+    const remove = vi.fn(async (_key: string): Promise<void> => { throw Error("Synthetic storage failure"); });
+    const store = { remove } as unknown as AssetStore;
+    await purgeCompositionExports(store, isolatedTime);
+    expect(remove).not.toHaveBeenCalled();
+    expect((await report(scope)).items.find(r => r.queue === "exports")?.reason).toBe("RETENTION_PUBLICATION_HOLD");
+    await db.socialPublication.update({ where: { id: post.id }, data: { status: "CANCELLED" } });
+    await purgeCompositionExports(store, isolatedTime);
+    expect(remove).toHaveBeenCalledExactlyOnceWith(fixture.row.objectKey);
+    const failed = await fixture.get();
+    expect(failed).toMatchObject({ status: "DELETING", bytes: 1024 });
+    const retryAt = new Date(failed.leaseUntil!.getTime() + 1);
+    expect((await readQueueReport(db, { scope: { kind: "organization", ...scope } }, retryAt)).items.find(r => r.queue === "exports")?.reason).toBe("EXPIRED_LEASE");
+    await fixture.update({ leaseUntil: new Date(isolatedTime.getTime() - 1) });
+    remove.mockImplementation(async () => undefined);
+    await purgeCompositionExports(store, isolatedTime);
+    expect(await fixture.get()).toMatchObject({ status: "DELETED", bytes: 0, leaseUntil: null });
+    expect((await report(scope)).items.some(r => r.queue === "exports")).toBe(false);
+  });
   it("isolates organizations and businesses, including mismatched pairs", async () => {
     const a = await setup(), b = await setup(); const first = await job(a, "FAILED"); await job(b, "FAILED");
     const sibling = await db.business.create({ data: { organizationId: a.organizationId, name: "Sibling" } });
