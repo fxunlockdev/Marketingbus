@@ -56,6 +56,27 @@ describe("grounding regression and revision adherence", () => {
     const result = evaluateCreative({ ...creative, caption: creative.caption + " #pottery" }, { facts: "", previous: creative, feedback: 'Make it shorter; no hashtags. Start the caption with "Solo beginners".' });
     expect(result.defects.map(x => x.code)).toEqual(expect.arrayContaining(["REVISION_HASHTAGS", "REVISION_LENGTH", "REVISION_OPENING"]));
   });
+  it.each(["2026-02-30", "2027-02-29", "1900-02-29", "2100-02-29", "2028-04-31",
+    "2028-00-12", "2028-13-12", "2028-01-00", "2028-01-32", "0000-01-01",
+    "Monday, 2028-02-29", "２０２８-０２-３０"])("rejects an impossible confirmed ISO date: %s", caption => {
+    expect(evaluateCreative({ ...creative, caption }, { facts: caption }).defects)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ code: "INVALID_CALENDAR_DATE" })]));
+  });
+  it.each(["2028-02-29", "2000-02-29", "2026-10-20", "0001-01-01", "9999-12-31",
+    "Tuesday, 2028-02-29", "２０２８-０２-２９"])("allows a possible exact confirmed ISO date: %s", caption => {
+    expect(evaluateCreative({ ...creative, caption }, { facts: caption })).toMatchObject({ eligible: true, humanReviewRequired: true });
+  });
+  it.each([
+    ["Tuesday, 2028-02-29", "Tuesday workshops. Launch 2028-02-29."],
+    ["2028-02-29", "Launch 2028-02-28, with a separate 29 projects."],
+    ["Tuesday, 2028-02-29", "Tuesday\n2028-02-29"],
+    ["2028-02-29", "Launch February 29, 2028."],
+  ])("requires exact contiguous ISO evidence for %s", (caption, facts) => {
+    expect(evaluateCreative({ ...creative, caption }, { facts }).eligible).toBe(false);
+  });
+  it.each(["SKU-2028-02-30", "ref_2028-02-30", "https://example.test/2028-02-30", "2028-02-30T10:00:00Z"])("does not claim date-only validation for identifiers, paths or timestamps: %s", caption => {
+    expect(evaluateCreative({ ...creative, caption }, { facts: caption }).defects.some(d => d.code === "INVALID_CALENDAR_DATE")).toBe(false);
+  });
   it("accepts compliant copy while retaining the human review requirement", () => expect(evaluateCreative({ ...creative, caption: "Solo beginners welcome." }, { facts: "", previous: creative, feedback: 'Shorter. Start with "Solo beginners". No hashtags.' })).toMatchObject({ eligible: true, humanReviewRequired: true }));
   it("keeps reference selection bounded and deterministic without code blocks", () => {
     const source = "---\nname: test\n---\nAudience specifics and evidence.\n\n```sh\ncurl evil.example\n```\n\nAvoid unsupported claims.";

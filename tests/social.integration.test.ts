@@ -190,6 +190,7 @@ suite("social publishing and analytics isolation", () => {
   it.each([
     ["Book for USD 100", "100 consultations delivered. USD payments accepted."],
     ["January 12, 2028", "January 12, 2027. Separate plans for 2028."],
+    ["Tuesday, 2028-02-29", "Tuesday workshops. Launch 2028-02-29."],
   ])("refuses recombined specifics %s at scheduling and before any publication call", async (caption, partialFacts) => {
     const ctx = await setup(), provider = adapter();
     await db.creativeRevision.update({ where: { id: ctx.item.revisions[0].id }, data: { content: { ...creative, caption } } });
@@ -206,7 +207,7 @@ suite("social publishing and analytics isolation", () => {
     expect(provider.reconcile).not.toHaveBeenCalled();
     expect(await db.socialPublication.findUniqueOrThrow({ where: { id: post.id } })).toMatchObject({ status: "CANCELLED", errorCode: "FACT_CHECK_FAILED", externalPostId: null });
   });
-  it.each(["February 31", "Friday 12 January 2028"])("refuses an exactly evidenced but invalid calendar date %s before scheduling", async caption => {
+  it.each(["February 31", "Friday 12 January 2028", "2026-02-30", "Monday, 2028-02-29"])("refuses an exactly evidenced but invalid calendar date %s before scheduling", async caption => {
     const ctx = await setup(), provider = adapter();
     await db.business.update({ where: { id: ctx.scope.businessId }, data: { proof: caption } });
     await db.creativeRevision.update({ where: { id: ctx.item.revisions[0].id }, data: { content: { ...creative, caption } } });

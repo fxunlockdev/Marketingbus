@@ -256,6 +256,7 @@ suite("production authorization, review and worker integration", () => {
     ["Book for USD 100", "100 consultations delivered. USD payments accepted."],
     ["January 12, 2028", "January 12, 2027. Separate plans for 2028."],
     ["Saturday, January 12", "Saturday workshops. January 12 consultations."],
+    ["Tuesday, 2028-02-29", "Tuesday workshops. Launch 2028-02-29."],
   ])("withholds recombined specifics %s, preserves accounting and rechecks old/manual copy", async (caption, proof) => {
     const a = await setup(), b = await setup();
     await db.business.update({ where: { id: a.scope.businessId }, data: { proof } });
@@ -282,7 +283,7 @@ suite("production authorization, review and worker integration", () => {
     expect(await db.creativeRevision.findFirstOrThrow({ where: { itemId: b.itemId } })).toMatchObject({ status: "READY", content: { caption } });
     await actOnProduction(b.scope, { action: "approve", itemId: b.itemId, version: 1 });
   });
-  it.each(["February 31", "February 29, 2100", "Friday 12 January 2028"])("rejects confirmed but invalid calendar copy %s without retry or customer charge", async caption => {
+  it.each(["February 31", "February 29, 2100", "Friday 12 January 2028", "2026-02-30", "2028-13-01", "Monday, 2028-02-29"])("rejects confirmed but invalid calendar copy %s without retry or customer charge", async caption => {
     const { scope, itemId } = await setup();
     await db.business.update({ where: { id: scope.businessId }, data: { proof: caption } });
     const q = await quote(scope, itemId);

@@ -88,6 +88,8 @@ suite("cross-plan calendar, scope and optimistic reservation edits", () => {
     ["January 12, 2028", "January 12, 2027. Separate plans for 2028."],
     ["February 31", "February 31"],
     ["Friday 12 January 2028", "Friday 12 January 2028"],
+    ["2026-02-30", "2026-02-30"],
+    ["Tuesday, 2028-02-29", "Tuesday workshops. Launch 2028-02-29."],
   ])("blocks moving legacy approved %s without changing reservations or credits", async (caption, proof) => {
     const f = await fixture(), plan = await f.plan("Legacy approval");
     await db.business.update({ where: { id: f.scope.businessId }, data: { proof } });

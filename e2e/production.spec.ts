@@ -11,7 +11,7 @@ test("review, free editing, exact-version calendar and paid gates work in the br
   let organizationId: string | undefined;
   try {
     const registered = await page.request.post("/api/auth/register", { headers, data: { name: "Review Fixture", email, password: "Test-only-password-2026!" } }); expect(registered.ok()).toBe(true);
-    const created = await page.request.post("/api/businesses", { headers, data: { name: "Review Fixture Studio", offering: "Architecture consultations", proof: "100 consultations delivered. USD payments accepted. February 31.", audience: "Homeowners", goal: "Book consultations", channels: ["Instagram"] } }); expect(created.ok()).toBe(true);
+    const created = await page.request.post("/api/businesses", { headers, data: { name: "Review Fixture Studio", offering: "Architecture consultations", proof: "100 consultations delivered. USD payments accepted. February 31. 2026-02-30.", audience: "Homeowners", goal: "Book consultations", channels: ["Instagram"] } }); expect(created.ok()).toBe(true);
     const { id } = await created.json();
     organizationId = (await db.business.findUniqueOrThrow({ where: { id } })).organizationId;
     await page.request.post(`/api/businesses/${id}`, { headers, data: { action: "confirm", version: 1 } });
@@ -38,6 +38,11 @@ test("review, free editing, exact-version calendar and paid gates work in the br
     expect(await db.creativeRevision.count({ where: { itemId: item.id } })).toBe(1);
     expect(await db.calendarEntry.count({ where: { itemId: item.id } })).toBe(1);
     await page.getByLabel("Caption", { exact: true }).fill("Book on February 31.");
+    await page.getByRole("button", { name: "Save new copy version" }).click();
+    await expect(page.getByRole("main").getByRole("alert")).toContainText("unconfirmed dates, numbers or claims");
+    expect(await db.creativeRevision.count({ where: { itemId: item.id } })).toBe(1);
+    expect(await db.calendarEntry.count({ where: { itemId: item.id } })).toBe(1);
+    await page.getByLabel("Caption", { exact: true }).fill("Book on 2026-02-30.");
     await page.getByRole("button", { name: "Save new copy version" }).click();
     await expect(page.getByRole("main").getByRole("alert")).toContainText("unconfirmed dates, numbers or claims");
     expect(await db.creativeRevision.count({ where: { itemId: item.id } })).toBe(1);

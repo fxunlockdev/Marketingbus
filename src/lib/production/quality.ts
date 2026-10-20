@@ -1,7 +1,7 @@
 import type { Creative } from "./content";
 import type { BrandInput } from "../brand";
 
-export const QUALITY_VERSION = "grounding-2026-10-20.2";
+export const QUALITY_VERSION = "grounding-2026-10-20.3";
 export type QualityContext = { facts: string; feedback?: string; previous?: Creative | null };
 export function approvedFactText(brand: Pick<BrandInput, "name" | "offering" | "difference" | "proof" | "website">) {
   // Restrictions, instructions and examples are NEVER evidence for a claim.
@@ -23,18 +23,21 @@ const compounds = [
   new RegExp(`(?<![\\p{L}\\p{N}])${amount}${optionalGap}${currency}(?![\\p{L}\\p{N}_-])`, "giu"),
   new RegExp(`(?<![\\p{L}\\p{N}])${weekday}(?<month>${month})${gap}${day}${year}(?![\\p{L}\\p{N}])`, "giu"),
   new RegExp(`(?<![\\p{L}\\p{N}])${weekday}${day}${gap}(?<month>${month})${year}(?![\\p{L}\\p{N}])`, "giu"),
+  // Date-only ISO notation, not locale-ambiguous numeric dates, URL paths, IDs
+  // or timestamps. Keep an explicit weekday bound to the complete date.
+  new RegExp(`(?<![\\p{L}\\p{N}_/-])${weekday}(?<year>\\d{4})-(?<monthNumber>\\d{2})-(?<day>\\d{2})(?![\\p{L}\\p{N}_/-])`, "giu"),
 ];
 const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 const weekdays = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 function invalidCalendarDate(parts: Record<string, string> | undefined) {
-  if (!parts?.month) return false; // Currency match, not a named date.
-  const monthIndex = months.indexOf(parts.month.slice(0, 3).toLowerCase());
+  if (!parts?.month && !parts?.monthNumber) return false; // Currency match.
+  const monthIndex = parts.monthNumber ? Number(parts.monthNumber) - 1 : months.indexOf(parts.month.slice(0, 3).toLowerCase());
   const dayNumber = Number(parts.day), yearNumber = parts.year ? Number(parts.year) : null;
   // A missing year is not the current year. February 29 remains possible, and a
   // weekday cannot be checked until a year is stated. Use the Gregorian calendar.
   const leap = yearNumber === null || (yearNumber % 4 === 0 && (yearNumber % 100 !== 0 || yearNumber % 400 === 0));
   const maxDay = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][monthIndex];
-  if (monthIndex < 0 || dayNumber < 1 || dayNumber > maxDay || yearNumber === 0) return true;
+  if (monthIndex < 0 || monthIndex > 11 || dayNumber < 1 || dayNumber > maxDay || yearNumber === 0) return true;
   const suffix = dayNumber % 100 >= 11 && dayNumber % 100 <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" }[dayNumber % 10] || "th");
   if (parts.ordinal && parts.ordinal.toLowerCase() !== suffix) return true;
   if (parts.weekday && yearNumber !== null) {
@@ -79,5 +82,5 @@ export function evaluateCreative(content: Creative, context: QualityContext) {
   const opening = (context.feedback || "").match(/(?:start|open|begin|lead)\s+(?:(?:the\s+)?caption\s+)?with\s+["“]([^"”]{1,120})["”]/i)?.[1];
   if (opening && !normalize(content.caption).startsWith(normalize(opening))) defects.push({ code: "REVISION_OPENING", detail: "Caption does not begin with the requested exact opening." });
   return { version: QUALITY_VERSION, eligible: defects.length === 0, defects: [...new Map(defects.map(d => [d.code + d.detail, d])).values()],
-    humanReviewRequired: true, limits: "Lexical date/number/claim checks, contiguous currency/date evidence, Gregorian named-date validation and explicit revision rules; not semantic fact verification or agency-quality certification." };
+    humanReviewRequired: true, limits: "Lexical date/number/claim checks, contiguous currency/date evidence, Gregorian named/ISO date-only validation and explicit revision rules; not semantic fact verification or agency-quality certification." };
 }
