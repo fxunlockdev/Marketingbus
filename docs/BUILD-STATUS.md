@@ -1,5 +1,13 @@
 # Acceptance ledger — 19 October 2026
 
+## 20 October — payment-backed credit integrity
+
+Extended the read-only operator report to bind grants to same-workspace payment allocations and reconcile cumulative refund journals, including separate-pool rounding and zero-credit steps. Missing/foreign payments, malformed or oversized keys and offsetting incorrect refund steps are flagged even when net credits balance. No runtime route, schema, provider call or accounting mutation was added. This checks retained local records, not Stripe authenticity, supplier invoices or cash settlement.
+
+Regression tests first exposed 14 missed assertions. Final full local regression passes **1,976 tests across 90 suites**, including 33 credit-report checks and the existing payment/refund/debt lifecycle. Production build, type checking and production-dependency audit (zero reported vulnerabilities) pass. **Two billing browser journeys** pass against an independent disposable database and real private storage. Test storage/TLS resources and both synthetic databases were removed after testing. No production records, paid calls, payments, emails or posts were used. This operator-only increment is source-only pending independent CI, not deployed or live-payment verified.
+
+The preceding credit-report source `5c6404d03dbd0ba78572c1301b47d49452ee6b84` passed independent [CI 39343538827](https://github.com/fxunlockdev/Marketingbus/actions/runs/39343538827). Running application source remains `54931882d44a3d83e341a327b912f6f210652f7a`, with deployment receipts below. No new paid service or change to the USD 10/active-customer/month infrastructure target was introduced.
+
 ## 20 October — read-only workspace credit integrity
 
 Implemented an operator-only credit report with explicit workspace scope, aggregate net/held balance checks, exact reservation journal validation, orphan/unsupported-entry detection and monitoring exit codes. PostgreSQL enforces read-only repeatable-read execution and a three-second statement timeout; lifetime sums use integer-safe arithmetic. Output contains fixed findings and credit totals, never ledger keys, customer names or provider references. There is no repair, payment/refund call, grant, hold release or job retry. Balanced local credits do not establish authentic payments, correct pool allocation, supplier expense or cash settlement. See BILLING.md for assumptions and operation.

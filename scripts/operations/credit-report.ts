@@ -7,6 +7,7 @@ type Snapshot = {
   asOf: Date; available: number; revisionAvailable: number; held: number; debt: number; revisionDebt: number;
   grants: bigint; consumed: bigint; reclaimed: bigint; reserved: bigint;
   unknownEntries: bigint; invalidReservations: bigint; orphanEntries: bigint;
+  invalidPayments: bigint; invalidRefunds: bigint; orphanPaymentEntries: bigint;
 };
 
 export async function readCreditReport(client: PrismaClient, organizationId: string) {
@@ -19,6 +20,42 @@ export async function readCreditReport(client: PrismaClient, organizationId: str
         SELECT "key", "kind", "amount" FROM "CreditEntry" WHERE "organizationId" = ${organizationId}
       ), reservations AS (
         SELECT * FROM "Reservation" WHERE "organizationId" = ${organizationId}
+      ), payments AS (
+        SELECT * FROM "BillingPayment" WHERE "organizationId" = ${organizationId}
+      ), refund_keys AS (
+        SELECT *, substring("key" FROM ':([0-9]{1,10})$')::bigint AS cumulative
+        FROM entries WHERE "kind" = 'REFUND_RECLAIM'
+      ), refund_bound AS (
+        SELECT r.*, p."id" AS "paymentId", p."amountMinor", p."refundedMinor", p."generalCredits", p."revisionCredits"
+        FROM refund_keys r LEFT JOIN payments p ON r."key" = 'refund:' || p."id" || ':' || r.cumulative::text
+      ), refund_steps AS (
+        SELECT *, LAG(cumulative, 1, 0::bigint) OVER (PARTITION BY "paymentId" ORDER BY cumulative) AS previous
+        FROM refund_bound
+      ), refund_totals AS (
+        SELECT "paymentId", SUM("amount")::bigint AS reclaimed, MAX(cumulative) AS cumulative
+        FROM refund_bound WHERE "paymentId" IS NOT NULL GROUP BY "paymentId"
+      ), payment_check AS (
+        SELECT COUNT(*) FILTER (WHERE
+          allocation."key" IS NULL OR allocation."kind" <> 'PAYMENT_GRANT' OR allocation."amount"::bigint <> p."generalCredits"::bigint + p."revisionCredits"::bigint
+          OR p."amountMinor" <= 0 OR p."refundedMinor" < 0 OR p."refundedMinor" > p."amountMinor"
+          OR p."reclaimedGeneral" <> FLOOR(p."generalCredits"::numeric * p."refundedMinor" / NULLIF(p."amountMinor", 0))
+          OR p."reclaimedRevision" <> FLOOR(p."revisionCredits"::numeric * p."refundedMinor" / NULLIF(p."amountMinor", 0))
+          OR COALESCE(refunds.reclaimed, 0) <> p."reclaimedGeneral"::bigint + p."reclaimedRevision"::bigint
+          OR COALESCE(refunds.cumulative, 0) <> p."refundedMinor"
+        ) AS "invalidPayments"
+        FROM payments p LEFT JOIN entries allocation ON allocation."key" = 'payment:' || p."id"
+        LEFT JOIN refund_totals refunds ON refunds."paymentId" = p."id"
+      ), refund_check AS (
+        SELECT COUNT(*) FILTER (WHERE "paymentId" IS NOT NULL AND (
+          cumulative <= 0 OR cumulative > "refundedMinor" OR cumulative > "amountMinor"
+          OR "amount"::numeric <>
+            FLOOR("generalCredits"::numeric * cumulative / NULLIF("amountMinor", 0)) + FLOOR("revisionCredits"::numeric * cumulative / NULLIF("amountMinor", 0))
+            - FLOOR("generalCredits"::numeric * previous / NULLIF("amountMinor", 0)) - FLOOR("revisionCredits"::numeric * previous / NULLIF("amountMinor", 0))
+        )) AS "invalidRefunds" FROM refund_steps
+      ), payment_orphans AS (
+        SELECT (SELECT COUNT(*) FROM entries e WHERE e."kind" = 'PAYMENT_GRANT' AND NOT EXISTS (
+          SELECT 1 FROM payments p WHERE e."key" = 'payment:' || p."id"
+        )) + (SELECT COUNT(*) FROM refund_bound WHERE "paymentId" IS NULL) AS "orphanPaymentEntries"
       ), ledger AS (
         SELECT COALESCE(SUM("amount") FILTER (WHERE "kind" IN ('PAYMENT_GRANT', 'TEST_GRANT')), 0)::bigint AS grants,
           COALESCE(SUM("amount") FILTER (WHERE "kind" = 'CONSUME'), 0)::bigint AS consumed,
@@ -52,8 +89,9 @@ export async function readCreditReport(client: PrismaClient, organizationId: str
         )
       )
       SELECT CURRENT_TIMESTAMP AS "asOf", w."available", w."revisionAvailable", w."held", w."debt", w."revisionDebt",
-        ledger.*, reservation_check.*, orphan_check.*
+        ledger.*, reservation_check.*, orphan_check.*, payment_check.*, refund_check.*, payment_orphans.*
       FROM "Wallet" w CROSS JOIN ledger CROSS JOIN reservation_check CROSS JOIN orphan_check
+        CROSS JOIN payment_check CROSS JOIN refund_check CROSS JOIN payment_orphans
       WHERE w."organizationId" = ${organizationId}`;
     if (!rows[0]) throw Error("Workspace wallet not found.");
     return rows[0];
@@ -69,6 +107,9 @@ export async function readCreditReport(client: PrismaClient, organizationId: str
   if (row.unknownEntries) issues.push({ code: "UNSUPPORTED_LEDGER_ENTRIES", count: row.unknownEntries.toString() });
   if (row.invalidReservations) issues.push({ code: "RESERVATION_LEDGER_MISMATCH", count: row.invalidReservations.toString() });
   if (row.orphanEntries) issues.push({ code: "ORPHAN_RESERVATION_ENTRIES", count: row.orphanEntries.toString() });
+  if (row.invalidPayments) issues.push({ code: "PAYMENT_LEDGER_MISMATCH", count: row.invalidPayments.toString() });
+  if (row.invalidRefunds) issues.push({ code: "REFUND_JOURNAL_MISMATCH", count: row.invalidRefunds.toString() });
+  if (row.orphanPaymentEntries) issues.push({ code: "ORPHAN_PAYMENT_ENTRIES", count: row.orphanPaymentEntries.toString() });
   return {
     version: 1, organizationId, asOf: row.asOf.toISOString(), readOnly: true, needsAttention: issues.length > 0,
     wallet: { available: row.available, revisionAvailable: row.revisionAvailable, held: row.held, debt: row.debt, revisionDebt: row.revisionDebt },

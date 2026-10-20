@@ -71,10 +71,12 @@ The report uses a PostgreSQL read-only repeatable-read transaction, three-second
 - Net wallet credits (available + revision available + held − both debts) against grants − consumption − refund reclamation. Reserve/release entries transfer existing credits and are not counted twice.
 - Held balance against active reservations, and each reservation's exact reserve, consume and unused-release entries, including zero consumption and mixed revision/general credits.
 - Unsupported ledger entries and orphan reservation entries, with no cross-workspace matching.
+- Payment grants against their same-workspace `BillingPayment` allocation, plus orphan payment/refund entries. A matching amount alone cannot authorize a missing or foreign payment.
+- Cumulative refund journals against recorded refunded/reclaimed totals and each incremental general/revision allocation, using the same separate-pool floor rounding as payment application. Zero-credit partial refunds still need a journal entry. Offsetting incorrect steps cannot hide behind a correct net total. Malformed, noncanonical or oversized cumulative suffixes are reported without unsafe numeric conversion.
 
 Only fixed issue codes/counts and aggregate credit values are returned; entry keys, prompts, customer names and provider references are not printed. A timeout is an incomplete check, never a healthy result. The report scans the selected workspace's history without truncating totals; it is intended for bounded operator use, not per-request polling. It has no network client, accounting mutation, automatic hold release or retry behavior.
 
-The conservation check assumes the application's zero opening wallet with every grant recorded. Historical manual balances without entries need investigation, not an automatic compensating grant. A balanced result does not verify authentic payments, correct general/revision allocation, provider invoices, taxes, disputes, cash settlement or creative delivery. Those acceptance gates remain below.
+The conservation check assumes the application's zero opening wallet with every grant recorded. Historical manual balances without entries need investigation, not an automatic compensating grant. Payment checks compare retained local records, not Stripe's live account. They cannot prove the authenticity of a payment, validate an operator pilot grant, or detect coordinated alteration of both payment and ledger. The report also does not verify the wallet's split between general/revision pools, provider invoices, taxes, disputes, cash settlement or creative delivery. Those acceptance gates remain below.
 
 ## Remaining release gates
 

@@ -11,13 +11,68 @@ if (process.env.TEST_DATABASE_URL && (process.env.TEST_DATABASE_URL !== process.
 suite("read-only credit accounting report", () => {
   const orgs: string[] = [];
   afterEach(() => vi.unstubAllGlobals());
-  afterAll(async () => { await db.organization.deleteMany({ where: { id: { in: orgs } } }); await db.$disconnect(); });
+  afterAll(async () => { await db.billingPayment.deleteMany({ where: { organizationId: { in: orgs } } }); await db.organization.deleteMany({ where: { id: { in: orgs } } }); await db.$disconnect(); });
   async function setup(credits = 100, revisions = 50) {
     const org = await db.organization.create({ data: { name: "Secret fixture business name", wallet: { create: { available: credits, revisionAvailable: revisions } } } }); orgs.push(org.id);
     if (credits + revisions) await db.creditEntry.create({ data: { organizationId: org.id, key: `secret-grant-${crypto.randomUUID()}`, kind: "TEST_GRANT", amount: credits + revisions } });
     return org.id;
   }
   const codes = async (id: string) => (await readCreditReport(db, id)).issues.map(i => i.code);
+  async function payment(id: string, refunds: number[] = [], general = 101, revision = 39) {
+    const p = await db.billingPayment.create({ data: { id: `private:payment:${crypto.randomUUID()}`, organizationId: id, amountMinor: 1000, currency: "usd", generalCredits: general, revisionCredits: revision } });
+    await db.creditEntry.create({ data: { organizationId: id, key: `payment:${p.id}`, kind: "PAYMENT_GRANT", amount: general + revision } });
+    await db.wallet.update({ where: { organizationId: id }, data: { available: { increment: general }, revisionAvailable: { increment: revision } } });
+    let previousGeneral = 0, previousRevision = 0;
+    for (const cumulative of refunds) {
+      const reclaimedGeneral = Math.floor(general * cumulative / 1000), reclaimedRevision = Math.floor(revision * cumulative / 1000);
+      await db.creditEntry.create({ data: { organizationId: id, key: `refund:${p.id}:${cumulative}`, kind: "REFUND_RECLAIM", amount: reclaimedGeneral + reclaimedRevision - previousGeneral - previousRevision } });
+      await db.wallet.update({ where: { organizationId: id }, data: { available: { decrement: reclaimedGeneral - previousGeneral }, revisionAvailable: { decrement: reclaimedRevision - previousRevision } } });
+      await db.billingPayment.update({ where: { id: p.id }, data: { refundedMinor: cumulative, reclaimedGeneral, reclaimedRevision } });
+      previousGeneral = reclaimedGeneral; previousRevision = reclaimedRevision;
+    }
+    return p;
+  }
+  it("matches payment grants and cumulative per-pool refund rounding, including zero-credit refunds", async () => {
+    const id = await setup(0, 0);
+    await payment(id, [100, 200, 1000]); await payment(id, [1, 2], 1, 1);
+    expect((await readCreditReport(db, id)).needsAttention).toBe(false);
+  });
+  it.each(["missing-grant", "wrong-grant", "wrong-kind", "wrong-reclaimed", "missing-refund", "lost-zero-refund"])("detects payment backing mismatch: %s", async change => {
+    const id = await setup(0, 0), p = await payment(id, change === "lost-zero-refund" ? [1] : [200], change === "lost-zero-refund" ? 1 : 101, 0);
+    if (change === "missing-grant") await db.creditEntry.delete({ where: { key: `payment:${p.id}` } });
+    if (change === "wrong-grant") await db.creditEntry.update({ where: { key: `payment:${p.id}` }, data: { amount: 99 } });
+    if (change === "wrong-kind") await db.creditEntry.update({ where: { key: `payment:${p.id}` }, data: { kind: "TEST_GRANT" } });
+    if (change === "wrong-reclaimed") await db.billingPayment.update({ where: { id: p.id }, data: { reclaimedGeneral: 19 } });
+    if (change === "missing-refund" || change === "lost-zero-refund") await db.creditEntry.deleteMany({ where: { organizationId: id, kind: "REFUND_RECLAIM" } });
+    expect(await codes(id)).toContain("PAYMENT_LEDGER_MISMATCH");
+  });
+  it("detects offsetting refund journal errors even when the net balance matches", async () => {
+    const id = await setup(0, 0), p = await payment(id, [100, 200]);
+    await db.creditEntry.update({ where: { key: `refund:${p.id}:100` }, data: { amount: { increment: 1 } } });
+    await db.creditEntry.update({ where: { key: `refund:${p.id}:200` }, data: { amount: { decrement: 1 } } });
+    const result = await codes(id); expect(result).toContain("REFUND_JOURNAL_MISMATCH"); expect(result).not.toContain("NET_BALANCE_MISMATCH");
+  });
+  it.each(["missing-payment", "foreign-payment", "malformed-suffix", "noncanonical-suffix", "oversized-suffix", "beyond-refunded"])("rejects unbound or invalid refund entries: %s", async change => {
+    const id = await setup(0, 0), other = await setup(0, 0), p = await payment(change === "foreign-payment" ? other : id);
+    const key = change === "missing-payment" ? "refund:missing:100" : `refund:${p.id}:${change === "malformed-suffix" ? "not-a-number" : change === "noncanonical-suffix" ? "00100" : change === "oversized-suffix" ? "999999999999999999999" : "100"}`;
+    await db.creditEntry.create({ data: { organizationId: id, key, kind: "REFUND_RECLAIM", amount: 0 } });
+    expect(await codes(id)).toContain(change === "beyond-refunded" ? "REFUND_JOURNAL_MISMATCH" : "ORPHAN_PAYMENT_ENTRIES");
+    expect((await readCreditReport(db, other)).needsAttention).toBe(false);
+  });
+  it("flags a balanced payment grant with no same-workspace payment record", async () => {
+    const id = await setup(0, 0), other = await setup(0, 0), p = await payment(other);
+    await db.creditEntry.create({ data: { organizationId: id, key: `payment:unbound:${p.id}`, kind: "PAYMENT_GRANT", amount: 7 } });
+    await db.wallet.update({ where: { organizationId: id }, data: { available: 7 } });
+    expect(await codes(id)).toEqual(["ORPHAN_PAYMENT_ENTRIES"]);
+  });
+  it("never uses another workspace's payment to legitimize an exactly matching entry key", async () => {
+    const id = await setup(0, 0), other = await setup(0, 0), p = await payment(other);
+    await db.creditEntry.delete({ where: { key: `payment:${p.id}` } });
+    await db.creditEntry.create({ data: { organizationId: id, key: `payment:${p.id}`, kind: "PAYMENT_GRANT", amount: 140 } });
+    await db.wallet.update({ where: { organizationId: id }, data: { available: 140 } });
+    expect(await codes(id)).toEqual(["ORPHAN_PAYMENT_ENTRIES"]);
+    expect(await codes(other)).toContain("PAYMENT_LEDGER_MISMATCH");
+  });
   it("balances zero, held, mixed-pool partial, full and zero-consumption settlements", async () => {
     expect((await readCreditReport(db, await setup(0, 0))).needsAttention).toBe(false);
     const id = await setup();
@@ -77,9 +132,11 @@ suite("read-only credit accounting report", () => {
     const id = await setup(0, 0);
     await db.creditEntry.createMany({ data: [1, 2, 3].flatMap(i => [
       { organizationId: id, key: `large-grant-${id}-${i}`, kind: "TEST_GRANT", amount: 2000000000 },
-      { organizationId: id, key: `large-reclaim-${id}-${i}`, kind: "REFUND_RECLAIM", amount: 2000000000 },
+      { organizationId: id, key: `settle:large-${id}-${i}`, kind: "CONSUME", amount: 2000000000 },
+      { organizationId: id, key: `reserve:large-${id}-${i}`, kind: "RESERVE", amount: 2000000000 },
     ]) });
-    expect(await readCreditReport(db, id)).toMatchObject({ needsAttention: false, accounting: { grants: "6000000000", reclaimed: "6000000000", ledgerNetCredits: "0" } });
+    await db.reservation.createMany({ data: [1, 2, 3].map(i => ({ organizationId: id, key: `large-${id}-${i}`, credits: 2000000000, state: "SETTLED" })) });
+    expect(await readCreditReport(db, id)).toMatchObject({ needsAttention: false, accounting: { grants: "6000000000", consumed: "6000000000", ledgerNetCredits: "0" } });
   });
   it("gives monitoring exit codes and sanitized errors through the real CLI", async () => {
     const id = await setup(), run = promisify(execFile);
