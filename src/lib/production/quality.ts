@@ -1,7 +1,8 @@
 import type { Creative } from "./content";
 import type { BrandInput } from "../brand";
+import { followsRule, requestedRules } from "../harness/learned-rules";
 
-export const QUALITY_VERSION = "grounding-2026-10-20.3";
+export const QUALITY_VERSION = "grounding-2026-10-20.4";
 export type QualityContext = { facts: string; feedback?: string; previous?: Creative | null };
 export function approvedFactText(brand: Pick<BrandInput, "name" | "offering" | "difference" | "proof" | "website">) {
   // Restrictions, instructions and examples are NEVER evidence for a claim.
@@ -77,7 +78,7 @@ export function evaluateCreative(content: Creative, context: QualityContext) {
     }
   }
   const feedback = normalize(context.feedback || "");
-  if (/\b(?:no|avoid|remove|without) hashtags\b/.test(feedback) && /#[\p{L}\p{N}_]/u.test(content.caption)) defects.push({ code: "REVISION_HASHTAGS", detail: "Requested removal of hashtags was not followed." });
+  if (requestedRules(context.feedback || "").includes("NO_HASHTAGS") && !followsRule("NO_HASHTAGS", content)) defects.push({ code: "REVISION_HASHTAGS", detail: "Requested removal of hashtags from publishable copy was not followed." });
   if (/\b(?:shorter|shorten)\b/.test(feedback) && context.previous && content.caption.length >= context.previous.caption.length) defects.push({ code: "REVISION_LENGTH", detail: "Requested shorter caption was not delivered." });
   const opening = (context.feedback || "").match(/(?:start|open|begin|lead)\s+(?:(?:the\s+)?caption\s+)?with\s+["“]([^"”]{1,120})["”]/i)?.[1];
   if (opening && !normalize(content.caption).startsWith(normalize(opening))) defects.push({ code: "REVISION_OPENING", detail: "Caption does not begin with the requested exact opening." });

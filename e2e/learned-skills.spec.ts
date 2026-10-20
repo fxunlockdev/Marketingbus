@@ -17,7 +17,7 @@ test("feedback skills can be reviewed, activated and retired without a model cal
   const plan = await db.productionPlan.create({ data: { businessId: id, organizationId, brandVersion: 1, title: "Synthetic corrections", creditCeiling: 100 } });
   const content = { headline: "Considered spaces", caption: "Architecture for your home.", cta: "Meet us", visualDirection: "Editorial layout with approved brand colors.", rationale: "Show the business offering clearly.", evidenceUsed: [] };
   for (let i = 0; i < 2; i++) await db.productionItem.create({ data: { organizationId, planId: plan.id, title: "Corrected creative", format: "static", channel: "LinkedIn", brief: {}, revisions: { create: [
-   { version: 1, content: { ...content, caption: `${content.caption} #Design` }, status: "SUPERSEDED", feedback: "No hashtags." },
+   { version: 1, content: { ...content, caption: `${content.caption} ${i === 0 ? "“#Design”" : "＃Ｄｅｓｉｇｎ"}` }, status: "SUPERSEDED", feedback: "Without hashtags." },
    { version: 2, content, status: "APPROVED", approvedAt: new Date(), approvedBy: reviewer.id },
   ] } } });
   await page.goto("/studio"); await page.getByRole("button", { name: "Memory", exact: true }).click();

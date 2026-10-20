@@ -8,7 +8,7 @@ import { motionConfigurationHash } from "../video/limits";
 import { motionRendererAvailable } from "../video/render";
 import { shotConfigurationHash, shotRates, configuredShotAdapters } from "../video/generation-contracts";
 
-export const WORKER_RUNTIME = "studio-v67-weekly-pause-inventory";
+export const WORKER_RUNTIME = "studio-v68-shared-hashtag-rule";
 export const HEARTBEAT_TTL_MS = 120_000;
 export function workerConfigurationHash() {
   return createHash("sha256").update(JSON.stringify({

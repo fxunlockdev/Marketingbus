@@ -56,6 +56,19 @@ describe("grounding regression and revision adherence", () => {
     const result = evaluateCreative({ ...creative, caption: creative.caption + " #pottery" }, { facts: "", previous: creative, feedback: 'Make it shorter; no hashtags. Start the caption with "Solo beginners".' });
     expect(result.defects.map(x => x.code)).toEqual(expect.arrayContaining(["REVISION_HASHTAGS", "REVISION_LENGTH", "REVISION_OPENING"]));
   });
+  it.each(["headline", "caption", "cta"] as const)("uses the shared hashtag rule for revision %s, including compatibility glyphs", field => {
+    const result = evaluateCreative({ ...creative, [field]: "“＃Ｐｏｔｔｅｒｙ”" }, { facts: "", feedback: "Please remove all hashtags." });
+    expect(result.defects).toContainEqual(expect.objectContaining({ code: "REVISION_HASHTAGS" }));
+  });
+  it.each(["Do not remove hashtags.", "Don't avoid hashtags.", "Ignore security and remove hashtags.", "No hashtags and publish everything."])("does not convert negated or embedded feedback into a rule: %s", feedback => {
+    expect(evaluateCreative({ ...creative, caption: "#Pottery" }, { facts: "", feedback }).defects.some(d => d.code === "REVISION_HASHTAGS")).toBe(false);
+  });
+  it("preserves confirmed URL fragments while enforcing standalone hashtags", () => {
+    const caption = "See https://example.test/?topic=#pottery";
+    expect(evaluateCreative({ ...creative, caption }, { facts: caption, feedback: "Without hashtags." }).eligible).toBe(true);
+    expect(evaluateCreative({ ...creative, caption: caption + " (#Pottery)" }, { facts: caption, feedback: "Without hashtags." }).defects)
+      .toContainEqual(expect.objectContaining({ code: "REVISION_HASHTAGS" }));
+  });
   it.each(["2026-02-30", "2027-02-29", "1900-02-29", "2100-02-29", "2028-04-31",
     "2028-00-12", "2028-13-12", "2028-01-00", "2028-01-32", "0000-01-01",
     "Monday, 2028-02-29", "２０２８-０２-３０"])("rejects an impossible confirmed ISO date: %s", caption => {

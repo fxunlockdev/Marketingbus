@@ -165,6 +165,27 @@ suite("feedback to versioned business copy skills", () => {
   const b = await setup(); expect(await manageLearnedSkills(b.scope, { action: "reflect-skills" })).toMatchObject({ created: 1 });
   expect(await manageLearnedSkills(b.scope, { action: "reflect-skills" })).toMatchObject({ created: 0 }); expect(await memories(b.scope)).toEqual([]);
  });
+ it.each(["“#Design”", "＃Ｄｅｓｉｇｎ"])("does not learn a successful correction when approved output still contains %s", async caption => {
+  const a = await setup();
+  await db.creativeRevision.updateMany({ where: { id: { in: a.revisions } }, data: { content: { ...copy, caption } } });
+  expect(await manageLearnedSkills(a.scope, { action: "reflect-skills" })).toMatchObject({ created: 0 });
+  expect((await readLearnedSkills(a.scope)).skills).toEqual([]);
+  expect(await memories(a.scope)).toEqual([]);
+  expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } })).toMatchObject({ available: 500, held: 0 });
+ });
+ it("learns an explicitly reviewed correction of quoted hashtags without silently activating or sharing it", async () => {
+  const a = await setup(), other = await setup(0);
+  await db.creativeRevision.updateMany({ where: { organizationId: a.scope.organizationId, version: 1 },
+   data: { feedback: "Without hashtags.", content: { ...copy, caption: "Architecture for your home. “＃Design”" } } });
+  expect(await manageLearnedSkills(a.scope, { action: "reflect-skills" })).toMatchObject({ created: 1 });
+  const skill = (await readLearnedSkills(a.scope)).skills[0];
+  expect(skill).toMatchObject({ valid: true, status: "SKILL_PROPOSED", examples: 2 });
+  expect(await memories(a.scope)).toEqual([]);
+  await manageLearnedSkills(a.scope, { action: "activate-skill", proposalId: skill.id });
+  expect((await memories(a.scope)).map(m => m.kind)).toEqual(["APPROVED_SKILL"]);
+  expect(await memories(other.scope)).toEqual([]);
+  await expect(manageLearnedSkills(other.scope, { action: "activate-skill", proposalId: skill.id })).rejects.toThrow("not found");
+ });
  it.each([null, "", "   "])("does not propose a skill from missing reviewer identity (%s)", async approvedBy => {
   const a = await setup();
   await db.creativeRevision.update({ where: { id: a.revisions[0] }, data: { approvedBy } });
@@ -229,12 +250,25 @@ suite("feedback to versioned business copy skills", () => {
   await manageLearnedSkills(a.scope, { action: "retire-skill", proposalId: skill.id }); expect(await memories(a.scope)).toEqual([]);
   expect(await manageLearnedSkills(a.scope, { action: "reflect-skills" })).toMatchObject({ created: 0 });
  });
- it("rejects a future deliverable violating the learned rule without charging customer credits", async () => {
+ it.each([
+  { caption: `${copy.caption} #Design` },
+  { caption: `${copy.caption} “#Design”` },
+  { caption: `${copy.caption} ＃Ｄｅｓｉｇｎ` },
+  { headline: "Considered spaces (#Design)" },
+  { cta: "Meet us —#Design" },
+ ])("rejects a future deliverable violating the learned rule without charging customer credits: %j", async changed => {
   const a = await setup(); await activate(a.scope);
   const q = await actOnProduction(a.scope, { action: "quote", itemId: a.itemId, mode: "initial", direction: "Show thoughtful architecture for homeowners." }); const quote = (q as { quote: { id: string } }).quote;
   await actOnProduction(a.scope, { action: "accept", quoteId: quote.id }); await db.job.updateMany({ where: { quoteId: quote.id }, data: { availableAt: new Date(0) } });
-  await runOneJob(async () => ({ id: "fixture-violation", text: JSON.stringify({ ...copy, caption: `${copy.caption} #Design` }), usage: { input_tokens: 100, output_tokens: 100 } }));
+  const reasoner = vi.fn(async () => ({ id: "fixture-violation", text: JSON.stringify({ ...copy, ...changed }), usage: { input_tokens: 100, output_tokens: 100 } }));
+  await runOneJob(reasoner);
+  expect(reasoner).toHaveBeenCalledTimes(1);
   expect(await db.creativeRevision.count({ where: { itemId: a.itemId } })).toBe(0); expect((await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } })).available).toBe(500);
+  const job = await db.job.findFirstOrThrow({ where: { quoteId: quote.id } });
+  expect(job).toMatchObject({ status: "FAILED", errorCode: "OUTPUT_VALIDATION_FAILED", attempts: 1, leaseUntil: null });
+  expect(job.result).toMatchObject({ supplierCostMicros: 200, creditsConsumed: 0 });
+  expect(await runOneJob(reasoner)).toBe(false);
+  expect(reasoner).toHaveBeenCalledTimes(1);
  });
  it.each(["copy", "approval", "age", "brand", "memory"])("stops using learned skills when %s changes", async kind => {
   const a = await setup(); const skill = await activate(a.scope);

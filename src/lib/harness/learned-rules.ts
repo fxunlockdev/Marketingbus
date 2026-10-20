@@ -10,17 +10,23 @@ export const ruleInstructions: Record<RuleId, string> = {
   SHORT_CAPTION: "Keep the complete publishable caption to at most 80 whitespace-separated words.",
 };
 export function requestedRules(feedback: string): RuleId[] {
-  const clauses = feedback.toLowerCase().split(/[.!?;\n]+/).map(s => s.trim().replace(/^please\s+/, ""));
+  const clauses = feedback.normalize("NFKC").toLowerCase().split(/[.!?;\n]+/).map(s => s.trim().replace(/^please\s+/, ""));
   const has = (re: RegExp) => clauses.some(s => re.test(s));
   return [
-    ...(has(/^(?:no hashtags|(?:remove|avoid|omit) (?:all |the )?hashtags|do not (?:use|include) hashtags)$/) ? ["NO_HASHTAGS" as const] : []),
+    ...(has(/^(?:(?:no|without) hashtags|(?:remove|avoid|omit) (?:all |the )?hashtags|do not (?:use|include) hashtags)$/) ? ["NO_HASHTAGS" as const] : []),
     ...(has(/^(?:no emojis?|(?:remove|avoid|omit) (?:all |the )?emojis?|do not (?:use|include) emojis?)$/) ? ["NO_EMOJI" as const] : []),
     ...(has(/^(?:shorter captions?|keep (?:the )?caption (?:short|under 80 words)|(?:use|write) shorter captions?)$/) ? ["SHORT_CAPTION" as const] : []),
   ];
 }
 export function followsRule(id: RuleId, content: { headline: string; caption: string; cta: string }) {
   const text = `${content.headline}\n${content.caption}\n${content.cta}`;
-  if (id === "NO_HASHTAGS") return !/(?:^|\s)#[\p{L}\p{N}_]+/u.test(text);
+  if (id === "NO_HASHTAGS") {
+    // App-owned lexical policy, not a social platform's tokenizer. Normalize
+    // compatibility glyphs without rewriting the customer's retained content.
+    // URL fragments and word-internal hashes are not standalone hashtag tokens.
+    const visible = text.normalize("NFKC").replace(/(?:https?:\/\/|www\.)[^\s<>"“”]+/giu, " ");
+    return !/(?<![\p{L}\p{N}\p{M}_])#[\p{L}\p{N}_]+/u.test(visible);
+  }
   if (id === "NO_EMOJI") return !/[\p{Extended_Pictographic}\p{Regional_Indicator}\u20e3]/u.test(text);
   return content.caption.trim().split(/\s+/u).filter(Boolean).length <= 80;
 }

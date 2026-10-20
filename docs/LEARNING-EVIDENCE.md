@@ -32,6 +32,16 @@ Legacy quotes without a preference fingerprint require a fresh quote; already qu
 
 ## Acceptance boundary
 
+### Shared hashtag correction checks
+
+Runtime `studio-v68-shared-hashtag-rule` uses the same `NO_HASHTAGS` predicate for corrected-example eligibility, active-rule revalidation, generated-copy validation and explicit hashtag-removal revision feedback. It checks headline, caption and CTA, including punctuation-wrapped tags and Unicode compatibility forms such as full-width hash/letters. Normalization is for comparison only; stored creative text is not rewritten.
+
+The app's lexical policy treats a hash followed by letters, numbers or underscores as a hashtag when it is not word-internal. HTTP(S)/`www.` URL tokens are excluded so fragment identifiers are not mistaken for tags; a separate tag beside a URL still fails. This is not a guarantee of any social platform's native tokenizer, a semantic reading of arbitrary text or a ban on every hash symbol.
+
+Hashtag feedback uses the existing bounded whole-clause grammar, now also accepting standalone “Without hashtags” and compatibility-normalized wording. Negated or embedded commands such as “Do not remove hashtags” do not select a removal rule. Unsupported phrasing is not interpreted as consent to change policy. The relative-length and exact-opening revision checks remain separate; this change does not claim general negation understanding.
+
+Before/after examples still require two distinct approved corrections and explicit human activation. Existing proposals/memories are revalidated with the current predicate on recall; there is no automatic activation or rewrite of old evidence. Invalid supplier output records measured supplier usage, releases the customer's reservation and creates no reviewable revision or automatic retry. These deterministic learned rules govern generation; they do not retroactively revoke manual approvals or create a new publishing permission.
+
 ### Corrected-copy skill reviewer binding
 
 Runtime `studio-v57-skill-reviewer` requires a nonblank retained reviewer identity before a corrected creative can support a deterministic copy rule. The evidence fingerprint includes that identity alongside the before/after content, feedback and approval time. Clearing or changing the reviewer invalidates pending activation, active recall and the business knowledge graph; the existing worker context check stops stale queued work before provider submission and releases its unused customer reservation. Reflection expires stale proposals and removes only their scoped skill memories. It can propose new evidence but never activates it automatically.
