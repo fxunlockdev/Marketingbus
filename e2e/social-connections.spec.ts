@@ -25,7 +25,12 @@ test("publishing connections are scoped, fail closed, hide secrets and allow can
     await page.goto("/studio"); await page.getByRole("button", { name: "Connections", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Publishing destinations", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Disconnect Fixture company page", exact: true })).toBeVisible();
-    for (const provider of ["Instagram", "Facebook", "LinkedIn"]) await expect(page.getByRole("button", { name: `Connect ${provider}`, exact: true })).toBeDisabled();
+    for (const provider of ["Instagram", "Facebook", "LinkedIn"]) {
+      const card = page.getByRole("region", { name: `${provider} connection`, exact: true });
+      await expect(card.getByText("Not available yet", { exact: true })).toBeVisible();
+      await expect(card.getByRole("button", { name: `Connect ${provider}`, exact: true })).toHaveCount(0);
+    }
+    await expect(page.getByText("You can connect accounts now.", { exact: false })).toHaveCount(0);
     for (const provider of ["OpenAI", "Gemini", "Higgsfield"]) await expect(page.getByRole("heading", { name: provider, exact: true })).toHaveCount(0);
     expect((await page.request.post(endpoint, { headers, data: { action: "begin", provider: "Facebook" } })).status()).toBe(503);
     expect((await page.request.post(endpoint, { headers: { Origin: "https://attacker.example" }, data: { action: "cancel", flowId } })).status()).toBe(403);

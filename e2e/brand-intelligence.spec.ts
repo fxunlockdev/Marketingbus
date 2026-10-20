@@ -35,6 +35,7 @@ test("source-backed suggestions can be inspected, rejected and selectively appli
     ] }) }));
     await page.setViewportSize({ width: 1440, height: 1050 });
     await page.goto("/studio"); await page.getByRole("button", { name: "Brand", exact: true }).click();
+    await page.getByText("Photos, logos and documents", { exact: true }).click();
     const panel = page.getByRole("region", { name: "Evidence into direction." });
     await expect(panel.getByText("Ready for review", { exact: true })).toBeVisible();
     await panel.getByText("Inspect supporting evidence", { exact: true }).first().click();

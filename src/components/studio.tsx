@@ -16,7 +16,6 @@ import {
   ArrowRight,
   Check,
   Sparkles,
-  CircleHelp,
   Image as ImageIcon,
   Film,
   PenLine,
@@ -26,7 +25,6 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import type { BrandInput } from "@/lib/brand";
-import { brandSuggestions } from "@/lib/brand";
 import { BrandForm, presets } from "./brand-form";
 import { BrandBookDownload } from "./brand-book-download";
 import { BusinessSetup } from "./business-setup";
@@ -594,9 +592,9 @@ export function Studio({
                 (business ? (
                   <>
                     <Heading
-                      kicker={`BRAND CONTEXT · VERSION ${business.version}`}
-                      title="The world of your brand."
-                      description="The foundation every specialist reads before making anything."
+                      kicker="YOUR BUSINESS"
+                      title="Your brand"
+                      description="The details we use to create your content. Change anything that doesn’t sound right."
                       action={
                         <button
                           className="button secondary"
@@ -607,23 +605,7 @@ export function Studio({
                         </button>
                       }
                     />
-                    <div className="brand-summary">
-                      <div
-                        className={`design-preview large-preview ${business.designPreset}`}
-                        style={
-                          {
-                            "--brand-accent": business.color,
-                          } as React.CSSProperties
-                        }
-                      >
-                        <small>{business.name}</small>
-                        <strong>
-                          {business.difference || "Your point\nof view."}
-                        </strong>
-                        <span>
-                          {business.industry || "Your brand direction"}
-                        </span>
-                      </div>
+                    <div className="brand-overview">
                       <section className="panel brand-facts">
                         {!!business.confirmedAt && <BrandBookDownload profile={business} />}
                         <div className="panel-heading">
@@ -635,15 +617,10 @@ export function Studio({
                           </span>
                         </div>
                         {[
-                          ["Offering", business.offering],
-                          ["Audience", business.audience],
-                          ["Objective", business.goal],
-                          ["Voice", business.tone],
-                          ["Approved proof", business.proof || "Not provided"],
-                          [
-                            "Restrictions",
-                            business.restrictions || "Not provided",
-                          ],
+                          ["What you do", business.offering || "Add a short description"],
+                          ["Your customers", business.audience || "Add who you help"],
+                          ["Your goal", business.goal],
+                          ["Your tone", business.tone],
                         ].map(([label, text]) => (
                           <div className="fact" key={label}>
                             <span>{label}</span>
@@ -663,63 +640,28 @@ export function Studio({
                               )?.name
                             }
                           </span>
-                          <small>Layout preview</small>
                         </div>
                         {!business.confirmedAt && (
                           <button
-                            disabled={busy}
+                            disabled={busy || !business.offering.trim() || !business.audience.trim()}
+                            aria-describedby={!business.offering.trim() || !business.audience.trim() ? "brand-missing-details" : undefined}
                             className="button dark"
                             onClick={() =>
                               act("confirm", { version: business.version })
                             }
                           >
                             <Check size={16} />
-                            Confirm this brand profile
+                            Confirm details
                           </button>
                         )}
+                        {(!business.offering.trim() || !business.audience.trim()) && <p id="brand-missing-details" className="muted">Your business description and customers are missing. <button className="text-button" onClick={() => setEditing("edit")}>Add your details</button></p>}
                       </section>
                     </div>
-                    <AssetLibrary key={business.id} businessId={business.id} />
-                    <KnowledgeLibrary key={`sources-${business.id}`} businessId={business.id} />
-                    <div className="section-heading">
-                      <h2>Give your team a stronger brief</h2>
-                      <span className="tag">
-                        Profile checks · not an AI audit
-                      </span>
-                    </div>
-                    <div className="suggestion-grid">
-                      {brandSuggestions(business).map((s) => (
-                        <section className="panel suggestion" key={s.id}>
-                          <CircleHelp size={20} />
-                          <h3>{s.title}</h3>
-                          <p>{s.reason}</p>
-                          <small>{s.action}</small>
-                          <button
-                            className="text-button"
-                            onClick={() => setEditing("edit")}
-                          >
-                            Update profile <ArrowUpRight size={14} />
-                          </button>
-                        </section>
-                      ))}
-                      {!brandSuggestions(business).length && (
-                        <div className="notice">
-                          Your core profile fields are filled. AI brand
-                          recommendations will become available after the
-                          provider workflow is connected and evaluated.
-                        </div>
-                      )}
-                    </div>
-                    <div className="notice">
-                      <GlobeIcon />
-                      <p>
-                        <b>Website research and asset uploads</b>
-                        <br />
-                        Firecrawl extraction and private file ingestion are
-                        planned next. Your profile is currently based on the
-                        answers you supplied.
-                      </p>
-                    </div>
+                    <details className="panel brand-resources">
+                      <summary>Photos, logos and documents</summary>
+                      <AssetLibrary key={business.id} businessId={business.id} />
+                      <KnowledgeLibrary key={`sources-${business.id}`} businessId={business.id} />
+                    </details>
                   </>
                 ) : (
                   <Empty
@@ -878,7 +820,7 @@ export function Studio({
                     title="Publishing destinations"
                     description="Your business's social accounts for publishing approved content and tracking performance."
                   />
-                  {business ? <><SocialConnections key={business.id} businessId={business.id} />{business.setupStep !== null && business.setupStep < 6 && <p className="notice subtle">You can connect accounts now. <button className="text-button" onClick={() => go("Overview")}>Complete your website and brand setup</button> before creating and approving content.</p>}</> : <DestinationCatalogue workspaces={workspaces} onCreated={id => { setSelected(id); router.refresh(); }} onSetup={() => { setEditing("new"); setError(""); }} />}
+                  {business ? <><SocialConnections key={business.id} businessId={business.id} />{business.setupStep !== null && business.setupStep < 6 && <p className="muted"><button className="text-button" onClick={() => go("Overview")}>Complete your website and brand setup</button> when you’re ready to create content.</p>}</> : <DestinationCatalogue workspaces={workspaces} onCreated={id => { setSelected(id); router.refresh(); }} onSetup={() => { setEditing("new"); setError(""); }} />}
                 </>
               )}
               {page === "Credits" && (
@@ -928,7 +870,4 @@ function Empty({
       )}
     </section>
   );
-}
-function GlobeIcon() {
-  return <Compass size={20} aria-hidden="true" />;
 }

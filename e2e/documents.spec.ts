@@ -10,6 +10,7 @@ test("Word upload is reviewed evidence, deduplicates, rejects malformed data and
   zip.file("word/document.xml", `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${evidence}</w:t></w:r></w:p></w:body></w:document>`);
   const bytes = await zip.generateAsync({ type: "nodebuffer" });
   await page.goto("/studio"); await page.getByRole("button", { name: "Brand", exact: true }).click();
+  await page.getByText("Photos, logos and documents", { exact: true }).click();
   await page.getByLabel("I have permission to import this business content.").check();
   await page.getByLabel("PDF or Word document (.pdf or .docx, up to 5 MB)").setInputFiles({ name: "Brand evidence.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", buffer: bytes });
   await page.getByRole("button", { name: "Extract document for review", exact: true }).click();

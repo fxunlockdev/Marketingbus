@@ -38,20 +38,24 @@ export function SocialConnections({ businessId }: { businessId: string }) {
   }
   return <section className="panel" aria-label="Publishing connections" aria-busy={busy}>
     <h2>Social accounts</h2>
-    <p className="muted">Connect one account per platform for this business—even before completing your brand setup. To switch accounts, disconnect the existing one first. Connecting does not publish anything or approve your work.</p>
+    <p className="muted">One account per platform. Nothing is posted without your approval.</p>
     {error && <p role="alert">{error}</p>}
     <p role="status" tabIndex={-1} ref={resultRef}>{message}</p>
     {!view && !error && <p role="status">Loading destinations…</p>}
     {view && <>
       {!view.canManage && <p>Only a workspace owner or admin can manage connections.</p>}
-      <div className="tag-row">{["Instagram", "Facebook", "LinkedIn"].map(provider => <div key={provider}>
-        <button className="button secondary" disabled={busy || !view.canManage || !view.enabledProviders.includes(provider) || view.connections.some(a => a.provider === provider && a.status !== "DISCONNECTED")} onClick={() => act({ action: "begin", provider })}>Connect {provider}</button>
-        {view.connections.some(a => a.provider === provider && a.status !== "DISCONNECTED") && <p className="muted">Account slot in use. Renew access or disconnect below.</p>}
-        {!view.enabledProviders.includes(provider) && <p className="muted">{provider}: platform setup pending</p>}
-      </div>)}</div>
-      <p className="muted">X and YouTube are planned destinations and are not available yet.</p>
-      <p className="muted" id="disconnect-explanation">Disconnecting removes this business’s saved credentials, stops metric checks and cancels queued posts and pending connection requests for that platform. Requests already sent may still finish. Published posts, uncertain outcomes and audit history remain. This does not revoke the app in the network’s settings.</p>
-      {view.connections.length === 0 ? <p>No accounts connected for this business.</p> : <ul>{view.connections.map(account => {
+      {view.enabledProviders.length < 3 && <p className="notice subtle">Some connections aren’t available yet. Marketingbus needs to finish setting them up—there’s nothing to change in your business profile.</p>}
+      <div className="connection-options">{["Instagram", "Facebook", "LinkedIn"].map(provider => {
+        const available = view.enabledProviders.includes(provider);
+        const connected = view.connections.some(a => a.provider === provider && a.status !== "DISCONNECTED");
+        return <section className="connection-option" key={provider} aria-label={`${provider} connection`}>
+          <h3>{provider}</h3>
+          <p className="muted">{provider === "Instagram" ? "Professional account linked to a Facebook Page" : provider === "Facebook" ? "A Facebook Page you manage" : "A company Page you manage"}</p>
+          {!available ? <span className="tag">Not available yet</span> : connected ? <span className="tag">Account added</span> :
+            <button className="button secondary" disabled={busy || !view.canManage} onClick={() => act({ action: "begin", provider })}>Connect {provider}</button>}
+        </section>;
+      })}</div>
+      {view.connections.length > 0 && <ul className="connected-accounts">{view.connections.map(account => {
         const expired = account.status === "CONNECTED" && !!account.expiresAt && Date.parse(account.expiresAt) <= Date.now();
         const reconnect = expired || account.status === "RECONNECT_REQUIRED";
         const expiring = account.status === "CONNECTED" && !!account.expiresAt && !expired && Date.parse(account.expiresAt) <= Date.now() + 7 * 86400000;
@@ -66,7 +70,7 @@ export function SocialConnections({ businessId }: { businessId: string }) {
             : <p className="muted">Ask a workspace owner or admin to reconnect this account.</p>}
           {!view.enabledProviders.includes(account.provider) && <p className="muted">Reconnection is unavailable until platform setup is enabled.</p>}
         </div>}
-        {view.canManage && account.status !== "DISCONNECTED" && <button className="button secondary" disabled={busy} aria-describedby="disconnect-explanation" onClick={() => {
+        {view.canManage && account.status !== "DISCONNECTED" && <button className="button secondary" disabled={busy} onClick={() => {
           if (window.confirm(`Disconnect ${account.label} from this business? Queued posts and pending ${account.provider} connection requests will be cancelled. Already-sent requests may still finish. Remote posts and authorization will not be removed.`))
             void act({ action: "disconnect", connectionId: account.id, authorizationVersion: account.authorizationVersion });
         }}>Disconnect {account.label}</button>}

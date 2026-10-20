@@ -20,6 +20,7 @@ test("private brand upload, browser preview and cross-tenant access denial", asy
     expect(created.ok()).toBe(true); const { id } = await created.json();
     organizationId = (await db.business.findUniqueOrThrow({ where: { id } })).organizationId;
     await page.goto("/studio"); await page.getByRole("button", { name: "Brand", exact: true }).click();
+    await page.getByText("Photos, logos and documents", { exact: true }).click();
     await page.getByLabel("Image label", { exact: true }).fill("Private fixture logo");
     const png = await sharp({ create: { width: 80, height: 60, channels: 4, background: "#c67139" } }).png().toBuffer();
     await page.getByLabel("Image file", { exact: true }).setInputFiles({ name: "fixture.png", mimeType: "image/png", buffer: png });

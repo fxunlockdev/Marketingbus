@@ -19,6 +19,7 @@ test("document import, exact evidence, tenant isolation and explicit deletion", 
     const created = await page.request.post("/api/businesses", { headers, data: { name: "Evidence Studio", offering: "Handmade ceramics", audience: "Homeowners", goal: "Book a visit", channels: ["Instagram"] } });
     expect(created.ok()).toBe(true); const { id } = await created.json();
     await page.goto("/studio"); await page.getByRole("button", { name: "Brand", exact: true }).click();
+    await page.getByText("Photos, logos and documents", { exact: true }).click();
     const region = page.getByRole("region", { name: "Business evidence" });
     await expect(region.locator(".error")).toBeHidden();
     await expect(region.locator(".checkbox-label")).toHaveCSS("flex-direction", "row");
@@ -46,6 +47,7 @@ test("document import, exact evidence, tenant isolation and explicit deletion", 
     const failed = await db.knowledgeSource.create({ data: { businessId: id, organizationId: source.organizationId, createdBy: source.createdBy, kind: "WEBSITE", title: "Website import fixture", sourceUrl: "https://example.com/about", status: "FAILED" } });
     await db.job.create({ data: { businessId: id, organizationId: source.organizationId, kind: "WEBSITE_READ", key: `source:${failed.id}`, payload: { sourceId: failed.id, url: failed.sourceUrl }, status: "FAILED", errorCode: "SCRAPER_AUTH_REQUIRED", attempts: 1, maxAttempts: 1 } });
     await page.reload(); await page.getByRole("button", { name: "Brand", exact: true }).click();
+    await page.getByText("Photos, logos and documents", { exact: true }).click();
     await expect(region.getByRole("status")).toContainText("administrator to check the scraper connection");
     await expect(region.getByRole("status")).toContainText("saved business details are unchanged");
     expect((await outsider.get(`/api/businesses/${id}/sources`)).status()).toBe(404);

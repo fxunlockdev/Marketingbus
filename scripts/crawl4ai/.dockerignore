@@ -2,3 +2,5 @@
 !Dockerfile
 !config.yml
 !start.sh
+!html_worker.py
+!html_server.py

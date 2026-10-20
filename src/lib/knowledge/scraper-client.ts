@@ -88,7 +88,9 @@ export async function readWebsite(base: URL, input: string, headers: Record<stri
     // Firecrawl sourceURL is the submitted URL; metadata.url is the engine's
     // actual final URL. Require it instead of inferring that no redirect occurred.
     const finalUrl = await publicAddress(data.metadata.url);
-    if (finalUrl.origin !== url.origin) throw new SourceImportError("SOURCE_REDIRECT_CHANGED");
+    const canonicalWww = provider === "crawl4ai" && url.protocol === "https:" && finalUrl.protocol === "https:" &&
+      finalUrl.port === url.port && (finalUrl.hostname === `www.${url.hostname}` || url.hostname === `www.${finalUrl.hostname}`);
+    if (finalUrl.origin !== url.origin && !canonicalWww) throw new SourceImportError("SOURCE_REDIRECT_CHANGED");
     if (data.metadata.sourceURL && (await publicAddress(data.metadata.sourceURL)).origin !== url.origin) {
       throw new SourceImportError("SOURCE_REDIRECT_CHANGED");
     }

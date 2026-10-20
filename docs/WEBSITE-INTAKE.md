@@ -106,6 +106,10 @@ Brand-book choices are upload, make a starter guide, or later. Accepted uploads:
 
 ## Crawl4AI selection (not yet live-verified)
 
+Deployment correction (v72): the first Chromium-based Railway attempt failed sandbox startup. The replacement `scripts/crawl4ai/Dockerfile` starts only `html_server.py`, not the upstream browser/API server or Redis. It performs a bounded, TLS-verified, DNS-pinned public HTML fetch and applies Crawl4AI's text extractor with networking disabled during extraction. Only HTTPS port 443 and same-host or conventional `www.`/apex redirects are permitted; robots, byte ceilings, bounded gzip, child timeout, authentication and one-job capacity remain enforced. No page scripts, subresources, hooks or model requests run. This is HTML extraction, not JavaScript rendering or an OS-isolated browser. The application attestation covers this fixed reader's verified outbound-address restrictions.
+
+Local actual gateway acceptance passes example.com and lodhagroup.com and rejects unauthenticated, private-address and invalid-certificate requests. Eleven offline Python cases cover the boundaries. A dedicated temporary library directory is cleaned per request; the child has no application/provider credentials. Hosted private-network acceptance and queue activation are still pending. Static/SSR pages can work; JavaScript-only content and login-restricted social profiles are not promised. The owner authorized one shared Railway scraper service, not additional Postiz infrastructure or model spending.
+
 At the owner's request, the existing queue can select the self-hosted Crawl4AI **v0.9.5** `/crawl` protocol instead of Firecrawl. Configuration:
 
 - `WEBSITE_SCRAPER=crawl4ai`

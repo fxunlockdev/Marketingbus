@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 
 const script = "scripts/crawl4ai/start.sh";
+it("passes the isolated HTML gateway security tests without network or Python dependencies", () => {
+  const result = spawnSync("python3", ["-B", "scripts/crawl4ai/test_html_runtime.py"], { encoding: "utf8", timeout: 15000 });
+  expect(result.status, result.stderr).toBe(0);
+}, 20000);
 const safe = {
   PATH: process.env.PATH,
   NODE_ENV: "test" as const,
@@ -29,5 +33,6 @@ it("pins the isolated image and excludes application secrets from the build cont
   expect(dockerfile).toContain("FROM unclecode/crawl4ai@sha256:636a6f9e5127f54771f14f709bf1b95693aacc30512426b26d09768b0269f1f4");
   expect(dockerfile).toContain("USER appuser");
   expect(dockerfile).not.toMatch(/COPY\s+\.\s/);
-  expect(readFileSync("scripts/crawl4ai/.dockerignore", "utf8").trim().split("\n")).toEqual(["*", "!Dockerfile", "!config.yml", "!start.sh"]);
+  expect(dockerfile).toContain('CMD ["python", "-I", "/app/html_server.py"]');
+  expect(readFileSync("scripts/crawl4ai/.dockerignore", "utf8").trim().split("\n")).toEqual(["*", "!Dockerfile", "!config.yml", "!start.sh", "!html_worker.py", "!html_server.py"]);
 });

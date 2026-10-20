@@ -61,6 +61,13 @@ it("rejects extra results rather than choosing an arbitrary page", async () => {
   const response = result(); response.results.push(response.results[0]);
   await expect(readWebsite(base, source, {}, async () => Response.json(response), "crawl4ai")).rejects.toMatchObject({ code: "SOURCE_INVALID_RESULT" });
 });
+it("accepts a verified HTTPS www canonical redirect and preserves its final attribution", async () => {
+  const data = await readWebsite(base, source, {}, async () => Response.json(result({ redirected_url: "https://www.example.com/about" })), "crawl4ai");
+  expect(data.metadata.url).toBe("https://www.example.com/about");
+});
+it.each(["https://shop.example.com/about", "https://www.example.com.evil.test", "http://www.example.com/about", "https://www.example.com:8443/about"])("rejects noncanonical redirects to %s", async redirected_url => {
+  await expect(readWebsite(base, source, {}, async () => Response.json(result({ redirected_url })), "crawl4ai")).rejects.toThrow();
+});
 it.each([undefined, "", " token", "token\n", "é"])("requires a valid dedicated Crawl4AI token (%#)", value => {
   vi.stubEnv("CRAWL4AI_API_TOKEN", value); vi.stubEnv("FIRECRAWL_API_KEY", "cannot-fallback");
   expect(() => scraperHeaders("crawl4ai")).toThrow();

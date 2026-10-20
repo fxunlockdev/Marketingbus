@@ -59,8 +59,8 @@ test("connect-first draft resumes the same business and requires a website", asy
   await form.getByLabel("Business name").fill("Connect-first business");
   await form.getByRole("button", { name: "Continue to social connections" }).click();
   await expect(page.getByRole("region", { name: "Publishing connections", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Connect Instagram", exact: true })).toBeDisabled();
-  await expect(page.getByText("Instagram: platform setup pending")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Connect Instagram", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Instagram connection", exact: true }).getByText("Not available yet")).toBeVisible();
   expect((await new AxeBuilder({ page }).include("main").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
   await page.getByRole("button", { name: "Complete your website and brand setup" }).click();
   const setup = page.getByRole("region", { name: "Guided business setup" });
@@ -75,6 +75,15 @@ test("connect-first draft resumes the same business and requires a website", asy
   await page.getByLabel("Not now", { exact: true }).check();
   await page.getByRole("button", { name: "Review my brand", exact: true }).click();
   await expect(setup.getByLabel("Business name", { exact: true })).toHaveValue("Connect-first business");
+  await page.getByRole("button", { name: "Brand", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Your brand", exact: true })).toBeVisible();
+  await expect(page.locator(".large-preview")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Confirm details", exact: true })).toBeDisabled();
+  await expect(page.getByText("Add a short description", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Business evidence", exact: true })).toBeHidden();
+  await page.getByText("Photos, logos and documents", { exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("region", { name: "Business evidence", exact: true })).toBeVisible();
 });
 test("review filters combine channel and format, and reviewed procedures recall into matching work", async ({ page }) => {
   const database = process.env.TEST_DATABASE_URL;

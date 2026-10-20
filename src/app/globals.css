@@ -952,6 +952,36 @@ hr {
   gap: 22px;
   align-items: start;
 }
+.brand-overview {
+  max-width: 860px;
+}
+.brand-resources {
+  margin-top: 24px;
+}
+.brand-resources > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.connection-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+  gap: 16px;
+  margin: 24px 0;
+}
+.connection-option {
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+.connection-option h3 {
+  margin: 0 0 12px;
+}
+.connection-option p {
+  margin: 0 0 20px;
+}
+.connected-accounts > li {
+  margin-bottom: 24px;
+}
 .design-preview {
   position: relative;
   aspect-ratio: 4/5;
