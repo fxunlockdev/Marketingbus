@@ -1,0 +1,47 @@
+# Overrides merged into the pinned upstream defaults. One shared, bounded worker.
+app:
+  host: "::"
+  port: 11235
+  workers: 1
+  timeout_keep_alive: 30
+llm: {}
+redis:
+  task_ttl_seconds: 60
+limits:
+  max_body_bytes: 8192
+  max_pages: 1
+  max_depth: 0
+  wall_clock_s: 40
+  queue:
+    maxsize: 1
+    workers: 1
+    per_principal: 1
+rate_limiting:
+  enabled: true
+  default_limit: "20/minute"
+security:
+  enabled: true
+  jwt_enabled: false
+  cors_allow_origins: []
+crawler:
+  timeouts:
+    stream_init: 30
+    batch_process: 40
+  pool:
+    max_pages: 1
+    idle_ttl_sec: 60
+    max_pages_before_recycle: 1
+  browser:
+    kwargs:
+      headless: true
+      text_mode: true
+    extra_args:
+      - "--disable-dev-shm-usage"
+      - "--disable-gpu"
+logging:
+  level: "WARNING"
+observability:
+  prometheus:
+    enabled: false
+webhooks:
+  enabled: false
