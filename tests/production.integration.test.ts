@@ -145,6 +145,49 @@ suite("production authorization, review and worker integration", () => {
     const call = vi.fn(fixtureReasoner); await runOneJob(call); expect(call).not.toHaveBeenCalled();
     expect(await db.wallet.findUnique({ where: { organizationId: scope.organizationId } })).toMatchObject({ held: 0, available: 500 });
   });
+  it.each(["viewer", "removed", "foreign-only", "missing-actor", "blank-actor"])("stops queued copy after author authority becomes %s", async change => {
+    const { scope, itemId } = await setup(); const q = await quote(scope, itemId);
+    await actOnProduction(scope, { action: "accept", quoteId: q.id });
+    if (change === "viewer") await db.membership.updateMany({ where: { organizationId: scope.organizationId, userId: scope.actorId }, data: { role: "VIEWER" } });
+    if (["removed", "foreign-only"].includes(change)) {
+      await db.membership.deleteMany({ where: { organizationId: scope.organizationId, userId: scope.actorId } });
+      if (change === "foreign-only") {
+        const other = await db.organization.create({ data: { name: "Unrelated authorization", memberships: { create: { userId: scope.actorId, role: "OWNER" } } } });
+        organizations.push(other.id);
+      }
+    }
+    if (["missing-actor", "blank-actor"].includes(change)) await db.job.updateMany({ where: { quoteId: q.id }, data: { payload: change === "missing-actor" ? {} : { actorId: " " } } });
+    const call = vi.fn(fixtureReasoner);
+    await runOneJob(call); await runOneJob(call);
+    expect(call).not.toHaveBeenCalled();
+    expect(await db.creativeRevision.count({ where: { itemId } })).toBe(0);
+    expect(await db.job.findUniqueOrThrow({ where: { quoteId: q.id } })).toMatchObject({ status: "FAILED", errorCode: "PREFLIGHT_FAILED", attempts: 1, submittedAt: null });
+    expect(await db.generationQuote.findUniqueOrThrow({ where: { id: q.id } })).toMatchObject({ status: "RELEASED" });
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } })).toMatchObject({ held: 0, available: 500 });
+  });
+  it.each(["viewer", "removed"])("withholds returned copy after the author becomes %s without losing supplier expense", async change => {
+    const { scope, itemId } = await setup(); const q = await quote(scope, itemId);
+    await actOnProduction(scope, { action: "accept", quoteId: q.id });
+    const call = vi.fn(async () => {
+      if (change === "viewer") await db.membership.updateMany({ where: { organizationId: scope.organizationId, userId: scope.actorId }, data: { role: "VIEWER" } });
+      else await db.membership.deleteMany({ where: { organizationId: scope.organizationId, userId: scope.actorId } });
+      return fixtureReasoner();
+    });
+    await runOneJob(call); await runOneJob(call);
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(await db.creativeRevision.count({ where: { itemId } })).toBe(0);
+    expect(await db.job.findUniqueOrThrow({ where: { quoteId: q.id } })).toMatchObject({ status: "FAILED", errorCode: "CONTEXT_CHANGED",
+      result: { creditsConsumed: 0, supplierCostMicros: 1000 } });
+    expect(await db.generationQuote.findUniqueOrThrow({ where: { id: q.id } })).toMatchObject({ status: "COMPLETED" });
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: scope.organizationId } })).toMatchObject({ held: 0, available: 500 });
+  });
+  it("allows a retained editor to complete already-authorized copy with exact authorship", async () => {
+    const { scope, itemId } = await setup(); const q = await quote(scope, itemId);
+    await actOnProduction(scope, { action: "accept", quoteId: q.id });
+    await db.membership.updateMany({ where: { organizationId: scope.organizationId, userId: scope.actorId }, data: { role: "EDITOR" } });
+    await runOneJob(fixtureReasoner);
+    expect(await db.creativeRevision.findFirstOrThrow({ where: { itemId } })).toMatchObject({ status: "READY", authorId: scope.actorId });
+  });
   it("withholds stale-preference output after submission without charging the customer", async () => {
     const { scope, itemId } = await setup(); const q = await quote(scope, itemId);
     await actOnProduction(scope, { action: "accept", quoteId: q.id });

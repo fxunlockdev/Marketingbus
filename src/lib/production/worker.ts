@@ -9,6 +9,7 @@ import { evaluateCreative } from "./quality";
 import { productionMemories, preferenceFingerprint } from "../social/learning-evidence";
 import { followsRule } from "../harness/learned-rules";
 import { assertKnowledgeCurrent } from "../harness/knowledge-graph";
+import { assertBrandEditor } from "../knowledge/analysis";
 
 type Reasoner = typeof reason;
 // A test can inject a fixture transport. No environment switch can enable fake results in the application.
@@ -21,6 +22,8 @@ export async function runOneJob(reasoner: Reasoner = reason) {
   });
   if (!job) return false;
   const scope = { businessId: job.businessId, organizationId: job.organizationId, actorId: "production-worker" };
+  const actorId = job.payload && typeof job.payload === "object" && !Array.isArray(job.payload) && typeof job.payload.actorId === "string" ? job.payload.actorId : "";
+  const authorScope = { ...scope, actorId };
   let submitted = false;
   try {
     const quote = job.quote;
@@ -31,6 +34,7 @@ export async function runOneJob(reasoner: Reasoner = reason) {
     // No network I/O while holding business/wallet locks.
     await db.$transaction(async tx => {
       const business = await lockBusiness(tx, scope);
+      await assertBrandEditor(tx, authorScope);
       const item = await currentItem(tx, scope, quote.itemId);
       if (!business.confirmedAt || business.version !== quote.brandVersion || item.plan.status !== "PROPOSED" || (item.revisions[0]?.version || 0) !== quote.baseVersion) throw Error("Stale brand or revision");
       if (request.preferenceFingerprint !== preferenceFingerprint(await productionMemories(tx, scope, business.version))) throw Error("Preferences or experiment evidence changed");
@@ -56,15 +60,18 @@ export async function runOneJob(reasoner: Reasoner = reason) {
       const item = await currentItem(tx, scope, quote.itemId);
       const current = await tx.job.findUniqueOrThrow({ where: { id: job.id } });
       if (current.status !== "SUBMITTING") throw Error("Lost submission lease; reconcile instead of duplicating output");
-      let knowledgeCurrent = true;
-      try { await assertKnowledgeCurrent(tx, scope, request.knowledgeContext); } catch { knowledgeCurrent = false; }
-      const fresh = knowledgeCurrent && !!business.confirmedAt && business.version === quote.brandVersion && item.plan.status === "PROPOSED" && (item.revisions[0]?.version || 0) === quote.baseVersion && request.preferenceFingerprint === preferenceFingerprint(await productionMemories(tx, scope, business.version));
+      let contextCurrent = true;
+      try {
+        await assertBrandEditor(tx, authorScope);
+        await assertKnowledgeCurrent(tx, scope, request.knowledgeContext);
+      } catch { contextCurrent = false; }
+      const fresh = contextCurrent && !!business.confirmedAt && business.version === quote.brandVersion && item.plan.status === "PROPOSED" && (item.revisions[0]?.version || 0) === quote.baseVersion && request.preferenceFingerprint === preferenceFingerprint(await productionMemories(tx, scope, business.version));
       const deliver = fresh && content !== null;
       const consumed = deliver ? Math.max(1, Math.ceil(micros / 10_000)) : 0;
       if (deliver && content) {
         await tx.creativeRevision.updateMany({ where: { itemId: item.id, organizationId: scope.organizationId }, data: { status: "SUPERSEDED" } });
         await tx.creativeRevision.create({ data: { itemId: item.id, organizationId: scope.organizationId, version: quote.baseVersion + 1,
-          content, status: "READY", authorId: typeof (job.payload as { actorId?: unknown }).actorId === "string" ? (job.payload as { actorId: string }).actorId : null, provenance: { kind: "AI_COPY", provider: request.route.model.provider, model: request.route.model.model,
+          content, status: "READY", authorId: actorId, provenance: { kind: "AI_COPY", provider: request.route.model.provider, model: request.route.model.model,
             providerResponseId: result.id, skillVersion: request.skillVersion, sourceHashes: request.sourceHashes,
             brandVersion: quote.brandVersion, brandName: request.brandName, color: request.color, preset: request.preset,
             preferenceFingerprint: request.preferenceFingerprint,

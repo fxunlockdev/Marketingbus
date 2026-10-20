@@ -1,5 +1,13 @@
 # Acceptance ledger — 19 October 2026
 
+## 20 October — queued copy authority and revoked-author delivery
+
+Runtime `studio-v62-copy-authority` rechecks the accepting member's current same-workspace editing authority before the copy submission fence and before output delivery, using the existing shared membership lock. Removed/downgraded authors, missing/blank author identities and membership only in another workspace cannot run queued copy. Pre-submission refusal releases the unused customer hold without a provider call. Revocation during an already-started request withholds output, releases customer credits and retains measured supplier expense. A retained editor still completes authorized work with the original author's identity; no administrator substitution, automatic retry or new provider setting is introduced.
+
+Seven new regression cases first failed against the earlier worker. Final verification passes **75 focused copy/weekly-media tests**, **2,177 tests across 92 suites with no skips**, production build, type checking and dependency audit (zero reported vulnerabilities). **Two production-review/workflow browser journeys pass** against isolated real private storage, including existing viewer denial and bounded weekly controls. All provider responses in these tests are injected; no live generation occurred. Disposable databases, storage container and temporary TLS files were removed.
+
+This increment is **source-only pending independent CI and deployment**. Prior hard-stop recovery source `c48dba267a38aa8bab26a8a36c7523136d673e5f` passed [CI 39373982126](https://github.com/fxunlockdev/Marketingbus/actions/runs/39373982126), superseding its pending-CI note below; it is not deployed. Production remains `f864f5d` / `studio-v57-skill-reviewer`. No paid call, real email/post/payment, production fixture or infrastructure/configuration change occurred. This authority guard does not establish complete account-lifecycle, host-failure, live-provider or full-product acceptance.
+
 ## 20 October — hard-stop worker recovery and overlapping restarts
 
 Runtime `studio-v61-crash-recovery` fixes a recovered uncertain copy job leaving its customer creative incorrectly marked queued. Lease recovery now updates the scoped queued item to `NEEDS_RECONCILIATION` atomically with the job/quote, preserves newer creative states, and refuses a mismatched business quote. The recovery winner alone changes the related records; supplier submission, customer holds and ledger entries are not retried or settled.
