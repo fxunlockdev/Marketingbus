@@ -90,7 +90,9 @@ suite("evidence-grounded brand intelligence", () => {
       { ...f.suggestions[0], kind: "SUMMARY_DRAFT", value: "Architecture advice to help plan a home." },
       { ...f.suggestions[0], field: "audience", kind: "INFERRED_AUDIENCE", value: "People planning changes to their homes.", reason: "A proposed customer segment based on the architecture consultation service." },
     ];
-    await runOneBrandAnalysis(async () => ({ id: "fixture-draft", text: JSON.stringify({ suggestions }), usage: { input_tokens: 100, output_tokens: 100 } }));
+    const slots = { name: null, offering: null, audience: null, difference: null, proof: null, tone: null, restrictions: null,
+      ...Object.fromEntries(suggestions.map(({ field, ...proposal }) => [field, proposal])) };
+    await runOneBrandAnalysis(async () => ({ id: "fixture-draft", text: JSON.stringify(slots), usage: { input_tokens: 100, output_tokens: 100 } }));
     expect(await readSetupAutofill(f.scope)).toMatchObject({ status: "READY", suggestions });
     expect(await db.business.findUniqueOrThrow({ where: { id: f.scope.businessId } })).toMatchObject({ offering: "", audience: "", confirmedAt: null });
   });

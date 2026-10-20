@@ -48,9 +48,10 @@ test("website setup fills the review fields, preserves a late edit and finishes 
     await setup.getByRole("textbox", { name: "What do you do?", exact: true }).fill(editedOffering);
     await runOneBrandAnalysis(async () => ({
       id: "fixture-autofill-result", usage: { input_tokens: 100, output_tokens: 100 },
-      text: JSON.stringify({ suggestions: Object.entries({ name, offering, audience }).map(([field, value]) => ({
-        field, value, kind: field === "name" ? "EXACT_EXCERPT" : field === "offering" ? "SUMMARY_DRAFT" : "INFERRED_AUDIENCE", reason: "Drafted from the website description for owner review.", citations: [{ sourceId: source.id, sha256: source.sha256, excerpt: field === "name" ? name : description }],
-      })) }),
+      text: JSON.stringify({ difference: null, proof: null, tone: null, restrictions: null,
+        ...Object.fromEntries(Object.entries({ name, offering, audience }).map(([field, value]) => [field, {
+          value, kind: field === "name" ? "EXACT_EXCERPT" : field === "offering" ? "SUMMARY_DRAFT" : "INFERRED_AUDIENCE", reason: "Drafted from the website description for owner review.", citations: [{ sourceId: source.id, sha256: source.sha256, excerpt: field === "name" ? name : description }],
+        }])) }),
     }));
     await expect(setup.getByLabel("Business name", { exact: true })).toHaveValue(name, { timeout: 15000 });
     await expect(setup.getByLabel("Who is it for?", { exact: true })).toHaveValue(audience);

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { validateSuggestions, reviewSuggestions, analysisPrompt } from "../src/lib/knowledge/grounding";
+import { validateSuggestions, reviewSuggestions, analysisPrompt, analysisResponseSchema } from "../src/lib/knowledge/grounding";
 const body = "We offer design consultations for homeowners. Calm, clear language.", sha256 = createHash("sha256").update(body).digest("hex");
 const sources = [{ id: "source", sha256, title: "Fixture", body }];
 const fact = { field: "offering", kind: "EXACT_EXCERPT", value: "We offer design consultations for homeowners.", reason: "Specific source description", citations: [{ sourceId: "source", sha256, excerpt: "We offer design consultations for homeowners." }] };
@@ -56,5 +56,15 @@ describe("brand proposal grounding", () => {
       expect(() => validateSuggestions({ suggestions: [{ ...fact, field, kind: "INFERRED_AUDIENCE" }] }, sources)).toThrow();
     for (const value of ["Serving 50 countries", "Guaranteed outcomes", "Certified specialists", "Award-winning design", "users"])
       expect(() => validateSuggestions({ suggestions: [{ ...fact, kind: "SUMMARY_DRAFT", value }] }, sources)).toThrow();
+  });
+  it("requires a decision for each core model field and converts valid slots to stored proposals", () => {
+    const { field: _field, ...offering } = { ...fact, kind: "SUMMARY_DRAFT", value: "Advice for home design projects." };
+    const slots = { name: null, offering, audience: { ...offering, kind: "INFERRED_AUDIENCE", value: "People planning a home design project." }, difference: null, proof: null, tone: null, restrictions: null };
+    expect(analysisResponseSchema.safeParse(slots).success).toBe(true);
+    expect(reviewSuggestions(slots, sources).accepted.map(s => s.field)).toEqual(["offering", "audience"]);
+    const { audience: _audience, ...missing } = slots;
+    expect(() => reviewSuggestions(missing, sources)).toThrow();
+    expect(() => reviewSuggestions({ ...slots, name: offering }, sources)).toThrow();
+    expect(() => reviewSuggestions({ ...slots, autoApprove: true }, sources)).toThrow();
   });
 });
