@@ -6,7 +6,7 @@ The existing `BrandAnalysis` job ledger now distinguishes `BRAND` from `SKILL_RE
 
 ## Evidence and scope
 
-- Only a business's current confirmed brand version, latest approved creative revisions, named approvers and corrections within 90 days qualify. At least two distinct items on one destination are required.
+- Only a business's current confirmed brand version, latest approved creative revisions, named approvers and corrections within 90 days qualify. Missing, empty and whitespace-only reviewer identities do not qualify. At least two distinct items on one destination are required.
 - Up to eight episodes / 24 KB, four quotes per business/day; common emails, URLs, tokens and international phone numbers are redacted. This is minimization, not guaranteed anonymization. No model transcript or source-pack executable is run.
 - Structured proposals contain a scenario, instruction, limitation, review check and exact feedback/approved-result quotes. Invented/repeated/cross-channel references fail validation. These checks establish provenance, **not semantic correctness**.
 - Visual-direction proposals inspect approved written direction only, **not rendered pixels, video, sound or visual fidelity**. Do not describe this as automatic visual learning.
@@ -22,6 +22,8 @@ The Memory panel shows retained delivered outputs whose saved generation knowled
 Counts separate currently approved, changes requested, rejected, awaiting review, and replaced/unavailable outputs, alongside distinct creatives. This is a bounded 90-day projection of the newest 200 records per format; a warning indicates truncated samples. Retirement does not erase attribution from retained prior snapshots. Deletion, expiry or replacing a revision can change these current-state counts: they are not an immutable decision history or lifetime totals. There is no extra model call or paid background loop for this report.
 
 Context inclusion does not prove instruction compliance. Approval does not prove improved marketing performance or causation, and these counts do not automatically promote or retire procedures. Semantic/visual holdout evaluation remains outstanding.
+
+Copy, image and video delivery counts require a nonblank retained provider receipt; an empty/whitespace-only identifier is excluded even when a status says ready. Approved counts additionally require a nonblank retained reviewer identity. Missing reviewer evidence moves an otherwise delivered output to replaced/unavailable rather than counting it as approved. These checks establish local record completeness, not remote receipt authenticity or the historical/current membership of a reviewer. Source correction fingerprints already include the exact reviewer: removing that identity excludes active procedure recall and invalidates pending activation or queued reflection without rewriting history.
 
 ## Pilot access
 

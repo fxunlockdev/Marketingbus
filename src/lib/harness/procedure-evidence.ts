@@ -42,7 +42,7 @@ export async function procedureEpisodes(tx: Pick<Prisma.TransactionClient, "prod
   for (const item of items) {
     const after = item.revisions[0], before = item.revisions.find(r => r.version < (after?.version ?? 0) && r.feedback.trim());
     const a = creativeSchema.safeParse(after?.content), b = creativeSchema.safeParse(before?.content);
-    if (!a.success || !b.success || !before || !after || after.status !== "APPROVED" || !after.approvedAt || !after.approvedBy ||
+    if (!a.success || !b.success || !before || !after || after.status !== "APPROVED" || !after.approvedAt || !after.approvedBy?.trim() ||
       after.approvedAt.getTime() > Date.now() || Date.now() - after.approvedAt.getTime() > 90 * 86400000 || !procedureChannel.safeParse(item.channel).success || before.feedback.length > 2000) continue;
     const minimize = (c: typeof a.data) => ({ headline: redactEpisode(c.headline), caption: redactEpisode(c.caption), cta: redactEpisode(c.cta), visualDirection: redactEpisode(c.visualDirection) });
     const content = { feedback: redactEpisode(before.feedback), before: minimize(b.data), approved: minimize(a.data) };

@@ -13,7 +13,7 @@ function fixture(task: "copy" | "image" | "video" = "copy") {
   const root = "business:business:1", memory = "memory:lesson", eid = `evidence:${p.id}:${hashProcedure(evidence)}`;
   const body = { version: 1, organizationId: scope.organizationId, businessId: scope.businessId, brandVersion: 1, task, channel: "LinkedIn", assetIds: [], nodes: [{ id: root, kind: "business", text: "Design practice" }, { id: memory, kind: "skill", text: p.hypothesis }, { id: eid, kind: "evidence", text: "Reviewed corrections" }], edges: [{ from: root, to: memory, relation: "USES_SKILL" }, { from: memory, to: eid, relation: "SUPPORTED_BY" }], omitted: 0 };
   const snapshot = graphSnapshot.parse({ ...body, fingerprint: hashProcedure(body) });
-  const common = { id: "delivered", itemId: "new-item", createdAt: new Date("2026-10-20T10:00:00Z"), status: "READY", approvedBy: null, approvedAt: null, brandVersion: 1, knowledgeContext: snapshot, provenance: { kind: "AI_COPY", providerResponseId: "receipt", knowledgeContext: snapshot }, item: { channel: "LinkedIn", plan: { brandVersion: 1 } }, output: { status: "READY", approvedForGeneration: false, approvedBy: null, purgeAfter: new Date("2026-11-01") } };
+  const common = { id: "delivered", itemId: "new-item", createdAt: new Date("2026-10-20T10:00:00Z"), status: "READY", approvedBy: null, approvedAt: null, brandVersion: 1, providerResponseId: "image-receipt", providerJobId: "video-receipt", knowledgeContext: snapshot, provenance: { kind: "AI_COPY", providerResponseId: "receipt", knowledgeContext: snapshot }, item: { channel: "LinkedIn", plan: { brandVersion: 1 } }, output: { status: "READY", approvedForGeneration: false, approvedBy: null, purgeAfter: new Date("2026-11-01") } };
   const tx = { creativeRevision: { findMany: vi.fn().mockResolvedValue(task === "copy" ? [common] : []) }, imageGeneration: { findMany: vi.fn().mockResolvedValue(task === "image" ? [common] : []) }, videoGeneration: { findMany: vi.fn().mockResolvedValue(task === "video" ? [common] : []) }, productionItem: { findMany: vi.fn().mockResolvedValue([{ id: "new-item", channel: "LinkedIn" }]) } };
   const run = () => procedureOutcomes(tx as unknown as Prisma.TransactionClient, scope, [p], now);
   return { p, snapshot, common, tx, run };
@@ -32,6 +32,22 @@ describe("evidence-linked procedure outcomes", () => {
     const f = fixture();
     f.tx.creativeRevision.findMany.mockResolvedValue(["APPROVED", "CHANGES_REQUESTED", "REJECTED", "READY", "SUPERSEDED"].map((status, i) => ({ ...f.common, id: `revision-${i}`, status, approvedBy: "reviewer", approvedAt: now })));
     expect((await f.run()).totals.proposal).toEqual({ delivered: 5, distinctCreatives: 1, approved: 1, changesRequested: 1, rejected: 1, awaitingReview: 1, replacedOrUnavailable: 1 });
+  });
+  it.each(["copy", "image", "video"] as const)("does not count %s delivery with an empty or whitespace-only provider receipt", async task => {
+    const f = fixture(task);
+    for (const value of ["", " \t\n"]) {
+      f.common.provenance.providerResponseId = value;
+      f.common.providerResponseId = value; f.common.providerJobId = value;
+      expect((await f.run()).totals.proposal.delivered).toBe(0);
+    }
+  });
+  it.each(["copy", "image", "video"] as const)("does not label delivered %s as approved by a blank reviewer", async task => {
+    const f = fixture(task);
+    Object.assign(f.common, { status: task === "video" ? "READY" : "APPROVED", approvedBy: " \t\n", approvedAt: now });
+    Object.assign(f.common.output, { status: task === "video" ? "APPROVED" : "READY", approvedForGeneration: true, approvedBy: " \t\n" });
+    expect((await f.run()).totals.proposal).toMatchObject({ delivered: 1, approved: 0, replacedOrUnavailable: 1 });
+    Object.assign(f.common, { approvedBy: "reviewer" }); Object.assign(f.common.output, { approvedBy: "reviewer" });
+    expect((await f.run()).totals.proposal.approved).toBe(1);
   });
   it.each(["image", "video"] as const)("requires retained approved %s output, not just a generation status", async task => {
     const f = fixture(task);

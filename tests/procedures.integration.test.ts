@@ -115,6 +115,39 @@ suite("semantic creative reflection lifecycle", () => {
   expect((await db.wallet.findUniqueOrThrow({ where: { organizationId: b.scope.organizationId } })).held).toBe(0);
   await expect(manageBrandAnalysis(b.scope, { action: "accept", analysisId: id })).rejects.toThrow("not found");
  });
+ it.each([null, "", " \t\n"])("excludes corrections without a named reviewer (%j) before any reflection quote", async approvedBy => {
+  const a = await setup(), before = await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } });
+  await db.creativeRevision.updateMany({ where: { organizationId: a.scope.organizationId, status: "APPROVED" }, data: { approvedBy } });
+  expect(await procedureEpisodes(db, a.scope, 1)).toEqual([]);
+  await expect(quote(a.scope)).rejects.toThrow("two different");
+  expect(await db.brandAnalysis.count({ where: { businessId: a.scope.businessId } })).toBe(0);
+  expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } })).toEqual(before);
+ });
+ it("rejects a pending proposal after its source reviewer is removed", async () => {
+  const a = await setup(), { p } = await reflect(a.scope);
+  await db.creativeRevision.update({ where: { id: p.candidate!.examples[0].id }, data: { approvedBy: " \t\n" } });
+  await expect(manageProcedures(a.scope, { action: "activate", proposalId: p.id, reviewedEvidence: true, replaceCurrent: true })).rejects.toThrow("evidence changed");
+  expect((await readProcedures(a.scope)).procedures.find(row => row.id === p.id)).toMatchObject({ status: "PROCEDURE_PROPOSED", valid: false });
+  expect(graphPrompt(await businessKnowledge(db, a.scope, "copy", "LinkedIn"))).not.toContain("thoughtful concrete detail");
+ });
+ it("invalidates active recall and queued reflection after reviewer removal", async () => {
+  const a = await setup(), { p } = await reflect(a.scope);
+  await manageProcedures(a.scope, { action: "activate", proposalId: p.id, reviewedEvidence: true, replaceCurrent: true });
+  const id = await quote(a.scope); await manageProcedures(a.scope, { action: "accept", analysisId: id });
+  const before = await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } });
+  const source = (await procedureEpisodes(db, a.scope, 1))[0];
+  await db.creativeRevision.update({ where: { id: source.id }, data: { approvedBy: " \t\n" } });
+  expect((await readProcedures(a.scope)).procedures.find(row => row.id === p.id)?.valid).toBe(false);
+  expect(graphPrompt(await businessKnowledge(db, a.scope, "copy", "LinkedIn"))).not.toContain("thoughtful concrete detail");
+  // Re-activation cannot rehabilitate missing review evidence.
+  await expect(manageProcedures(a.scope, { action: "activate", proposalId: p.id, reviewedEvidence: true, replaceCurrent: true })).rejects.toThrow();
+  const provider = vi.fn();
+  await runOneProcedureReflection(provider); await runOneProcedureReflection(provider);
+  expect(provider).not.toHaveBeenCalled();
+  expect(await db.brandAnalysis.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "FAILED", errorCode: "PREFLIGHT_FAILED", supplierCostMicros: null });
+  const after = await db.wallet.findUniqueOrThrow({ where: { organizationId: a.scope.organizationId } });
+  expect(after.held).toBe(0); expect(after.available + after.held).toBe(before.available + before.held);
+ });
  it.each(["copy", "image", "video"] as const)("proposes, activates, recalls and retires a %s procedure with evidence", async task => {
   const a = await setup(), { p } = await reflect(a.scope, task);
   expect(graphPrompt(await businessKnowledge(db, a.scope, task, "LinkedIn"))).not.toContain("Reviewed creative procedure");
@@ -154,6 +187,11 @@ suite("semantic creative reflection lifecycle", () => {
   expect(await read()).toMatchObject({ delivered: 1, distinctCreatives: 1, awaitingReview: 1, approved: 0 });
   await actOnProduction(a.scope, { action: "approve", itemId: item.id, version: 1 });
   expect(await read()).toMatchObject({ delivered: 1, changesRequested: 0, approved: 1 });
+  const retained = await db.creativeRevision.findFirstOrThrow({ where: { itemId: item.id, version: 1 } });
+  await db.creativeRevision.update({ where: { id: retained.id }, data: { approvedBy: " \t\n" } });
+  expect(await read()).toMatchObject({ delivered: 1, approved: 0, replacedOrUnavailable: 1 });
+  await db.creativeRevision.update({ where: { id: retained.id }, data: { approvedBy: retained.approvedBy } });
+  expect(await read()).toMatchObject({ delivered: 1, approved: 1, replacedOrUnavailable: 0 });
   await actOnProduction(a.scope, { action: "revise", itemId: item.id, version: 1, feedback: "Keep the opening but make the next sentence clearer." });
   expect(await read()).toMatchObject({ delivered: 1, changesRequested: 1, awaitingReview: 0 });
   expect((await readProcedures(other.scope)).procedures).toEqual([]);
