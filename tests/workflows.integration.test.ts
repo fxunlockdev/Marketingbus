@@ -4,6 +4,8 @@ import { actOnProduction } from "../src/lib/production/service";
 import { manageApprovals, readApprovals } from "../src/lib/workflows/approvals";
 import { savePlanning, createDuePlan, runOneWeeklyDraft, nextWeekly, weekKey, cancelWeeklyCycle, readPlanning } from "../src/lib/workflows/planning";
 import { heartbeat } from "../src/lib/production/readiness";
+import * as knowledge from "../src/lib/harness/knowledge-graph";
+import { AppError } from "../src/lib/http";
 const suite = process.env.TEST_DATABASE_URL ? describe : describe.skip;
 if (process.env.TEST_DATABASE_URL && (process.env.TEST_DATABASE_URL !== process.env.DATABASE_URL || !["localhost", "127.0.0.1"].includes(new URL(process.env.TEST_DATABASE_URL).hostname))) throw Error("Local fixture database required");
 suite("approval policy, comments and bounded recurring work", () => {
@@ -18,7 +20,10 @@ suite("approval policy, comments and bounded recurring work", () => {
     await db.supplierAuthorization.deleteMany({ where: { key: { in: quotes.map(q => q.id) } } });
     await db.organization.deleteMany({ where: { id: { in: orgs } } }); await db.user.deleteMany({ where: { id: { in: users } } }); await db.workerHeartbeat.deleteMany({ where: { id: workerId } }); vi.unstubAllEnvs(); await db.$disconnect();
   });
-  afterEach(async () => { await db.weeklyCycle.updateMany({ where: { organizationId: { in: orgs }, status: "OPEN" }, data: { status: "CANCELLED", leaseUntil: null } }); });
+  afterEach(async () => {
+    await db.weeklyPolicy.updateMany({ where: { organizationId: { in: orgs } }, data: { enabled: false } });
+    await db.weeklyCycle.updateMany({ where: { organizationId: { in: orgs }, status: "OPEN" }, data: { status: "CANCELLED", leaseUntil: null } });
+  });
   async function setup() {
     const actors = await Promise.all(["OWNER", "ADMIN", "EDITOR"].map(async role => { const user = await db.user.create({ data: { name: role, email: `${crypto.randomUUID()}@example.test`, passwordHash: "fixture" } }); users.push(user.id); return { userId: user.id, role }; }));
     const org = await db.organization.create({ data: { name: "WORKFLOW FIXTURE", wallet: { create: { available: 1000 } }, memberships: { create: actors } } }); orgs.push(org.id);
@@ -70,6 +75,40 @@ suite("approval policy, comments and bounded recurring work", () => {
     expect((await db.weeklyPolicy.findUniqueOrThrow({ where: { businessId: c.scope.businessId } })).enabled).toBe(false);
     expect(await db.weeklyCycle.count({ where: { businessId: c.scope.businessId } })).toBe(0);
   });
+  it.each(["count", "length", "total", "brand"])("isolates invalid %s planning context without starving another tenant", async reason => {
+    const blocked = await setup(), healthy = await setup();
+    for (const c of [blocked, healthy]) await savePlanning(c.scope, { ...policy, mode: "DRAFTS", creditsPerWeek: 20 });
+    await db.weeklyPolicy.update({ where: { businessId: blocked.scope.businessId }, data: { nextRunAt: new Date(0) } });
+    await db.weeklyPolicy.update({ where: { businessId: healthy.scope.businessId }, data: { nextRunAt: new Date(1) } });
+    if (reason === "brand") await db.business.update({ where: { id: blocked.scope.businessId }, data: { offering: "" } });
+    else await db.memory.createMany({ data: Array.from({ length: reason === "count" ? 31 : reason === "total" ? 7 : 1 }, (_, i) => ({
+      organizationId: blocked.scope.organizationId, businessId: blocked.scope.businessId, kind: "EXPLICIT_PREFERENCE",
+      text: `PRIVATE-CONTEXT-${i}-`.padEnd(reason === "length" ? 1001 : reason === "total" ? 900 : 30, "x"),
+    })) });
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: blocked.scope.organizationId } });
+    await expect(createDuePlan()).resolves.toBe(true);
+    expect((await readPlanning(blocked.scope)).policy?.enabled).toBe(false);
+    expect(await db.weeklyCycle.count({ where: { businessId: blocked.scope.businessId } })).toBe(0);
+    expect(await db.productionPlan.count({ where: { businessId: blocked.scope.businessId } })).toBe(1);
+    const audit = await db.auditEvent.findMany({ where: { businessId: blocked.scope.businessId, action: "WEEKLY_POLICY_PAUSED" } });
+    expect(audit).toHaveLength(1); expect(audit[0].detail).not.toContain("PRIVATE-CONTEXT");
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: blocked.scope.organizationId } })).toEqual(wallet);
+    expect(await db.generationQuote.count({ where: { businessId: blocked.scope.businessId } })).toBe(0);
+    expect(await db.job.count({ where: { businessId: blocked.scope.businessId } })).toBe(0);
+    await expect(createDuePlan()).resolves.toBe(true);
+    expect(await db.weeklyCycle.count({ where: { businessId: healthy.scope.businessId } })).toBe(1);
+    expect((await readPlanning(healthy.scope)).policy?.enabled).toBe(true);
+    expect(await createDuePlan()).toBe(false);
+    // Fixing evidence alone cannot silently reauthorize a paused policy.
+    await db.memory.deleteMany({ where: { businessId: blocked.scope.businessId } });
+    await db.business.update({ where: { id: blocked.scope.businessId }, data: { offering: "Design consultations" } });
+    expect(await createDuePlan()).toBe(false);
+    await expect(savePlanning(blocked.editor, { ...policy, version: 1 })).rejects.toThrow("administrators");
+    await savePlanning(blocked.admin, { ...policy, version: 1 });
+    await due(blocked.scope.businessId); await createDuePlan();
+    expect(await db.weeklyCycle.count({ where: { businessId: blocked.scope.businessId } })).toBe(1);
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: blocked.scope.organizationId } })).toEqual(wallet);
+  });
   it("reserves weekly ceilings atomically with job creation, then stops without auto-retry", async () => {
     const c = await setup(); await savePlanning(c.scope, { ...policy, mode: "DRAFTS", maxItems: 2, creditsPerWeek: 1 }); await due(c.scope.businessId); await createDuePlan();
     await Promise.all([runOneWeeklyDraft(), runOneWeeklyDraft()]);
@@ -81,6 +120,24 @@ suite("approval policy, comments and bounded recurring work", () => {
     const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: c.scope.organizationId } }); expect(wallet.held).toBe(1);
     await runOneWeeklyDraft(); expect(await db.job.count({ where: { businessId: c.scope.businessId } })).toBe(1);
   });
+  it("pauses invalid context only once under overlapping planner ticks", async () => {
+    const c = await setup(); await savePlanning(c.scope, policy); await due(c.scope.businessId);
+    await db.business.update({ where: { id: c.scope.businessId }, data: { audience: "" } });
+    await Promise.all([createDuePlan(), createDuePlan(), createDuePlan()]);
+    expect((await readPlanning(c.scope)).policy?.enabled).toBe(false);
+    expect(await db.auditEvent.count({ where: { businessId: c.scope.businessId, action: "WEEKLY_POLICY_PAUSED" } })).toBe(1);
+    expect(await db.weeklyCycle.count({ where: { businessId: c.scope.businessId } })).toBe(0);
+  });
+  it.each([new Error("fixture transport failure"), new AppError(503, "fixture database unavailable")])("does not turn infrastructure failure into revoked customer consent: %s", async failure => {
+    const c = await setup(); await savePlanning(c.scope, policy); await due(c.scope.businessId);
+    const before = await db.weeklyPolicy.findUniqueOrThrow({ where: { businessId: c.scope.businessId } });
+    const recall = vi.spyOn(knowledge, "businessKnowledge").mockRejectedValueOnce(failure);
+    try { await expect(createDuePlan()).rejects.toThrow(failure.message); } finally { recall.mockRestore(); }
+    expect(await db.weeklyPolicy.findUniqueOrThrow({ where: { businessId: c.scope.businessId } })).toEqual(before);
+    expect(await db.auditEvent.count({ where: { businessId: c.scope.businessId, action: "WEEKLY_POLICY_PAUSED" } })).toBe(0);
+    await createDuePlan();
+    expect(await db.weeklyCycle.count({ where: { businessId: c.scope.businessId } })).toBe(1);
+  });
   it("handles UTC week/year boundaries without local DST ambiguity", () => {
     expect(weekKey(new Date("2027-01-01T23:00:00Z"))).toBe("2026-12-28");
     expect(nextWeekly(1, 9, new Date("2026-10-19T09:00:00Z")).toISOString()).toBe("2026-10-26T09:00:00.000Z");
@@ -90,6 +147,22 @@ suite("approval policy, comments and bounded recurring work", () => {
     const cycle = await db.weeklyCycle.findFirstOrThrow({ where: { businessId: c.scope.businessId }, include: { tasks: { orderBy: { id: "asc" } } } });
     return { ...c, cycle, cancel: { action: "cancelCycle", cycleId: cycle.id, policyVersion: cycle.policyVersion } };
   }
+  it("invalid next-week context preserves previously authorized jobs, held credits and supplier exposure", async () => {
+    const c = await draftCycle(); await runOneWeeklyDraft();
+    await db.weeklyCycle.update({ where: { id: c.cycle.id }, data: { periodKey: "2020-01-06" } });
+    const priorCycle = await db.weeklyCycle.findUniqueOrThrow({ where: { id: c.cycle.id }, include: { tasks: true } });
+    const jobs = await db.job.findMany({ where: { businessId: c.scope.businessId } });
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId: c.scope.organizationId } });
+    const supplier = await db.supplierAuthorization.findMany({ where: { key: { in: jobs.flatMap(j => j.quoteId ? [j.quoteId] : []) } } });
+    await db.memory.create({ data: { businessId: c.scope.businessId, organizationId: c.scope.organizationId, text: "x".repeat(1001) } });
+    await due(c.scope.businessId); await createDuePlan();
+    expect((await readPlanning(c.scope)).policy?.enabled).toBe(false);
+    expect(await db.weeklyCycle.findUniqueOrThrow({ where: { id: c.cycle.id }, include: { tasks: true } })).toEqual(priorCycle);
+    expect(await db.job.findMany({ where: { businessId: c.scope.businessId } })).toEqual(jobs);
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId: c.scope.organizationId } })).toEqual(wallet);
+    expect(await db.supplierAuthorization.findMany({ where: { key: { in: supplier.map(s => s.key) } } })).toEqual(supplier);
+    expect(await db.weeklyCycle.count({ where: { businessId: c.scope.businessId } })).toBe(1);
+  });
   it("stops only the selected run, revokes unaccepted quotes and preserves future policy and spend counters", async () => {
     const c = await draftCycle(), task = c.cycle.tasks[0];
     const result = await actOnProduction(c.scope, { action: "quote", itemId: task.itemId, mode: "initial", direction: "Use confirmed brand facts only in this synthetic fixture." });

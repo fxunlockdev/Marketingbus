@@ -1,5 +1,13 @@
 # Production worker scheduling
 
+## Weekly planning context isolation
+
+Runtime `studio-v65-weekly-context-isolation` pauses an individual recurring policy when its retained brand fails validation or its planning knowledge exceeds the existing context limits. Previously this transaction rolled back and left the same oldest policy due, repeatedly delaying other businesses. Preparation now completes bounded knowledge reads sequentially, records one fixed, content-free `WEEKLY_POLICY_PAUSED` audit event under the business lock, and disables that policy. The next tick can select another due business.
+
+No plan, generation job, quote or credit reservation is created for the invalid context. Previously authorized jobs, customer holds and supplier authorizations remain unchanged; existing media lanes still check current authorization before accepting new work. Repairing the context alone does not resume the policy: an owner/admin must explicitly save recurring authorization. Concurrent planner ticks cannot duplicate the pause. Unexpected or infrastructure errors still propagate and roll back, including the schedule update; they are not mislabeled as bad customer context.
+
+Database tests cover invalid brand fields and excessive preference count, individual length and total length; cross-tenant progress; overlapping ticks; administrator-only resume; infrastructure rollback/recovery; and preservation of an earlier authorized cycle. A browser journey checks the disabled recurring control, redacted response, keyboard reauthorization and unchanged credits. This is a targeted planning fairness fix, not a complete load/capacity guarantee or customer-facing failure notification system. See BUILD-STATUS.md for actual verification and deployment state.
+
 ## Copy claim ownership and late-result fencing
 
 Runtime `studio-v63-copy-lease-fence` binds submission and delivery to the exact claimed job, organization/business, kind/key, quote, reservation, attempt count, lease and payload. A short row lock protects each boundary. The lease must still be live before submission and delivery; status alone is not ownership. A worker returning after replacement or recovery cannot clear the new claim, settle its hold, deliver a creative or overwrite the retained recovery reason. No row lock spans the provider request.

@@ -1,11 +1,46 @@
 import { test, expect } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import AxeBuilder from "@axe-core/playwright";
+import { createDuePlan } from "../src/lib/workflows/planning";
+import { db as workerDb } from "../src/lib/db";
 const local = process.env.TEST_DATABASE_URL;
 test.skip(!local, "Requires explicit localhost fixture database.");
 if (local && (process.env.DATABASE_URL !== local || !["127.0.0.1", "localhost"].includes(new URL(local).hostname))) throw Error("Refusing non-local fixture writes");
 const db = new PrismaClient();
-test.afterAll(async () => db.$disconnect());
+test.afterAll(async () => { await db.$disconnect(); await workerDb.$disconnect(); });
+test("invalid planning knowledge pauses recurring consent until an administrator repairs and saves it", async ({ page }) => {
+  const email = `weekly-pause-${crypto.randomUUID()}@example.test`, headers = { Origin: "http://127.0.0.1:3000" };
+  let organizationId: string | undefined;
+  try {
+    expect((await page.request.post("/api/auth/register", { headers, data: { name: "Pause Fixture", email, password: "Test-only-password-2026!" } })).ok()).toBe(true);
+    const created = await page.request.post("/api/businesses", { headers, data: { name: "Pause Studio", offering: "Design consultations", audience: "Homeowners", goal: "Book consultations", channels: ["Facebook"] } });
+    expect(created.ok()).toBe(true); const { id } = await created.json();
+    organizationId = (await db.business.update({ where: { id }, data: { confirmedAt: new Date() } })).organizationId;
+    const wallet = await db.wallet.findUniqueOrThrow({ where: { organizationId } });
+    await page.goto("/studio"); await page.getByRole("button", { name: "Workflows", exact: true }).click();
+    const enabled = page.getByRole("checkbox", { name: "Enable recurring work for this business" });
+    await enabled.check(); await page.getByRole("button", { name: "Save recurring authorization" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Workflow settings saved" })).toBeVisible();
+    await db.memory.create({ data: { businessId: id, organizationId, text: "PRIVATE-PAUSE-FIXTURE".padEnd(1001, "x") } });
+    await db.weeklyPolicy.update({ where: { businessId: id }, data: { nextRunAt: new Date(0) } });
+    await createDuePlan();
+    await page.reload(); await page.getByRole("button", { name: "Workflows", exact: true }).click();
+    await expect(enabled).not.toBeChecked();
+    expect(await db.weeklyCycle.count({ where: { businessId: id } })).toBe(0);
+    const response = await page.request.get(`/api/businesses/${id}/planning`);
+    expect(await response.text()).not.toContain("PRIVATE-PAUSE-FIXTURE");
+    await db.memory.deleteMany({ where: { businessId: id } }); await createDuePlan();
+    expect((await db.weeklyPolicy.findUniqueOrThrow({ where: { businessId: id } })).enabled).toBe(false);
+    await enabled.focus(); await page.keyboard.press("Space");
+    await page.getByRole("button", { name: "Save recurring authorization" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Workflow settings saved" })).toBeVisible();
+    await db.weeklyPolicy.update({ where: { businessId: id }, data: { nextRunAt: new Date(0) } });
+    await createDuePlan(); await page.getByRole("button", { name: "Refresh weekly runs" }).click();
+    expect(await db.weeklyCycle.count({ where: { businessId: id } })).toBe(1);
+    expect(await db.wallet.findUniqueOrThrow({ where: { organizationId } })).toEqual(wallet);
+    expect(await db.job.count({ where: { businessId: id } })).toBe(0);
+  } finally { if (organizationId) await db.organization.delete({ where: { id: organizationId } }); await db.user.deleteMany({ where: { email } }); }
+});
 test("inspect and stop a weekly run without touching authorized work or credits", async ({ page }) => {
   const email = `weekly-${crypto.randomUUID()}@example.test`, headers = { Origin: "http://127.0.0.1:3000" };
   let organizationId: string | undefined;

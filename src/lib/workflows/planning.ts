@@ -113,8 +113,28 @@ export async function createDuePlan(now = new Date()) {
     await tx.weeklyPolicy.update({ where: { businessId: business.id }, data: { nextRunAt: nextWeekly(policy.weekday, policy.hourUTC, now) } });
     const periodKey = weekKey(now);
     if (await tx.weeklyCycle.findUnique({ where: { businessId_periodKey: { businessId: business.id, periodKey } } })) return true;
-    const brand = brandInput.parse(Object.fromEntries(Object.keys(brandInput.shape).map(k => [k, business[k as keyof typeof business]])));
-    const templates = await Promise.all(proposePlan(brand).map(async template => ({ ...template, brief: { ...template.brief, knowledgeContext: await businessKnowledge(tx, scope, "planning", template.channel) } })));
+    const templates = await (async () => {
+      try {
+        const brand = brandInput.parse(Object.fromEntries(Object.keys(brandInput.shape).map(k => [k, business[k as keyof typeof business]])));
+        const prepared = [];
+        // Finish each bounded read before handling a context error. No parallel
+        // transaction queries should outlive the decision to pause this policy.
+        for (const template of proposePlan(brand)) prepared.push({ ...template, brief: {
+          ...template.brief, knowledgeContext: await businessKnowledge(tx, scope, "planning", template.channel),
+        } });
+        return prepared;
+      } catch (error) {
+        // Invalid retained brand/knowledge must not monopolize the oldest due
+        // slot. Infrastructure/programming failures still roll back and surface.
+        if (!(error instanceof z.ZodError) && !(error instanceof AppError && error.status === 409)) throw error;
+        await tx.weeklyPolicy.update({ where: { businessId: business.id }, data: { enabled: false } });
+        await tx.auditEvent.create({ data: { ...scope, action: "WEEKLY_POLICY_PAUSED",
+          detail: "Brand or business knowledge is invalid or exceeds the planning context limit. Review the brand and saved preferences, then explicitly save recurring authorization. Existing authorized work and credits are unchanged.",
+        } });
+        return null;
+      }
+    })();
+    if (!templates) return true;
     // Null preserves legacy platform defaults and spending consent until an admin saves a mix.
     const legacy = policy.videoItems === null;
     const plan = await tx.productionPlan.create({ data: { businessId: business.id, organizationId: scope.organizationId, brandVersion: business.version, title: `Week of ${periodKey} · review required`, creditCeiling: policy.creditsPerWeek, items: { create: Array.from({ length: policy.maxItems }, (_, i) => ({ ...templates[i % templates.length], format: legacy ? templates[i % templates.length].format : i < policy.videoItems! ? "motion" : "static", title: `${templates[i % templates.length].title} · ${i + 1}` })) } }, include: { items: true } });
